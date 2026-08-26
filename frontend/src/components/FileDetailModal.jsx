@@ -49,7 +49,7 @@ export function FileDetailModal({ fileId, onClose, onEdit, onMove, onDelete }) {
 
           {file.ai_summary && (
             <div className="rounded-xl border border-brand-500/20 bg-brand-500/[0.06] p-3.5">
-              <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-brand-300">
+              <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-brand-700">
                 <Sparkles size={12} /> {file.ai_short_title || "AI preview"}
               </p>
               <p className="text-sm text-base-200">{file.ai_summary}</p>
@@ -77,7 +77,7 @@ export function FileDetailModal({ fileId, onClose, onEdit, onMove, onDelete }) {
           {file.metadata && (
             <div>
               <p className="label mb-2">Extracted metadata ({file.metadata.extractor})</p>
-              <pre className="max-h-40 overflow-auto rounded-xl border border-white/5 bg-black/30 p-3 font-mono text-xs text-base-300">
+              <pre className="max-h-40 overflow-auto rounded-xl border border-line bg-inset p-3 font-mono text-xs text-base-300">
                 {JSON.stringify(file.metadata.data, null, 2)}
               </pre>
             </div>
@@ -88,7 +88,7 @@ export function FileDetailModal({ fileId, onClose, onEdit, onMove, onDelete }) {
           )}
 
           {file.latestClassification && (
-            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+            <div className="rounded-xl border border-line-strong bg-base-900 p-3">
               <p className="label mb-1.5">Latest classification</p>
               <div className="flex items-center gap-2">
                 <StatusBadge value={file.latestClassification.confidence_level} />
@@ -98,7 +98,7 @@ export function FileDetailModal({ fileId, onClose, onEdit, onMove, onDelete }) {
           )}
 
           {file.duplicateGroups?.length > 0 && (
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-amber-200">
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-amber-700">
               This file belongs to {file.duplicateGroups.length} duplicate group(s).
             </div>
           )}

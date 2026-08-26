@@ -604,6 +604,88 @@ async function revealInFileManager(fileId, ownerUserId) {
 }
 
 /**
+ * Launch a file in whatever application the host OS opens it with.
+ *
+ * THE DIFFERENCE FROM revealInFileManager
+ *
+ * Reveal opens the containing FOLDER with the file selected. This opens the
+ * FILE -- the PDF in a PDF reader, the spreadsheet in Excel. That is what
+ * double-clicking a row should do when the person doing it is sitting at the
+ * machine the files are on.
+ *
+ * WHO THIS RUNS FOR
+ *
+ * On the SERVER, always -- there is no other machine it could run on. That is
+ * fine when the browser and the server are the same computer and actively
+ * wrong when they are not: triggering this from a phone would open a document
+ * on a desktop nobody is looking at. The caller is responsible for only
+ * offering it locally (see openLocally in the Library/Files pages), and the
+ * route is still owner-scoped so it can never reach somebody else's file.
+ */
+async function openOnHost(fileId, ownerUserId) {
+  const file = await fileRepository.findByIdForOwner(fileId, ownerUserId);
+  if (!file) throw new NotFoundError("File not found.");
+  if (file.status !== "active") throw new NotFoundError("File is not currently active on disk.");
+
+  const storageLocation = await storageLocationRepository.findById(file.storage_location_id);
+  if (!storageLocation) throw new NotFoundError("Storage location not found.");
+  if (storageLocation.access_mode !== "direct") {
+    throw new ValidationError(
+      "This file lives on an agent-brokered storage location, not on this server's own disk -- " +
+      "opening it in a local application isn't possible from here."
+    );
+  }
+
+  const absolutePath = resolveWithinRoot(storageLocation.root_path, file.current_path);
+  await openPathOnHostOS(absolutePath);
+  return { opened: true, path: absolutePath };
+}
+
+/**
+ * OS-specific "open with the default application".
+ *
+ * Same execFile-with-argv posture as revealPathOnHostOS below: the path is
+ * server-resolved and validated, and there is still no reason to let it near a
+ * shell. On Windows `explorer.exe <path>` opens a file with its default
+ * handler, which avoids `cmd /c start` and its quoting rules entirely.
+ */
+function openPathOnHostOS(absolutePath) {
+  return new Promise((resolve, reject) => {
+    let command;
+    let args;
+
+    if (process.platform === "win32") {
+      command = "explorer.exe";
+      args = [absolutePath];
+    } else if (process.platform === "darwin") {
+      command = "open";
+      args = [absolutePath];
+    } else {
+      command = "xdg-open";
+      args = [absolutePath];
+    }
+
+    execFile(command, args, (err) => {
+      // explorer.exe returns a non-zero exit code even on success -- it is
+      // documented as unreliable and the reveal path already works around it.
+      // Only a missing binary means there is genuinely no desktop here.
+      if (err && process.platform === "win32" && err.code !== "ENOENT") {
+        resolve();
+        return;
+      }
+      if (err) {
+        reject(new ValidationError(
+          `Couldn't open the file (${err.code === "ENOENT" ? `"${command}" not found` : err.message}). ` +
+          "This only works when the server is running on the same desktop machine you're browsing from."
+        ));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+/**
  * OS-specific "reveal and select" invocation. Always spawned via execFile
  * (argv array, no shell) rather than exec -- the path is server-resolved
  * and validated (resolveWithinRoot above), but there's no reason to ever
@@ -710,14 +792,32 @@ async function moveByFilter(query, toSubjectId, actorUserId, { confirmDuplicates
   // a legitimate thing to want ("put everything in Inbox") and a catastrophic
   // thing to do by accident, so it has to be asked for explicitly rather than
   // arrived at by an empty object.
-  if (!hasAnyFilter(filters) && !query?.all) {
+  // `q` is a criterion too, and a strong one -- "everything about the Marina
+  // lease" narrows far harder than most structured fields. It is not part of
+  // `filters` (parseFileFilters only knows structured columns), so it has to
+  // be counted as a criterion explicitly or a semantic-only move would be
+  // refused here as "no filter" and never reach the worker that understands it.
+  const semanticQuery = typeof query?.q === "string" && query.q.trim() ? query.q.trim() : null;
+
+  // A filter naming no criteria at all matches the entire repository. That is
+  // a legitimate thing to want ("put everything in Inbox") and a catastrophic
+  // thing to do by accident, so it has to be asked for explicitly rather than
+  // arrived at by an empty object.
+  if (!hasAnyFilter(filters) && !semanticQuery && !query?.all) {
     throw new ValidationError(
       "That would move every file in the repository. Add a filter, or pass all=true if that is really what you want."
     );
   }
 
   // Sized upfront so Processing Jobs shows real X/Y progress rather than "—".
-  const total = await fileRepository.countMatching({ filters });
+  //
+  // Counted through the SAME path the worker will use, so the number the user
+  // is shown before committing is the number that actually moves. Counting a
+  // semantic move with countMatching() would report the structured-filter
+  // total -- for a q-only move, the whole repository.
+  const total = semanticQuery
+    ? (await idsMatchingSearch(semanticQuery, { filters, limit: MAX_SELECTABLE_IDS })).length
+    : await fileRepository.countMatching({ filters });
 
   const job = await enqueueJob(
     JobType.BULK_MOVE,
@@ -737,11 +837,33 @@ async function moveByFilter(query, toSubjectId, actorUserId, { confirmDuplicates
   return { job, matched: total, destination: subject.name };
 }
 
+/**
+ * The ids a semantic search matches, for a bulk operation to act on.
+ *
+ * WHY THIS IS NOT JUST `search()`
+ *
+ * `search()` returns whole file rows, paged, for a screen to render. A bulk
+ * move wants only ids and wants ALL of them in one snapshot -- the reason is
+ * in bulkMoveProcessor: paging a set while mutating it makes the window shift
+ * under the offset and silently skips files. So this asks for one page big
+ * enough to hold the caller's cap and hands back ids.
+ *
+ * It goes through descriptionSearchService, the same path the Library search
+ * box uses, so "documents about the Marina lease" means the same thing to a
+ * bulk move as it does when the user types it. Structured filters are passed
+ * straight through and still apply.
+ */
+async function idsMatchingSearch(q, { filters, limit }) {
+  const result = await descriptionSearchService.search(q, { filters, limit, offset: 0 });
+  return (result.files || []).map((f) => f.id);
+}
+
 module.exports = {
   NotFoundError,
   moveMany,
   moveByFilter,
   matchingIds,
+  idsMatchingSearch,
   MAX_SELECTABLE_IDS,
   search,
   count,
@@ -755,4 +877,5 @@ module.exports = {
   compareFiles,
   updateFile,
   revealInFileManager,
+  openOnHost,
 };

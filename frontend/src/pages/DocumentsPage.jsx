@@ -54,21 +54,24 @@ export function DocumentsPage() {
         <div className="table-shell glass-card">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-white/5 text-xs uppercase tracking-wider text-base-400">
+              <tr className="border-b border-line text-xs uppercase tracking-wider text-base-400">
                 <th className="px-4 py-3 font-medium">Display name</th>
-                <th className="px-4 py-3 font-medium">Canonical name</th>
+                <th className="col-tertiary px-4 py-3 font-medium">Canonical name</th>
                 <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Updated</th>
+                <th className="col-secondary px-4 py-3 font-medium">Updated</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {documents.map((d) => (
-                <tr key={d.id} className="table-row-hover border-b border-white/5 last:border-0">
-                  <td className="px-4 py-3 font-medium text-base-100">{d.display_name}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-base-400">{d.canonical_name || "—"}</td>
+                <tr key={d.id} className="table-row-hover border-b border-line last:border-0">
+                  <td className="px-4 py-3 font-medium text-base-100">
+                    {d.display_name}
+                    <div className="cell-subline font-normal">{formatDate(d.updated_at)}</div>
+                  </td>
+                  <td className="col-tertiary px-4 py-3 font-mono text-xs text-base-400">{d.canonical_name || "—"}</td>
                   <td className="px-4 py-3"><StatusBadge value={d.status} /></td>
-                  <td className="px-4 py-3 text-base-400">{formatDate(d.updated_at)}</td>
+                  <td className="col-secondary px-4 py-3 text-base-400">{formatDate(d.updated_at)}</td>
                   <td className="px-4 py-3 text-right">
                     {hasPermission("classification.modify") && (
                       <button className="btn-ghost btn-sm" onClick={() => setEditing(d)}>

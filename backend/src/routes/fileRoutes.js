@@ -81,6 +81,10 @@ router.patch("/:id", requirePermission("document.view"), asyncHandler(controller
 // more sensitive than download, only more environment-dependent (see
 // fileService.revealInFileManager).
 router.post("/:id/reveal", requirePermission("document.download"), asyncHandler(controller.reveal));
+// Opens the file itself in the host's default application, rather than its
+// folder. Same permission bar, same "only meaningful on the server's own
+// desktop" caveat -- see fileService.openOnHost.
+router.post("/:id/open", requirePermission("document.download"), asyncHandler(controller.openLocally));
 router.delete("/:id", requirePermission("document.delete"), asyncHandler(controller.remove));
 
 module.exports = router;

@@ -25,7 +25,6 @@ const fileRepository = require("../src/repositories/fileRepository");
 // caller; a script calling the repository directly has to do it itself.
 const { parseFileFilters } = require("../src/repositories/fileFilters");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -120,5 +119,5 @@ let root, locId;
       if (root) await fsp.rm(root, { recursive: true, force: true });
       console.log("\ncleaned up.");
     } catch (e) { console.log("cleanup warning:", e.message); }
-    await p.end(); await closeAllQueues(); await closeRedisConnection();
+    await p.end(); await closeAllQueues();
   });

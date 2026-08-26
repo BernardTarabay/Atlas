@@ -102,12 +102,12 @@ export function UsersPage() {
         <div className="table-shell glass-card">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-white/5 text-xs uppercase tracking-wider text-base-400">
+              <tr className="border-b border-line text-xs uppercase tracking-wider text-base-400">
                 <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Email</th>
-                <th className="px-4 py-3 font-medium">Role</th>
+                <th className="col-secondary px-4 py-3 font-medium">Email</th>
+                <th className="col-secondary px-4 py-3 font-medium">Role</th>
                 <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Last sign-in</th>
+                <th className="col-tertiary px-4 py-3 font-medium">Last sign-in</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
@@ -116,13 +116,20 @@ export function UsersPage() {
                 const isSelf = u.id === currentUser?.id;
                 const roleNames = (u.roles || []).map((r) => r.name);
                 return (
-                  <tr key={u.id} className="table-row-hover border-b border-white/5 last:border-0">
+                  <tr key={u.id} className="table-row-hover border-b border-line last:border-0">
                     <td className="px-4 py-3 font-medium text-base-100">
                       {u.full_name}
                       {isSelf && <span className="ml-2 text-xs text-base-400">(you)</span>}
+                      {/* Identity is the email, not the display name -- two
+                          people called "Bernard" are told apart by it, so it is
+                          the one dropped column that has to survive. */}
+                      <div className="cell-subline font-normal">
+                        <span className="truncate">{u.email}</span>
+                        {roleNames.length > 0 && <span>{roleNames.join(", ")}</span>}
+                      </div>
                     </td>
-                    <td className="px-4 py-3 text-base-400">{u.email}</td>
-                    <td className="px-4 py-3">
+                    <td className="col-secondary px-4 py-3 text-base-400">{u.email}</td>
+                    <td className="col-secondary px-4 py-3">
                       {roleNames.length ? (
                         <span className="text-base-200">{roleNames.join(", ")}</span>
                       ) : (
@@ -130,7 +137,7 @@ export function UsersPage() {
                       )}
                     </td>
                     <td className="px-4 py-3"><StatusBadge value={u.status} /></td>
-                    <td className="px-4 py-3 text-base-400">
+                    <td className="col-tertiary px-4 py-3 text-base-400">
                       {u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "never"}
                     </td>
                     <td className="px-4 py-3">
@@ -246,7 +253,7 @@ function ChangeRoleModal({ user, roles, onClose, onChanged }) {
           return (
             <div
               key={role.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.02] px-3.5 py-2.5"
+              className="flex items-center justify-between gap-3 rounded-xl border border-line bg-base-900 px-3.5 py-2.5"
             >
               <div className="min-w-0">
                 <p className="text-sm text-base-100">{role.name}</p>
@@ -296,7 +303,7 @@ function TemporaryPasswordModal({ result, onClose }) {
         New password for <span className="text-base-100">{result?.user?.full_name}</span>. This is shown
         once and cannot be retrieved again — give it to them and have them change it after signing in.
       </p>
-      <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/5 bg-white/[0.02] px-3.5 py-2.5">
+      <div className="mt-3 flex items-center gap-2 rounded-xl border border-line bg-base-900 px-3.5 py-2.5">
         <code className="flex-1 break-all font-mono text-sm text-base-100">{result?.password}</code>
         <button className="btn-ghost btn-sm shrink-0" onClick={copy}>
           {copied ? <Check size={13} /> : <Copy size={13} />}

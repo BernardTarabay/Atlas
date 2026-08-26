@@ -36,15 +36,19 @@ function shouldEscalateToAi(ruleConfidenceLevel) {
 }
 
 /**
- * The LLM escalation tier (docs/09-ai-classification.md). Two cost levers
- * before ever calling out to Gemini: (1) reuse a sibling file's AI result
- * when the content hash already matches one that's been classified, so
- * duplicates never cost a second call; (2) a persisted daily call cap
- * (counted from audit_logs, so it survives worker restarts) that silently
- * falls back to the rule-based result once reached rather than erroring.
- * A failed or skipped AI pass never takes down the pipeline -- the
- * rule-based classification_results row created by handle() above already
- * stands on its own either way.
+ * The LLM escalation tier (docs/09-ai-classification.md). One cost lever
+ * before ever calling out to Gemini: reuse a sibling file's AI result when
+ * the content hash already matches one that's been classified, so duplicates
+ * never cost a second call.
+ *
+ * There is deliberately no call cap here any more. The daily cap that used to
+ * be the second lever is gone (config/env.js explains why -- it was counted
+ * three inconsistent ways and stranded 5,730 files); spend is reported to the
+ * audit log rather than refused.
+ *
+ * A failed or skipped AI pass never takes down the pipeline -- the rule-based
+ * classification_results row created by handle() above already stands on its
+ * own either way.
  */
 async function runAiEscalation({ file, bodyText, allSubjects, allDocTypes, embeddedTitle }) {
   try {
@@ -91,20 +95,6 @@ async function runAiEscalation({ file, bodyText, allSubjects, allDocTypes, embed
             },
           });
         }
-        return;
-      }
-    }
-
-    if (env.ai.dailyCallCap > 0) {
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const callsToday = await auditLogRepository.countSince("ai_classification.called", since);
-      if (callsToday >= env.ai.dailyCallCap) {
-        await auditLogRepository.record({
-          action: "ai_classification.skipped",
-          entityType: "file",
-          entityId: file.id,
-          reason: `Daily AI classification cap (${env.ai.dailyCallCap}) reached; kept the rule-based result.`,
-        });
         return;
       }
     }

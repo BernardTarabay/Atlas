@@ -144,7 +144,7 @@ export function DocumentTypesPage() {
       />
 
       {activeFilters > 0 && (
-        <p className="mb-3 text-xs text-amber-300/90">
+        <p className="mb-3 text-xs text-amber-700/90">
           Filters are on — every count below, and the files listed for a type, describe only the
           matching files.
         </p>
@@ -171,15 +171,15 @@ export function DocumentTypesPage() {
                       className={
                         "flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition-colors " +
                         (on
-                          ? "border border-brand-500/40 bg-brand-500/15 text-brand-100"
-                          : "border border-transparent text-base-200 hover:bg-white/[0.04]")
+                          ? "border border-brand-500/40 bg-brand-500/15 text-brand-700"
+                          : "border border-transparent text-base-200 hover:bg-base-850")
                       }
                       // The count is greyed at zero rather than the row being
                       // hidden: "we have no Contracts" is a real answer, and
                       // an option that silently vanishes looks like a bug.
                       title={type.description || type.name}
                     >
-                      <Stamp size={14} className={on ? "text-brand-300" : "text-base-500"} />
+                      <Stamp size={14} className={on ? "text-brand-700" : "text-base-500"} />
                       <span className="min-w-0 flex-1 truncate font-medium">{type.name}</span>
                       <span
                         className={
@@ -196,7 +196,7 @@ export function DocumentTypesPage() {
             </ul>
 
             {/* The honest bottom line. See the header comment. */}
-            <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2.5 text-sm">
+            <div className="mt-3 flex items-center gap-2 rounded-xl border border-line bg-base-900 px-3 py-2.5 text-sm">
               <FolderOpen size={14} className="shrink-0 text-base-500" />
               <span className="min-w-0 flex-1 text-base-400">No type yet</span>
               <span className="shrink-0 tabular-nums text-xs text-base-400">
@@ -245,7 +245,7 @@ export function DocumentTypesPage() {
                       {files.map((f) => (
                         <li
                           key={f.id}
-                          className="table-row-hover flex cursor-pointer items-center gap-2.5 rounded-xl border border-white/5 bg-white/[0.02] px-3.5 py-2.5 text-sm"
+                          className="table-row-hover flex cursor-pointer items-center gap-2.5 rounded-xl border border-line bg-base-900 px-3.5 py-2.5 text-sm"
                           onClick={() => setSelectedFileId(f.id)}
                         >
                           <FileText size={14} className="mt-0.5 shrink-0 text-base-400" />
@@ -255,7 +255,7 @@ export function DocumentTypesPage() {
                             </p>
                             {f.ai_short_title ? (
                               <p className="flex items-center gap-1 truncate text-xs text-base-500">
-                                <Sparkles size={10} className="shrink-0 text-brand-400" />
+                                <Sparkles size={10} className="shrink-0 text-brand-600" />
                                 {f.filename_current}
                               </p>
                             ) : (
@@ -312,7 +312,7 @@ export function DocumentTypesPage() {
                             )}
                             {hasPermission("document.delete") && (
                               <button
-                                className="btn-ghost btn-sm text-rose-400 hover:text-rose-300"
+                                className="btn-ghost btn-sm text-rose-600 hover:text-rose-700"
                                 onClick={(e) => { e.stopPropagation(); setRemoveFileTarget(f); }}
                                 title="Remove file"
                               >

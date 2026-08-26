@@ -7,6 +7,8 @@ const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const pgQueue = require("./queues/pgQueue");
+const fileRecovery = require("./services/fileRecovery");
 const db = require("./config/database");
 const env = require("./config/env");
 const { authLimiter, apiLimiter } = require("./middleware/rateLimiters");
@@ -49,16 +51,42 @@ const app = express();
  * arrived. Nothing in the console, nothing in the server log: the requests
  * failed before they were made.
  *
- * So the directive is emitted only when the app really is behind TLS. Set
- * SERVE_OVER_HTTPS=true when terminating TLS in front of this process (a
- * reverse proxy, a tunnel); leave it unset for the ordinary self-hosted case
- * of reaching it over http on your own network. Every other CSP protection is
- * unchanged either way.
+ * So the directive is emitted only when THAT REQUEST really arrived over TLS.
+ *
+ * WHY PER-REQUEST AND NOT A FLAG
+ *
+ * This started as a single SERVE_OVER_HTTPS boolean, which is wrong as soon as
+ * the app is reachable two ways at once -- which is exactly what running behind
+ * `tailscale serve` produces:
+ *
+ *     https://atlas.<tailnet>.ts.net    TLS, needs the directive
+ *     http://192.168.1.101:5000         plain, blank page if it gets it
+ *     http://localhost:5000             plain, but exempt as a trusted origin
+ *
+ * With one flag you have to pick which of those breaks. Setting it for the
+ * tunnel silently re-breaks the LAN address, reproducing the original bug --
+ * blank page, right title, nothing in any log -- on the fallback path you reach
+ * for precisely when the tunnel is down. Deciding per request means every
+ * address is correct simultaneously and there is no setting to get wrong.
+ *
+ * X-Forwarded-Proto is read directly rather than via Express's `trust proxy`,
+ * deliberately: enabling that globally would also make express-rate-limit key
+ * on X-Forwarded-For, i.e. let any caller reset their own rate limit by
+ * inventing a header. The blast radius of spoofing THIS header is only that the
+ * spoofer's own browser upgrades its own subresource requests, which is a way
+ * to inconvenience yourself and nobody else.
+ *
+ * SERVE_OVER_HTTPS=true remains as an override for a TLS terminator that does
+ * not set the header.
  */
-const SERVE_OVER_HTTPS = process.env.SERVE_OVER_HTTPS === "true";
+const FORCE_HTTPS_HEADERS = process.env.SERVE_OVER_HTTPS === "true";
 
-app.use(
-  helmet({
+const requestIsOverHttps = (req) =>
+  FORCE_HTTPS_HEADERS ||
+  req.secure ||
+  String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() === "https";
+
+const helmetOptions = (overHttps) => ({
     contentSecurityPolicy: {
       useDefaults: true,
       directives: {
@@ -76,11 +104,18 @@ app.use(
         // media, both of which go through the same authenticated-fetch route.
         mediaSrc: ["'self'", "blob:"],
         frameSrc: ["'self'", "blob:"],
-        ...(SERVE_OVER_HTTPS ? {} : { upgradeInsecureRequests: null }),
+        ...(overHttps ? {} : { upgradeInsecureRequests: null }),
       },
     },
-  })
-);
+});
+
+// Both variants are built once, at startup, rather than per request: helmet
+// compiles its directives on construction, and doing that on every request
+// would put it in the path of every preview byte this app serves.
+const helmetOverHttps = helmet(helmetOptions(true));
+const helmetOverHttp = helmet(helmetOptions(false));
+
+app.use((req, res, next) => (requestIsOverHttps(req) ? helmetOverHttps : helmetOverHttp)(req, res, next));
 
 // CORS was `cors()` with no options, i.e. Access-Control-Allow-Origin: * --
 // every website on the internet allowed to call this API from a visitor's
@@ -118,18 +153,80 @@ app.use(
 // nothing in this API uploads bytes.
 app.use(express.json({ limit: "1mb" }));
 
+// HEALTH, INCLUDING THE QUEUE.
+//
+// This used to report `status: "ok"` unconditionally -- even with the database
+// down, because `status` was a literal and only `database` reflected reality.
+// It also said nothing at all about the job queue, which is how a two-day
+// outage went unnoticed: Redis had stopped, the pipeline was dead, and this
+// endpoint answered "ok" throughout.
+//
+// It now reports what is actually true, and `status` is derived rather than
+// asserted. The HTTP code deliberately stays 200 even when degraded: this is a
+// liveness endpoint, scripts/restart-atlas.bat polls it with `curl -f` to know
+// the API is up, and failing it while the worker is still starting would turn
+// a normal restart into a reported failure. Degradation belongs in the body.
 app.get("/api/health", async (req, res) => {
   let dbConnected = false;
   try {
     dbConnected = await db.healthCheck();
-  } catch (err) {
+  } catch {
     dbConnected = false;
   }
 
+  let queue = null;
+  let files = null;
+  const warnings = [];
+  if (dbConnected) {
+    try {
+      queue = await pgQueue.queueHealth();
+      warnings.push(...queue.warnings);
+    } catch (err) {
+      warnings.push(`Could not read queue health: ${err.message}`);
+    }
+
+    // THE LIBRARY'S OWN HEALTH, NOT JUST THE QUEUE'S.
+    //
+    // A queue can be empty, a worker can be up, and the pipeline can still be
+    // failing its actual job. That is not hypothetical: 5,730 files sat in
+    // `failed_retryable` for thirteen hours while this endpoint answered
+    // {"status":"ok"} with zero queued jobs and one live worker -- every
+    // signal it had was about machinery, and none about whether the machinery
+    // was achieving anything.
+    //
+    // Files waiting on recovery are reported as a NUMBER always, and escalate
+    // to a warning only when they are not moving. A backlog the sweep is
+    // actively draining is normal and should not cry wolf; a backlog older
+    // than several sweep intervals means recovery itself is stuck, and that is
+    // the thing nobody could see last time.
+    try {
+      files = await fileRecovery.strandedSummary();
+      if (files.retryable > 0 && files.oldestRetryableSeconds > 900) {
+        warnings.push(
+          `${files.retryable} file(s) are waiting on stage recovery, the oldest for ` +
+            `${Math.round(files.oldestRetryableSeconds / 60)} minutes.`
+        );
+      }
+    } catch (err) {
+      warnings.push(`Could not read file recovery health: ${err.message}`);
+    }
+  } else {
+    warnings.push("Database unavailable; the queue cannot be reached either.");
+  }
+
   res.json({
-    status: "ok",
+    status: dbConnected && warnings.length === 0 ? "ok" : "degraded",
     message: "Document Management API is running",
     database: dbConnected ? "connected" : "unavailable",
+    queue: queue ? { workers: queue.workers, queued: queue.queued, paused: queue.paused,
+                     oldestQueuedSeconds: queue.oldestQueuedSeconds } : null,
+    // `awaitingRecovery` is files a stage failed on that the sweep will
+    // re-run; `failedTerminal` is files it has genuinely given up on and a
+    // person needs to look at. Separating them matters: the first number
+    // should trend to zero on its own, the second should not.
+    files: files ? { awaitingRecovery: files.retryable, failedTerminal: files.terminal,
+                     oldestAwaitingSeconds: files.oldestRetryableSeconds } : null,
+    warnings,
   });
 });
 
@@ -190,7 +287,22 @@ if (hasBuiltFrontend) {
       // fingerprints every asset filename, so `immutable` is safe for them
       // and correct: the content behind a given hash can never change.
       setHeaders(res, filePath) {
-        if (filePath.endsWith("index.html")) {
+        const name = path.basename(filePath);
+
+        if (name === "index.html") {
+          res.setHeader("Cache-Control", "no-cache, must-revalidate");
+        } else if (name === "sw.js" || name === "manifest.webmanifest") {
+          // The service worker and the manifest get the SAME treatment as
+          // index.html, and for a sharper version of the same reason.
+          //
+          // A cached index.html produces a blank page until someone hard
+          // refreshes. A cached sw.js produces a blank page that a hard
+          // refresh does NOT fix, because the stale worker is what answers
+          // the reload -- the client would be stuck until someone talks them
+          // through unregistering it from a browser console. Browsers
+          // already bypass the HTTP cache when checking for a worker update,
+          // but that is a browser behaviour to benefit from, not one to
+          // depend on. Being explicit costs one header.
           res.setHeader("Cache-Control", "no-cache, must-revalidate");
         } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
           res.setHeader("Cache-Control", "public, max-age=31536000, immutable");

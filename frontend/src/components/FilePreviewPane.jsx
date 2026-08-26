@@ -58,7 +58,7 @@ export function FilePreviewPane({ fileId, compact = false }) {
 
   return (
     <div className="space-y-2">
-      <div className={`overflow-hidden rounded-xl border border-white/5 bg-black/20 ${height}`}>
+      <div className={`overflow-hidden rounded-xl border border-line bg-inset ${height}`}>
         {loadingImage || loadingDetail ? (
           <div className="flex h-full items-center justify-center"><PageSpinner /></div>
         ) : blobUrl ? (
@@ -67,13 +67,13 @@ export function FilePreviewPane({ fileId, compact = false }) {
           // Image generation failed -- fall back to text excerpt + AI summary.
           <div className="h-full overflow-auto p-3.5">
             {imageError && (
-              <p className="mb-2.5 flex items-start gap-1.5 text-xs text-amber-300">
+              <p className="mb-2.5 flex items-start gap-1.5 text-xs text-amber-700">
                 <AlertCircle size={12} className="mt-0.5 shrink-0" />
                 <span>Couldn't render an image preview: {imageError}</span>
               </p>
             )}
             {detail?.ai_summary && (
-              <p className="mb-2.5 flex items-start gap-1.5 text-xs text-brand-300">
+              <p className="mb-2.5 flex items-start gap-1.5 text-xs text-brand-700">
                 <Sparkles size={12} className="mt-0.5 shrink-0" />
                 <span>{detail.ai_summary}</span>
               </p>

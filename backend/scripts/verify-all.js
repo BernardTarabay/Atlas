@@ -22,10 +22,27 @@
 //   npm run verify:all -- search    only scripts whose name contains "search"
 //   npm run verify:all -- --bail    stop at the first failure
 //
-// REQUIREMENTS: a running Postgres and Redis, and the same .env the server
-// uses. These are integration tests against real infrastructure -- that is the
-// point of them, and it is why they are not part of `npm test`.
+// REQUIREMENTS: a running Postgres and the same .env the server uses. (There
+// is no Redis any more -- migration 040 moved the queue into processing_jobs.)
+// These are integration tests against real infrastructure -- that is the point
+// of them, and it is why they are not part of `npm test`.
+//
+// THEY RUN AGAINST THE LIVE DATABASE, AND THEY PAUSE THE LIVE QUEUE.
+//
+// scripts/_fixtureQueue.js pauses the queue globally so a running worker
+// cannot process fixtures out from under a script's assertions. That pause is
+// now a LEASE (migration 041) that expires unless the holder keeps renewing
+// it, precisely because this runner kills an overrunning script with SIGKILL
+// and SIGKILL cannot run cleanup. Before that, a script that timed out here
+// left ALL document processing paused indefinitely, on a live library.
+//
+// This runner does not rely on the lease alone: after every kill it checks the
+// pause state and releases any FIXTURE pause it finds, so the queue is back
+// immediately rather than at the end of a lease. The lease is what makes it
+// correct; this is what makes it fast. An operator's indefinite pause is left
+// strictly alone -- see releaseFixturePause().
 const { spawn } = require("child_process");
+const pgQueue = require("../src/queues/pgQueue");
 const fs = require("fs");
 const path = require("path");
 
@@ -54,6 +71,7 @@ function scriptsToRun() {
 function runOne(file) {
   return new Promise((resolve) => {
     const started = Date.now();
+    let killed = false;
     const child = spawn(process.execPath, [path.join(SCRIPTS_DIR, file)], {
       cwd: path.resolve(SCRIPTS_DIR, ".."),
       env: process.env,
@@ -67,10 +85,15 @@ function runOne(file) {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       out += `\n[verify:all] killed after ${TIMEOUT_MS}ms\n`;
+      killed = true;
     }, TIMEOUT_MS);
 
-    child.on("close", (code, signal) => {
+    child.on("close", async (code, signal) => {
       clearTimeout(timer);
+      // A SIGKILLed script cannot have released the fixture pause it was
+      // holding. Release it here so the live queue resumes now rather than
+      // waiting out the lease.
+      if (killed) out += await releaseFixturePause();
       resolve({
         file,
         // A script killed on timeout reports a null code; that is a failure,
@@ -82,6 +105,35 @@ function runOne(file) {
       });
     });
   });
+}
+
+/**
+ * Release a pause left behind by a fixture, and only that.
+ *
+ * Deliberately refuses to touch an INDEFINITE pause: that one was set by a
+ * person, and a test runner silently un-pausing an operator's deliberate halt
+ * would be a worse bug than the one this fixes. Only a lease -- which is what
+ * _fixtureQueue takes -- is a test's to clean up.
+ */
+async function releaseFixturePause() {
+  try {
+    const pause = await pgQueue.pauseState();
+    if (!pause.recorded) return "";
+    if (pause.kind !== "lease") {
+      return `
+[verify:all] NOTE: the queue is paused indefinitely by ${pause.by || "someone"}. ` +
+             `Leaving it alone -- that is not a fixture pause.
+`;
+    }
+    await pgQueue.setPaused(false);
+    return `
+[verify:all] released a fixture queue pause left by ${pause.by || "a killed script"}.
+`;
+  } catch (err) {
+    return `
+[verify:all] could not check the queue pause: ${err.message}
+`;
+  }
 }
 
 (async () => {

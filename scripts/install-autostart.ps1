@@ -39,7 +39,50 @@ if (-not (Test-Path $Dist)) {
 
 # -WindowStyle Hidden on the action keeps the console from flashing at logon.
 $action    = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$StartBat`"" -WorkingDirectory $Root
-$trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+# At logon, AND every few minutes thereafter -- the repetition turns this task
+# into a watchdog.
+#
+# WHY A WATCHDOG AND NOT A FIX FOR ONE CAUSE
+#
+# Atlas has stopped twice without explanation: both times the API and worker
+# were simply gone, and both times it stayed down until somebody looked. The
+# suspected cause (a stray console Ctrl+C) did NOT reproduce under test -- a
+# real CTRL_C_EVENT fired at both the current launch form and a hardened one
+# killed neither. Hardening against it would have been guesswork.
+#
+# A repeating trigger does not care why Atlas stopped. Every few minutes it
+# runs start-atlas.bat, which either starts a dead Atlas or refuses because one
+# is already running. That covers the causes we understand and the ones we do
+# not.
+#
+# THIS IS ONLY SAFE BECAUSE start-atlas.bat REFUSES DUPLICATES. Without that
+# guard this trigger would start a second API and a second worker every few
+# minutes, which is far worse than the outage it fixes. The two changes belong
+# together; do not add this repetition to a copy of start-atlas.bat that has no
+# preflight check.
+$WatchdogMinutes = 5
+
+# TWO triggers, not one with a repetition bolted on.
+#
+# Attaching the repetition to the LOGON trigger looked right and was not: a
+# logon trigger's repetition only begins when that trigger fires, and by the
+# time this script runs the user has already logged in. The task registered
+# cleanly, reported `Repeat every: PT5M`, and had an EMPTY NextRunTime -- a
+# watchdog that would not have run again until the next logon, which is exactly
+# when it is least needed.
+#
+# So the watchdog is its own `-Once` trigger starting now and repeating
+# forever, and the logon trigger stays for the cold-boot case.
+$logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+
+$watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes $WatchdogMinutes)
+# An empty Duration means "repeat indefinitely". A fixed duration would make the
+# watchdog quietly expire, which is the one failure mode a watchdog must not
+# have.
+$watchdogTrigger.Repetition.Duration = ""
+
+$trigger = @($logonTrigger, $watchdogTrigger)
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
              -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -Hidden
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
@@ -47,7 +90,8 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Settings $settings -Principal $principal -Force | Out-Null
 
-Write-Host "Registered scheduled task '$TaskName' (runs at logon as $env:USERNAME)."
+Write-Host "Registered scheduled task '$TaskName' (runs at logon as $env:USERNAME,"
+Write-Host "then every $WatchdogMinutes minute(s) as a watchdog -- start-atlas.bat refuses duplicates)."
 
 # A .url shortcut rather than a .lnk: it opens in the default browser with
 # no console window and needs no target executable path.

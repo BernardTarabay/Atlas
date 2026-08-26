@@ -14,26 +14,26 @@
 //
 // WHY IT RUNS IN PROCESS BY DEFAULT
 //
-// Enqueueing 9,000 describe jobs would be handing the worker a backlog that
-// competes with live ingestion for the same daily AI budget, with no way to
-// watch it or stop it short of draining Redis. Running here means one file at
-// a time, in order, with progress on screen and Ctrl-C as a working stop
-// button. `--queue` is there for anyone who wants the other behaviour.
+// Enqueueing 9,000 describe jobs hands the worker a backlog that competes
+// with live ingestion, with no way to watch it or stop it short of pausing
+// the queue. Running here means one file at a time, in order, with progress
+// on screen and Ctrl-C as a working stop button. `--queue` is there for
+// anyone who wants the other behaviour.
 //
 // COST
 //
 // One AI call per file that needs a description and cannot inherit one, plus
-// one embedding call per description. The cap (AI_DAILY_CALL_CAP, default 500)
-// applies and is checked against every AI tier that shares the key, so this
-// stops rather than overrunning it -- a full corpus takes as many days as it
-// takes. `--embed-only` costs embeddings alone, which are far cheaper, and is
-// the right first run if descriptions already exist and only search is missing.
+// one embedding call per description. There is no artificial cap to stop
+// against any more (see config/env.js) -- the run goes until it is done, and
+// Google's own 429 + retry hint is what paces it. Spend is recorded in the
+// audit log; `node scripts/measure-ai-cost.js` reports it.
+// `--embed-only` costs embeddings alone, which are far cheaper, and is the
+// right first run if descriptions already exist and only search is missing.
 const { Pool } = require("pg");
 const env = require("../src/config/env");
 const descriptionService = require("../src/services/descriptionService");
 const fileDescriptionRepository = require("../src/repositories/fileDescriptionRepository");
 const { enqueueJob, closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 const { JobType } = require("../src/models/enums");
 
 const args = process.argv.slice(2);
@@ -125,12 +125,6 @@ async function main() {
       } else {
         counts.failed += 1;
         console.log(`${label} -> FAILED: ${result.reason}`);
-        // The daily cap is not a per-file failure, it is the end of today's
-        // run. Continuing would print the same line for every remaining file.
-        if (/daily ai call cap/i.test(result.reason || "")) {
-          console.log("\nThe daily AI budget is spent. Rerun tomorrow to continue where this left off.");
-          break;
-        }
       }
     } catch (err) {
       counts.failed += 1;
@@ -166,5 +160,5 @@ main()
   .finally(async () => {
     await pool.end().catch(() => {});
     await closeAllQueues().catch(() => {});
-    await closeRedisConnection().catch(() => {});
+    
   });

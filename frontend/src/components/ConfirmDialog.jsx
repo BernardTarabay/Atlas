@@ -33,7 +33,7 @@ export function ConfirmDialog({
       }
     >
       <div className="flex gap-3">
-        {danger && <AlertTriangle size={20} className="mt-0.5 shrink-0 text-rose-400" />}
+        {danger && <AlertTriangle size={20} className="mt-0.5 shrink-0 text-rose-600" />}
         <div className="min-w-0">
           <p className="text-sm text-base-300">{description}</p>
           {body}

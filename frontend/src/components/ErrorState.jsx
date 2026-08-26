@@ -38,7 +38,7 @@ export function ErrorState({ error, onRetry, title = "Couldn't load this", compa
       }
     >
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-rose-500/20 bg-rose-500/10">
-        <AlertTriangle size={22} className="text-rose-400" />
+        <AlertTriangle size={22} className="text-rose-600" />
       </div>
       <div>
         <p className="text-sm font-medium text-base-100">{title}</p>

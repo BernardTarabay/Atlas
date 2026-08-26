@@ -29,7 +29,6 @@ const storageLocationRepository = require("../src/repositories/storageLocationRe
 const { getStorageServiceFor } = require("../src/services/storage/storageService");
 const quickIdentityService = require("../src/services/quickIdentityService");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const APPLY = process.argv.includes("--apply");
 const p = new Pool({ connectionString: env.databaseUrl });
@@ -104,5 +103,5 @@ const p = new Pool({ connectionString: env.databaseUrl });
   .finally(async () => {
     await p.end().catch(() => {});
     await closeAllQueues().catch(() => {});
-    await closeRedisConnection().catch(() => {});
+    
   });

@@ -1,6 +1,6 @@
 export function StatCard({ icon: Icon, label, value, trend, accent = "brand" }) {
   const accents = {
-    brand: "from-brand-500/20 to-brand-700/5 text-brand-300",
+    brand: "from-brand-500/20 to-brand-700/5 text-brand-700",
     cyan: "from-accent-cyan/20 to-accent-cyan/5 text-accent-cyan",
     amber: "from-accent-amber/20 to-accent-amber/5 text-accent-amber",
     rose: "from-accent-rose/20 to-accent-rose/5 text-accent-rose",
@@ -17,7 +17,7 @@ export function StatCard({ icon: Icon, label, value, trend, accent = "brand" }) 
           {trend && <p className="mt-1.5 text-xs text-base-400">{trend}</p>}
         </div>
         {Icon && (
-          <div className={`flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ${accents[accent]} border border-white/10`}>
+          <div className={`flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ${accents[accent]} border border-line-strong`}>
             <Icon size={18} />
           </div>
         )}

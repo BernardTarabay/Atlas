@@ -21,8 +21,8 @@ const path = require("path");
 const readline = require("readline");
 const { pool } = require("../config/database");
 const env = require("../config/env");
-const { getQueue, closeAllQueues } = require("../queues");
-const { closeRedisConnection } = require("../config/redis");
+const { closeAllQueues } = require("../queues");
+const pgQueue = require("../queues/pgQueue");
 const { JobType } = require("../models/enums");
 
 const TABLES_TO_WIPE = [
@@ -66,18 +66,20 @@ async function run() {
     }
   }
 
-  // QUEUES FIRST, THEN TABLES.
+  // PAUSE FIRST, THEN TRUNCATE.
   //
-  // processing_jobs is only half the story: the work itself lives in Redis,
-  // and truncating the table while BullMQ still holds tens of thousands of
-  // jobs leaves the worker grinding through every one of them against rows
-  // that no longer exist. On a real reset that was 15,759 queued jobs -- a
-  // "clean slate" that spends the next hour logging failures and can even
-  // re-insert rows behind the truncate.
+  // This used to have to drain Redis before touching the tables, because
+  // processing_jobs was only half the story and truncating it while BullMQ
+  // still held tens of thousands of jobs left the worker grinding through
+  // every one against rows that no longer existed. On a real reset that was
+  // 15,759 queued jobs -- a "clean slate" that spent the next hour logging
+  // failures and could re-insert rows behind the truncate.
   //
-  // Draining first also stops new work arriving mid-reset. A job already
-  // executing at this instant may still write a row afterwards, which is
-  // exactly why the truncate comes second and mops those up.
+  // Since migration 040 the jobs ARE the rows, so the truncate drains the
+  // queue by definition and that whole failure mode is gone. What remains is
+  // the narrower race: a worker claiming new work mid-reset. Pausing stops
+  // that. A job already executing at this instant may still write a row
+  // afterwards, which is exactly why the truncate comes second.
   await drainQueues();
 
   const client = await pool.connect();
@@ -135,28 +137,33 @@ async function run() {
   console.log("[reset-data] Your ORIGINAL files were not touched -- this app never moves or deletes them.");
 }
 
-/** Empty every BullMQ queue, including jobs already running. */
+/**
+ * Stop workers claiming new jobs for the duration of the reset.
+ *
+ * Deliberately does NOT wait for running jobs to finish. A reset should not
+ * block on a 67-second video description, and the truncate below removes the
+ * rows any straggler would write to.
+ *
+ * The queue is left paused only until the reset finishes -- resumeQueue() in
+ * the finally block hands it back even if this throws, because a queue left
+ * paused looks exactly like a broken worker.
+ */
 async function drainQueues() {
-  let removed = 0;
   try {
-    for (const jobType of Object.values(JobType)) {
-      const queue = getQueue(jobType);
-      const counts = await queue.getJobCounts("waiting", "active", "delayed", "failed", "completed");
-      removed += Object.values(counts).reduce((sum, n) => sum + n, 0);
-      // force:true so jobs currently locked by a running worker go too --
-      // without it obliterate refuses while anything is active, which is the
-      // normal state on a machine where the worker is still up.
-      await queue.obliterate({ force: true });
-    }
-    console.log(`[reset-data] Drained ${removed} queued/failed job(s) from Redis.`);
-  } catch (err) {
-    // A reset must still work with Redis down -- that is a common reason to
-    // be resetting in the first place.
-    console.warn(
-      `[reset-data] Could not drain the Redis queues: ${err.message}\n` +
-      "            If Redis comes back with old jobs in it, stop the worker and re-run this."
+    await pgQueue.setPaused(true, "reset-data");
+    const { rows } = await pool.query(
+      "SELECT count(*)::int AS n FROM processing_jobs WHERE status IN ('queued','running')"
     );
+    console.log(`[reset-data] Paused the queue; ${rows[0].n} pending job(s) will be truncated with the tables.`);
+  } catch (err) {
+    // A reset must still work when the queue table is in a bad state -- that
+    // is a common reason to be resetting in the first place.
+    console.warn(`[reset-data] Could not pause the queue: ${err.message}`);
   }
+}
+
+async function resumeQueue() {
+  await pgQueue.setPaused(false).catch(() => {});
 }
 
 /**
@@ -216,7 +223,7 @@ run()
     process.exitCode = 1;
   })
   .finally(async () => {
+    await resumeQueue();
     await pool.end();
     await closeAllQueues().catch(() => {});
-    await closeRedisConnection().catch(() => {});
   });

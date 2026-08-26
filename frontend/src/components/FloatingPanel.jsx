@@ -127,10 +127,10 @@ export function FloatingPanel({
       onPointerLeave={endDrag}
     >
       <div
-        className="flex shrink-0 cursor-move select-none items-center gap-2 border-b border-white/5 bg-white/[0.03] px-3 py-2"
+        className="flex shrink-0 cursor-move select-none items-center gap-2 border-b border-line bg-base-900 px-3 py-2"
         onPointerDown={(e) => !maximized && startDrag(e, "move")}
       >
-        {Icon && <Icon size={14} className="shrink-0 text-brand-300" />}
+        {Icon && <Icon size={14} className="shrink-0 text-brand-700" />}
         <p className="truncate text-xs font-medium text-base-100">{title}</p>
         {badge}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
@@ -165,7 +165,7 @@ export function FloatingPanel({
           onPointerDown={(e) => startDrag(e, "resize")}
           title="Drag to resize"
         >
-          <svg viewBox="0 0 16 16" className="h-full w-full text-white/25">
+          <svg viewBox="0 0 16 16" className="h-full w-full text-base-600">
             <path d="M2 14 L14 14 M2 14 L2 2" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
           </svg>
         </div>

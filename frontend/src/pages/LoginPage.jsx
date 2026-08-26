@@ -35,7 +35,7 @@ export function LoginPage() {
         </div>
 
         {error && (
-          <div role="alert" className="flex items-start gap-2 rounded-xl border border-rose-500/25 bg-rose-500/10 px-3.5 py-2.5 text-sm text-rose-200">
+          <div role="alert" className="flex items-start gap-2 rounded-xl border border-rose-500/25 bg-rose-500/10 px-3.5 py-2.5 text-sm text-rose-700">
             <AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" /> {error}
           </div>
         )}
@@ -79,7 +79,7 @@ export function LoginPage() {
         </button>
 
         <p className="text-center text-sm text-base-400">
-          Don&rsquo;t have an account? <Link to="/register" className="font-medium text-brand-400 hover:text-brand-300">Create one</Link>
+          Don&rsquo;t have an account? <Link to="/register" className="font-medium text-brand-600 hover:text-brand-700">Create one</Link>
         </p>
       </form>
     </AuthShell>

@@ -216,18 +216,59 @@ async function purgeFiles(fileIds, actorUserId) {
  * housekeeping that has to cover every account, and it selects strictly on
  * elapsed time rather than on anything a request supplied.
  */
-async function findExpired({ retentionDays = env.trash.retentionDays, limit = 500 } = {}) {
+async function findExpired({ retentionDays = env.trash.retentionDays, limit = 500, ownerUserId } = {}) {
+  // Scoped like every other read of user-owned rows.
+  //
+  // This used to take no owner and select across every account, which is
+  // precisely what `requireOwner` exists to prevent -- and the reason the
+  // nightly purge never ran: enqueueJob could not resolve an owner for a
+  // `purge_trash` job, processingJobs.create refused it, and the failure went
+  // into a log nobody read. The Trash had therefore never been emptied.
+  //
+  // The fix is to scope the purge rather than exempt it: one job per owner,
+  // each one visible on that owner's Jobs page, each one deleting only their
+  // rows. See findOwnersWithExpired below for the one query that is allowed to
+  // look across accounts, and why.
+  requireOwner(ownerUserId, "lifecycleService.findExpired");
   const { rows } = await db.query(
     `SELECT id, owner_user_id, filename_current, deleted_at
        FROM files
       WHERE status = 'deleted'
         AND deleted_at IS NOT NULL
         AND deleted_at < now() - ($1 || ' days')::interval
+        AND owner_user_id = $3
       ORDER BY deleted_at ASC
       LIMIT $2`,
-    [String(retentionDays), limit]
+    [String(retentionDays), limit, ownerUserId]
   );
   return rows;
+}
+
+/**
+ * Whose Trash has something old enough to remove.
+ *
+ * THE ONE DELIBERATELY CROSS-ACCOUNT READ IN THIS FILE.
+ *
+ * A scheduler running on a timer has no user attached -- it is nobody's
+ * request -- so something has to answer "for whom should a purge be queued?"
+ * before per-owner scoping can begin. That question cannot itself be scoped.
+ *
+ * It is made safe by returning ids and nothing else: no filenames, no paths,
+ * no counts that would reveal one account's contents to another. Every actual
+ * row this leads to is then read back through findExpired, which does require
+ * an owner.
+ */
+async function findOwnersWithExpired({ retentionDays = env.trash.retentionDays } = {}) {
+  const { rows } = await db.query(
+    `SELECT DISTINCT owner_user_id
+       FROM files
+      WHERE status = 'deleted'
+        AND deleted_at IS NOT NULL
+        AND deleted_at < now() - ($1 || ' days')::interval
+        AND owner_user_id IS NOT NULL`,
+    [String(retentionDays)]
+  );
+  return rows.map((r) => r.owner_user_id);
 }
 
 /**
@@ -322,6 +363,7 @@ module.exports = {
   restoreFiles,
   purgeFiles,
   findExpired,
+  findOwnersWithExpired,
   summary,
   setSubjectArchived,
 };

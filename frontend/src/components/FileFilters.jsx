@@ -178,7 +178,7 @@ export function FileFilters({
       </div>
 
       {open && (
-        <div className="mt-3 space-y-4 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+        <div className="mt-3 space-y-4 rounded-2xl border border-line bg-base-900 p-4">
           <div>
             <p className="label mb-2">File type</p>
             {extensions.length === 0 ? (
@@ -194,8 +194,8 @@ export function FileFilters({
                       className={
                         "rounded-full border px-2.5 py-1 text-xs transition-colors " +
                         (on
-                          ? "border-brand-500/40 bg-brand-500/15 text-brand-200"
-                          : "border-white/10 bg-white/[0.03] text-base-300 hover:border-white/20")
+                          ? "border-brand-500/40 bg-brand-500/15 text-brand-700"
+                          : "border-line-strong bg-base-900 text-base-300 hover:border-line-strong")
                       }
                     >
                       {e.ext === NO_EXTENSION ? "no extension" : `.${e.ext}`}
@@ -233,7 +233,7 @@ export function FileFilters({
             This is the date the document is <em>from</em> — read out of the file where possible, not the
             day it was copied onto the disk.
             {undated > 0 && hasDateFilter && (
-              <span className="text-amber-300">
+              <span className="text-amber-700">
                 {" "}{undated.toLocaleString()} file{undated === 1 ? " has" : "s have"} no known date and
                 {undated === 1 ? " is" : " are"} hidden while a date range is set.
               </span>
@@ -316,10 +316,10 @@ export function FileFilters({
 
 function Chip({ icon: Icon, children, onClear }) {
   return (
-    <span className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-brand-500/30 bg-brand-500/10 px-2.5 py-1 text-xs text-brand-200">
+    <span className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-brand-500/30 bg-brand-500/10 px-2.5 py-1 text-xs text-brand-700">
       <Icon size={11} className="shrink-0" />
       <span className="truncate">{children}</span>
-      <button className="shrink-0 text-brand-300/70 hover:text-brand-100" onClick={onClear} title="Clear this filter">
+      <button className="shrink-0 text-brand-700/70 hover:text-brand-700" onClick={onClear} title="Clear this filter">
         <X size={11} />
       </button>
     </span>

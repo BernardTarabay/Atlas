@@ -21,6 +21,7 @@ const fileRepository = require("../../repositories/fileRepository");
 const fileContentRepository = require("../../repositories/fileContentRepository");
 const duplicateGroupRepository = require("../../repositories/duplicateGroupRepository");
 const auditLogRepository = require("../../repositories/auditLogRepository");
+const duplicateGroupService = require("../../services/duplicateGroupService");
 const similarity = require("../../services/similarityService");
 const { DuplicateGroupType, DetectionMethod, ConfidenceLevel } = require("../../models/enums");
 
@@ -45,10 +46,12 @@ async function detectExact(file) {
   // First, findGroupContainingFile returns groups of ANY type, so a file
   // already sitting in a PROBABLE group -- a similarity guess -- captured the
   // branch, and byte-identical files were filed as a "probable" match. Not a
-  // cosmetic mislabel: autoResolveDuplicatesProcessor and
-  // duplicateGroupService.autoResolveGroup both refuse anything non-EXACT by
-  // design, because a similarity guess needs a human. A provable pair became
-  // permanently ineligible for the automation built for exactly it.
+  // cosmetic mislabel: a byte-identical pair carries confidence 1.0 and a
+  // similarity guess carries whatever it scored, so mislabelling the type
+  // used to drop a provable pair into the path built for guesses. Auto-resolve
+  // now keys on the SCORE rather than the type, which makes the consequence
+  // milder, but the group type is still what the UI and the audit trail say
+  // happened -- so getting it right still matters.
   //
   // Second, find-then-create is a race. Two copies of one file hash in
   // parallel (the queue runs four wide), both find nothing, both create a
@@ -73,6 +76,17 @@ async function detectExact(file) {
     await duplicateGroupRepository.addMember(group.id, match.id, 1.0);
   }
 
+  // RESOLVE IT NOW, not on a page later.
+  //
+  // Detection used to end here, leaving the group `open` for somebody to go
+  // and confirm on the Duplicates page. That page is gone: a group the system
+  // is confident about is not a decision worth interrupting anyone for, and
+  // 468 open groups is not a queue anybody empties. Resolving picks a canonical
+  // copy and deletes nothing, so the worst case of getting it wrong is that the
+  // wrong copy is labelled canonical -- visible, and reversible by reopening.
+  //
+  // Deliberately after the audit row below, so "detected" is always recorded
+  // even if resolving throws.
   await auditLogRepository.record({
     action: "duplicate.detected",
     entityType: "duplicate_group",
@@ -81,7 +95,14 @@ async function detectExact(file) {
     reason: "SHA-256 match across multiple files",
   });
 
-  return { phase: "exact", duplicateGroupId: group.id, memberCount: matches.length };
+  const resolved = await duplicateGroupService.autoResolveGroup(group.id, file.owner_user_id);
+
+  return {
+    phase: "exact",
+    duplicateGroupId: group.id,
+    memberCount: matches.length,
+    autoResolved: Boolean(resolved),
+  };
 }
 
 async function detectProbable(file) {
@@ -164,10 +185,18 @@ async function detectProbable(file) {
       })),
       candidatesCompared: candidates.length,
     },
-    reason: "Content similarity above the probable-duplicate threshold (requires human review)",
+    reason: "Content similarity above the probable-duplicate threshold",
   });
 
+  // Same rule as the exact path: the score decides, not the group type.
+  // autoResolveGroup applies AUTO_RESOLVE_MIN_CONFIDENCE itself, so a weak
+  // similarity match simply stays open rather than being guessed at.
+  const autoResolved = Boolean(
+    await duplicateGroupService.autoResolveGroup(group.id, file.owner_user_id)
+  );
+
   return {
+    autoResolved,
     phase: "probable",
     duplicateGroupId: group.id,
     candidatesCompared: candidates.length,

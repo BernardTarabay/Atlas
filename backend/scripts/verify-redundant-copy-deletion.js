@@ -32,7 +32,6 @@ const env = require("../src/config/env");
 const redundantCopyService = require("../src/services/redundantCopyService");
 const duplicateGroupRepository = require("../src/repositories/duplicateGroupRepository");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -61,7 +60,7 @@ async function cleanup() {
   } catch (e) { console.log(`   (cleanup) ${e.message}`); }
   await p.end().catch(() => {});
   await closeAllQueues().catch(() => {});
-  await closeRedisConnection().catch(() => {});
+  
 }
 
 async function makeLocation(owner, name, root, readOnly = false) {

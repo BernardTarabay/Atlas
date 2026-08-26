@@ -20,7 +20,6 @@ const fileRepository = require("../src/repositories/fileRepository");
 // Owner-scoped through filters, as fileService.search does in production.
 const { parseFileFilters } = require("../src/repositories/fileFilters");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 // WHERE THE REAL DOCUMENTS ARE.
 //
@@ -69,7 +68,7 @@ async function cleanup() {
       console.log("\ncleaned up (pass --keep to leave the folder registered).");
     } catch (e) { console.log("cleanup warning:", e.message); }
   }
-  await p.end(); await closeAllQueues(); await closeRedisConnection();
+  await p.end(); await closeAllQueues();
 }
 
 (async () => {

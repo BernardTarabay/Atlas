@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import {
   FileText, Search, Wand2, HardDrive, AlertTriangle, ScanLine, FolderSearch,
-  Copy, ArrowUpRight, Activity, CheckCircle2, Layers, Clock,
+  ArrowUpRight, Activity, CheckCircle2, Layers, Clock,
 } from "lucide-react";
 import { api } from "../services/apiClient";
 import { useApiData } from "../hooks/useApiData";
@@ -29,8 +29,11 @@ import { formatBytes, relativeTime } from "../utils/format";
  * magnitude. The old jobs-by-status pie is gone: a five-slice donut is a
  * worse bar chart with a legend attached.
  *
- * Colors are picked by job, not by taste, and were run through the palette
- * validator against this app's dark surface (#12141d):
+ * Colors are picked by job, not by taste, and were re-validated against the
+ * app's LIGHT card surface (#ffffff) when the palette moved off dark. The old
+ * values were chosen to carry on #12141d and did not survive the move: the
+ * warning amber measured 1.83:1 on white -- far below the 3:1 a chart mark
+ * needs to be seen at all. Same hues, darker (ratios measured, not estimated):
  *   --mark-primary / --mark-secondary  single-hue magnitude, all checks pass
  *   status good/warn/critical          state, always paired with an icon and
  *                                      a label so hue never carries meaning
@@ -38,11 +41,11 @@ import { formatBytes, relativeTime } from "../utils/format";
  */
 
 const VIZ = {
-  markPrimary: "#3987e5",   // funnel — magnitude
-  markSecondary: "#199e70", // extraction coverage — magnitude
-  good: "#0ca30c",
-  warning: "#fab219",
-  critical: "#d03b3b",
+  markPrimary: "#2563eb",   // funnel — magnitude (5.17:1 on white)
+  markSecondary: "#047857", // extraction coverage — magnitude (5.48:1)
+  good: "#15803d",          // 5.02:1 (was 3.35:1)
+  warning: "#b45309",       // 5.02:1 (was 1.83:1)
+  critical: "#be123c",      // 6.29:1
 };
 
 const pct = (n, total) => (total > 0 ? Math.round((n / total) * 100) : 0);
@@ -62,7 +65,7 @@ export function DashboardPage() {
     return (
       <div>
         <PageHeader title="Dashboard" description="Something went wrong loading the overview." />
-        <div className="glass-card p-6 text-sm text-rose-300">{error.message}</div>
+        <div className="glass-card p-6 text-sm text-rose-700">{error.message}</div>
       </div>
     );
   }
@@ -140,14 +143,14 @@ export function DashboardPage() {
                         <span className="text-xs tabular-nums text-base-400">
                           <span className="font-medium text-base-100">{s.count.toLocaleString()}</span>
                           {i > 0 && lost > 0 && (
-                            <span className="ml-2 text-[11px] text-amber-400/80">−{lost.toLocaleString()}</span>
+                            <span className="ml-2 text-[11px] text-amber-700/80">−{lost.toLocaleString()}</span>
                           )}
                         </span>
                       </div>
                       {/* 4px rounded data end, anchored to a visible track so
                           the missing portion is legible as loss rather than
                           absence. */}
-                      <div className="h-2 w-full overflow-hidden rounded-[4px] bg-white/[0.06]">
+                      <div className="h-2 w-full overflow-hidden rounded-[4px] bg-base-800">
                         <div
                           className="h-full rounded-[4px] transition-[width] duration-500"
                           style={{ width: `${Math.max(width, s.count > 0 ? 1.5 : 0)}%`, background: VIZ.markPrimary }}
@@ -178,16 +181,6 @@ export function DashboardPage() {
                   detail="No subject assigned yet"
                 />
                 <AttentionRow
-                  icon={Wand2} tone="warning" to="/rename-proposals"
-                  count={attention.zeroConfidenceProposals} label="junk suggestions"
-                  detail="0% confidence — safe to clear in one click"
-                />
-                <AttentionRow
-                  icon={Copy} tone="warning" to="/duplicates"
-                  count={attention.openExactDuplicates} label="exact duplicate groups"
-                  detail="Identical copies, resolvable automatically"
-                />
-                <AttentionRow
                   icon={AlertTriangle} tone="critical" to="/triage?reason=stalled"
                   count={attention.stalled} label="stalled"
                   detail="Discovered but nothing is processing them"
@@ -198,8 +191,8 @@ export function DashboardPage() {
                   detail="Check the job log for the reason"
                 />
                 {attention.jobsInFlight > 0 && (
-                  <div className="mt-2 flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-                    <Activity size={13} className="shrink-0 animate-pulse text-brand-400" />
+                  <div className="mt-2 flex items-center gap-2 rounded-lg border border-line-strong bg-base-900 px-3 py-2">
+                    <Activity size={13} className="shrink-0 animate-pulse text-brand-600" />
                     <p className="text-xs text-base-300">
                       <span className="font-medium text-base-100">{attention.jobsInFlight.toLocaleString()}</span> jobs
                       still running — these numbers will keep moving.
@@ -226,7 +219,7 @@ export function DashboardPage() {
                     <div key={e.ext} className="grid grid-cols-[3.5rem_1fr_5.5rem] items-center gap-3">
                       <span className="truncate font-mono text-[11px] text-base-300">.{e.ext}</span>
                       <div
-                        className="h-2 w-full overflow-hidden rounded-[4px] bg-white/[0.06]"
+                        className="h-2 w-full overflow-hidden rounded-[4px] bg-base-800"
                         title={`${e.ext}: ${e.searchable.toLocaleString()} of ${e.files.toLocaleString()} readable (${cov}%)`}
                       >
                         <div
@@ -257,31 +250,31 @@ export function DashboardPage() {
             <section className="glass-card p-5 xl:col-span-3">
               <div className="mb-3 flex items-center justify-between">
                 <SectionHead icon={HardDrive} title="Storage locations" />
-                <Link to="/storage-locations" className="flex items-center gap-1 text-xs text-brand-400 hover:text-brand-300">
+                <Link to="/storage-locations" className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700">
                   Manage <ArrowUpRight size={12} />
                 </Link>
               </div>
               <div className="-mx-2 overflow-x-auto">
-                <table className="w-full min-w-[28rem] text-left text-xs">
+                <table className="w-full min-w-0 text-left text-xs sm:min-w-[28rem]">
                   <thead>
                     <tr className="text-[10px] uppercase tracking-wider text-base-500">
                       <th className="px-2 py-1.5 font-medium">Location</th>
                       <th className="px-2 py-1.5 text-right font-medium">Files</th>
                       <th className="px-2 py-1.5 text-right font-medium">Size</th>
-                      <th className="px-2 py-1.5 text-right font-medium">Named</th>
-                      <th className="px-2 py-1.5 text-right font-medium">Last scan</th>
+                      <th className="col-secondary px-2 py-1.5 text-right font-medium">Named</th>
+                      <th className="col-secondary px-2 py-1.5 text-right font-medium">Last scan</th>
                     </tr>
                   </thead>
                   <tbody>
                     {locations.map((l) => (
-                      <tr key={l.id} className="border-t border-white/5">
+                      <tr key={l.id} className="border-t border-line">
                         <td className="max-w-[14rem] truncate px-2 py-2 text-base-100" title={l.rootPath}>
                           {l.name}
                         </td>
                         <td className="px-2 py-2 text-right tabular-nums text-base-300">{l.files.toLocaleString()}</td>
                         <td className="px-2 py-2 text-right tabular-nums text-base-400">{formatBytes(l.bytes)}</td>
-                        <td className="px-2 py-2 text-right tabular-nums text-base-400">{pct(l.named, l.files)}%</td>
-                        <td className="px-2 py-2 text-right text-base-500">
+                        <td className="col-secondary px-2 py-2 text-right tabular-nums text-base-400">{pct(l.named, l.files)}%</td>
+                        <td className="col-secondary px-2 py-2 text-right text-base-500">
                           {l.lastScan ? relativeTime(l.lastScan) : "never"}
                         </td>
                       </tr>
@@ -295,7 +288,7 @@ export function DashboardPage() {
               <div className="mb-3 flex items-center justify-between">
                 <SectionHead icon={Activity} title="Recent activity" />
                 {hasPermission("audit.view") && (
-                  <Link to="/audit-log" className="flex items-center gap-1 text-xs text-brand-400 hover:text-brand-300">
+                  <Link to="/audit-log" className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700">
                     All <ArrowUpRight size={12} />
                   </Link>
                 )}
@@ -309,7 +302,7 @@ export function DashboardPage() {
               ) : (
                 <ul className="space-y-2">
                   {audit.map((entry) => (
-                    <li key={entry.id} className="flex items-center justify-between gap-2 border-b border-white/5 pb-2 last:border-0 last:pb-0">
+                    <li key={entry.id} className="flex items-center justify-between gap-2 border-b border-line pb-2 last:border-0 last:pb-0">
                       <div className="min-w-0">
                         <p className="truncate text-xs text-base-100">{entry.action.replace(/[._]/g, " ")}</p>
                         <p className="text-[10px] text-base-500">{relativeTime(entry.created_at)}</p>
@@ -327,7 +320,7 @@ export function DashboardPage() {
               <SectionHead icon={Activity} title="Pipeline activity" hint="Jobs in the last 24 hours" />
               <div className="mt-3 flex flex-wrap gap-2">
                 {jobs.map((j) => (
-                  <div key={j.type} className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
+                  <div key={j.type} className="rounded-lg border border-line-strong bg-base-900 px-3 py-2">
                     <p className="font-mono text-[10px] text-base-400">{j.type}</p>
                     <div className="mt-1 flex items-center gap-2.5 text-[11px] tabular-nums">
                       <span className="flex items-center gap-1 text-base-200">
@@ -335,7 +328,7 @@ export function DashboardPage() {
                       </span>
                       {j.active > 0 && (
                         <span className="flex items-center gap-1 text-base-300">
-                          <Activity size={10} className="text-brand-400" /> {j.active.toLocaleString()}
+                          <Activity size={10} className="text-brand-600" /> {j.active.toLocaleString()}
                         </span>
                       )}
                       {j.failed > 0 && (
@@ -394,7 +387,7 @@ function AttentionRow({ icon: Icon, tone, count, label, detail, to }) {
   const body = (
     <div
       className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition ${
-        quiet ? "opacity-45" : "hover:bg-white/[0.04]"
+        quiet ? "opacity-45" : "hover:bg-base-850"
       }`}
     >
       <Icon size={14} className="shrink-0" style={{ color: quiet ? "#6b7280" : TONE_COLOR[tone] }} />

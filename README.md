@@ -59,15 +59,16 @@ docs/
   08-api-contracts.md         Resource/endpoint map, permission per route
   09-ai-classification.md     The optional Gemini escalation tier
   10-email-inbox.md           Gmail triage design
+  11-remote-access.md         Reaching it from other devices, and installability
 
 backend/
   migrations/     35 numbered, forward-only SQL files. Each one opens with why it
                   exists -- these are the best explanation of the design decisions
   seeds/          Reference data (RBAC roles/permissions, starter taxonomy)
-  scripts/        19 verify-*.js live end-to-end checks against real Postgres/Redis
+  scripts/        20 verify-*.js live end-to-end checks against real Postgres
   tests/          node --test, no new dependencies (see tests/README.md)
   src/
-    config/       env validation, pg Pool, Redis connection
+    config/       env validation, pg Pool
     db/           migrate.js / seed.js / resetData.js / Reclassify.js runners
     models/       enums.js -- JS mirror of the Postgres enum types
     repositories/ one file per entity group -- the only layer that talks to pg
@@ -99,7 +100,8 @@ backend/
                   requirePermission.js (RBAC), rateLimiters.js, asyncHandler.js
     controllers/  thin HTTP-shaping layer, one per resource
     routes/       one file per resource, mounted in app.js under /api/*
-    queues/       BullMQ registry + enqueueJob() (always backed by a processing_jobs row)
+    queues/       enqueueJob() + pgQueue.js -- the queue IS the processing_jobs row
+                  (migration 040; no Redis, no broker)
     jobs/         job_type -> processor registry, runProcessingJob() lifecycle wrapper
       processors/ scan, hash, extract_metadata, extract_text, classify, ocr,
                   describe, detect_duplicates, detect_versions, generate_names,
@@ -126,17 +128,19 @@ desktop-agent/    Electron Filesystem Agent (Phase 12) -- see its own README
 
 ## Running it
 
-Two processes: the API and the worker pool. Both need Postgres and Redis reachable.
+Two processes: the API and the worker pool. Both need Postgres reachable -- and only
+Postgres: the job queue lives in `processing_jobs`, so there is no Redis to install
+(migration 040).
 
 ```bash
 cd backend
-cp .env.example .env         # DATABASE_URL, REDIS_URL, JWT secrets
+cp .env.example .env         # DATABASE_URL, JWT secrets
 npm install
 npm run db:migrate           # applies backend/migrations/*.sql
 npm run db:seed              # loads backend/seeds/*.sql (idempotent)
 
 npm run dev                  # terminal 1: API on :5000, GET /api/health checks the DB
-npm run worker               # terminal 2: starts every job worker against Redis
+npm run worker               # terminal 2: starts every job worker against Postgres
 ```
 
 **`npm run dev` only watches the API.** The worker is not under nodemon, so after
@@ -193,6 +197,31 @@ Files that predate the describe stage need one backfill pass:
 cd backend && node scripts/backfill-descriptions.js
 ```
 
+## Reaching it from another device
+
+The API serves the built UI, so on the host machine Atlas is one address and one
+double-click (`scripts/install-autostart.ps1` registers a logon task and a desktop
+shortcut). Other devices were told to open `http://192.168.1.101:5000`, which moves
+with the DHCP lease, only works on that LAN, and — because it is not a secure
+context — prevents the service worker from registering at all, so Atlas can never be
+installed on a phone.
+
+`tailscale serve` fixes all three: a stable name with a real certificate, reachable
+from any device on the tailnet, nothing exposed to the public internet.
+
+```powershell
+.\scripts\install-tailscale-serve.ps1          # prints https://<machine>.<tailnet>.ts.net
+```
+
+Requires Tailscale installed and signed in, with MagicDNS and HTTPS Certificates
+enabled for the tailnet — the script checks each precondition separately and names
+the one that failed. Full rationale, including why this is not solved by becoming a
+desktop app, is in `docs/11-remote-access.md`.
+
+Once it is served over HTTPS, Atlas is installable: Chromium offers *Install app*,
+iOS Safari offers *Add to Home Screen*, and both run it in its own window with no
+URL bar.
+
 ## Tests
 
 ```bash
@@ -201,7 +230,7 @@ cd desktop-agent && npm test    # 16 tests
 ```
 
 Node's built-in runner, no new dependencies. All pure unit tests — no live Postgres,
-Redis or network — so they run in about a second and can't fail for environmental
+or network — so they run in about a second and can't fail for environmental
 reasons. `backend/tests/README.md` explains what's covered, what deliberately isn't
 (the AI tiers, repositories, the job pipeline, the frontend), and why.
 
@@ -221,7 +250,7 @@ node scripts/verify-known-content-skip.js   # a second overlapping folder is che
 npm run verify:agent                        # full Filesystem Agent loop
 ```
 
-The newer scripts pause the BullMQ queues while they set fixtures up
+The newer scripts pause the queue while they set fixtures up
 (`scripts/_fixtureQueue.js`) and resume on the way out — without that, a live worker
 processes the fixtures out from under the assertions. Run the older ones with the
 worker stopped.
@@ -229,7 +258,7 @@ worker stopped.
 ## What was verified against real services
 
 Nothing here was verified in the abstract — everything was run against real
-PostgreSQL and Redis, not mocks:
+PostgreSQL, not mocks:
 
 - All migrations apply cleanly on an empty database; re-running is a no-op. Seeds are
   idempotent (this caught a real bug: a `UNIQUE(parent_id, slug)` constraint doesn't
@@ -243,7 +272,7 @@ PostgreSQL and Redis, not mocks:
   document through both the modern and legacy paths — 99% word-level recall for
   `.doc`, 100% for `.xls`. That comparison caught a real bug: dropping Word's `0x07`
   cell mark fused adjacent table cells into invented tokens (`DateÉvénementSection`).
-- The full BullMQ pipeline was run end-to-end against a test repository: one `scan`
+- The full pipeline was run end-to-end against a test repository: one `scan`
   fanned out to 41 downstream jobs across all queues, zero failures.
 - `bulk_rename` was verified by approving a real proposal and confirming the physical
   file was renamed on disk through the `StorageService` abstraction.
@@ -280,8 +309,17 @@ PostgreSQL and Redis, not mocks:
 - A corrupted `node_modules` from an interrupted install caused a raw `Bus error` on
   `vite build`; isolated by testing a bare Vite install elsewhere, then fixed by a
   clean reinstall.
-- No automated component tests exist yet — `npm run build` is the only automated
-  check on the frontend.
+- `npm test` runs the service worker's routing rules against a fake worker global
+  (`frontend/tests/sw.test.mjs`, 9 tests). A worker cannot be checked by looking at
+  the app — it sits *between* the app and the network, runs only in a production
+  build, and fails as stale data rather than as an error. The first test asserts the
+  rule that matters: `/api` is never intercepted.
+- `npm run verify:pwa -- <url>` checks the install metadata is actually installable:
+  required manifest fields, icons measured from their PNG headers rather than trusted
+  (a 150%-scaled display silently yields a 288px file labelled 192x192, which Chrome
+  rejects without explanation), and live content-type / cache-control headers.
+- No automated component tests exist yet — `npm run build` remains the only automated
+  check on the React components themselves.
 
 ## Known gaps (documented, not hidden)
 

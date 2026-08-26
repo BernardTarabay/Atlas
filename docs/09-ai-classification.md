@@ -38,12 +38,25 @@ exactly as it did before this tier existed.
    tokens are billed as output tokens; this is a bounded classification/
    extraction task that doesn't benefit from deep reasoning, so thinking is
    turned down rather than left at the model's default.
-5. **Persisted daily call cap.** `AI_DAILY_CALL_CAP` (default 500) is
-   enforced by counting `ai_classification.called` rows in `audit_logs`
-   over a rolling 24h window (`auditLogRepository.countSince`) -- a real
-   persisted count, not an in-memory counter that resets on worker restart.
-   Once hit, the pipeline silently keeps the rule-based result rather than
-   erroring.
+5. **No artificial cap, deliberately.** There used to be an
+   `AI_DAILY_CALL_CAP` (default 500) counted over a rolling 24h window, and a
+   default 12 req/min client-side pace. Both are gone. The daily cap was
+   enforced three inconsistent ways -- `classifyProcessor` counted only
+   `ai_classification.called`, `ocrService` only `ai_image_description.called`,
+   and `descriptionService` the sum of all three -- so a "500-call cap" let
+   1,003 calls through in a day while the description stage, the only one
+   measuring the true total, starved and left 5,730 files stranded in
+   `failed_retryable`.
+
+   The fix was not a fourth counting rule. A cap that silently converts "your
+   files are being processed" into "5,730 files failed" is worse than no cap.
+   The real quota belongs to Google and Google enforces it: 429 responses
+   carry a `Please retry in Ns` hint that every caller honours and retries
+   (`services/ai/rateLimiter.js`). Spend stays **visible** rather than
+   restricted -- every billed call is written to `audit_logs`, and
+   `scripts/measure-ai-cost.js` reports it. Setting
+   `GEMINI_RATE_LIMIT_PER_MINUTE` to a positive value opts back into
+   client-side pacing; nothing sets it by default.
 
 ## What gets stored
 

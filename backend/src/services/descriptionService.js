@@ -68,12 +68,12 @@ const STAGE = "describe";
 /**
  * Every audit action that spends the same API key.
  *
- * The daily cap is a budget for one key, so it has to be counted across every
- * tier that draws on it. Counting only this stage's own calls would let
- * description spend a full cap that classification and image description had
- * already spent -- see auditLogRepository.countSinceAny.
+ * There is deliberately NO ceiling on these (see the note on the removed
+ * daily cap in config/env.js). The list is kept because "which of our actions
+ * spend money" is a question worth being able to answer from the audit log,
+ * and the dashboards read it. Reporting, not refusing.
  */
-const CAPPED_ACTIONS = [
+const BILLED_AI_ACTIONS = [
   "ai_description.called",
   "ai_classification.called",
   "ai_image_description.called",
@@ -248,16 +248,6 @@ async function materialize(file, storageLocation) {
   return { localPath: tmp, temporary: true };
 }
 
-async function withinDailyCap() {
-  if (!env.ai.dailyCallCap || env.ai.dailyCallCap <= 0) return { ok: true };
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const used = await auditLogRepository.countSinceAny(CAPPED_ACTIONS, since);
-  if (used >= env.ai.dailyCallCap) {
-    return { ok: false, reason: `Daily AI call cap (${env.ai.dailyCallCap}) reached; ${used} calls in the last 24 hours.` };
-  }
-  return { ok: true };
-}
-
 async function ownerFolders(ownerUserId) {
   const rows = await subjectRepository.listForOwnerTree(ownerUserId);
   return rows.map((row) => row.materialized_path).filter(Boolean);
@@ -302,9 +292,6 @@ async function produceDescription(file, { storageLocation, subjectPath, folders 
       };
     }
 
-    const cap = await withinDailyCap();
-    if (!cap.ok) return { source: "failed", failureReason: cap.reason, retryable: true };
-
     let materialized = null;
     try {
       materialized = await materialize(file, storageLocation);
@@ -339,9 +326,6 @@ async function produceDescription(file, { storageLocation, subjectPath, folders 
         detail: { reason: "unsupported media format" },
       };
     }
-
-    const cap = await withinDailyCap();
-    if (!cap.ok) return { source: "failed", failureReason: cap.reason, retryable: true };
 
     let materialized = null;
     try {
@@ -409,9 +393,6 @@ async function produceDescription(file, { storageLocation, subjectPath, folders 
 
   const evidence = body || ocrText;
   if (evidence) {
-    const cap = await withinDailyCap();
-    if (!cap.ok) return { source: "failed", failureReason: cap.reason, retryable: true };
-
     await auditLogRepository.record({
       action: "ai_description.called",
       entityType: "file", entityId: file.id,
@@ -719,5 +700,5 @@ module.exports = {
   buildMetadataDescription, buildEmbeddingInput, humaniseFilename,
   describeKind, formatBytes, usableText,
   isPerceivedDescription, PERCEIVED_SOURCES,
-  STAGE, CAPPED_ACTIONS,
+  STAGE, BILLED_AI_ACTIONS,
 };

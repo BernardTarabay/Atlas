@@ -32,19 +32,19 @@ const KIND = {
   exact: {
     label: "Identical file",
     Icon: Copy,
-    tone: "text-rose-300",
+    tone: "text-rose-700",
     ring: "border-rose-500/25 bg-rose-500/[0.04]",
   },
   version: {
     label: "Another version",
     Icon: GitBranch,
-    tone: "text-sky-300",
+    tone: "text-sky-700",
     ring: "border-sky-500/25 bg-sky-500/[0.04]",
   },
   similar: {
     label: "Very similar",
     Icon: Scale,
-    tone: "text-amber-300",
+    tone: "text-amber-700",
     ring: "border-amber-500/25 bg-amber-500/[0.04]",
   },
 };
@@ -75,7 +75,7 @@ export function DuplicateFindings({ findings, onInspect, onCompare }) {
                     </span>
                   )}
                   {finding.sameDestination && (
-                    <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-base-300">
+                    <span className="rounded bg-base-800 px-1.5 py-0.5 text-[10px] text-base-300">
                       already in this folder
                     </span>
                   )}
@@ -130,7 +130,7 @@ export function DuplicateSummaryLine({ findings }) {
 
   return (
     <p className="flex items-start gap-2 text-sm text-base-200">
-      <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
+      <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-700" aria-hidden="true" />
       <span>
         {exact > 0
           ? `This file is byte-for-byte identical to ${exact === 1 ? "a document" : `${exact} documents`} you already have.`

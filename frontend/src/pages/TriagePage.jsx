@@ -19,7 +19,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useToast } from "../context/ToastContext";
 import { useAuth } from "../context/AuthContext";
 import { formatBytes } from "../utils/format";
-import { DocumentDate } from "../components/DocumentDate";
+import { DocumentDate, DocumentDateInline } from "../components/DocumentDate";
 
 const LIMIT = 25;
 
@@ -228,8 +228,8 @@ export function TriagePage() {
       </div>
 
       {summary?.inFlight > 0 && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
-          <Activity size={13} className="shrink-0 animate-pulse text-brand-400" />
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-line-strong bg-base-900 px-3 py-2">
+          <Activity size={13} className="shrink-0 animate-pulse text-brand-600" />
           <p className="text-xs text-base-300">
             <span className="font-medium text-base-100">{summary.inFlight.toLocaleString()}</span> file
             {summary.inFlight === 1 ? " is" : "s are"} still being processed and deliberately aren't listed here —
@@ -265,7 +265,7 @@ export function TriagePage() {
               </button>
             )}
             {hasPermission("document.delete") && (
-              <button className="btn-ghost btn-sm text-rose-300" onClick={() => setBulkDeleteOpen(true)}>
+              <button className="btn-ghost btn-sm text-rose-700" onClick={() => setBulkDeleteOpen(true)}>
                 <Trash2 size={14} /> Remove
               </button>
             )}
@@ -274,7 +274,7 @@ export function TriagePage() {
         <div className="table-shell glass-card">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-white/5 text-xs uppercase tracking-wider text-base-400">
+              <tr className="border-b border-line text-xs uppercase tracking-wider text-base-400">
                 <th className="w-8 px-2 py-3">
                   <button
                     type="button"
@@ -289,15 +289,15 @@ export function TriagePage() {
                     className="text-base-500 hover:text-base-200"
                   >
                     {rows?.length && selected.size === rows.length
-                      ? <CheckSquare size={14} className="text-brand-300" />
+                      ? <CheckSquare size={14} className="text-brand-700" />
                       : <Square size={14} />}
                   </button>
                 </th>
                 <th className="px-4 py-3 font-medium">File</th>
                 <th className="px-4 py-3 font-medium">Reason</th>
-                <th className="px-4 py-3 font-medium">What happened</th>
-                <th className="px-4 py-3 font-medium">Location</th>
-                <th className="px-4 py-3 font-medium" title="When the document is from — read out of the file where possible.">
+                <th className="col-tertiary px-4 py-3 font-medium">What happened</th>
+                <th className="col-tertiary px-4 py-3 font-medium">Location</th>
+                <th className="col-secondary px-4 py-3 font-medium" title="When the document is from — read out of the file where possible.">
                   Date
                 </th>
                 <th className="px-4 py-3" />
@@ -308,7 +308,7 @@ export function TriagePage() {
                 <tr
                   key={row.id}
                   className={
-                    "table-row-hover border-b border-white/5 align-top last:border-0 " +
+                    "table-row-hover border-b border-line align-top last:border-0 " +
                     (selected.has(row.id) ? "bg-brand-500/[0.06]" : "")
                   }
                 >
@@ -321,11 +321,11 @@ export function TriagePage() {
                       className="text-base-500 hover:text-base-200"
                     >
                       {selected.has(row.id)
-                        ? <CheckSquare size={14} className="text-brand-300" />
+                        ? <CheckSquare size={14} className="text-brand-700" />
                         : <Square size={14} />}
                     </button>
                   </td>
-                  <td className="max-w-xs px-4 py-3">
+                  <td className="w-full max-w-0 px-4 py-3">
                     <p className="truncate font-medium text-base-100" title={row.filename_current}>
                       {row.canonical_filename || row.filename_current}
                     </p>
@@ -334,10 +334,17 @@ export function TriagePage() {
                       {formatBytes(row.size_bytes)}
                       {row.subject_name ? ` · ${row.subject_name}` : " · unfiled"}
                     </p>
+                    {/* The date, which loses its own column below sm. "What
+                        happened" and Location are deliberately NOT repeated
+                        here -- both are paragraphs, and stacking them under
+                        every filename turns a scannable queue into a wall. */}
+                    <div className="cell-subline">
+                      <DocumentDateInline date={row.document_date} source={row.document_date_source} />
+                    </div>
                   </td>
                   <td className="px-4 py-3"><ReasonBadge row={row} /></td>
-                  <td className="max-w-sm px-4 py-3"><DetailCell row={row} /></td>
-                  <td className="px-4 py-3 text-xs text-base-400">
+                  <td className="col-tertiary max-w-sm px-4 py-3"><DetailCell row={row} /></td>
+                  <td className="col-tertiary px-4 py-3 text-xs text-base-400">
                     {row.location_name}
                     {row.location_is_read_only && (
                       <span className="ml-1.5 text-[10px] text-base-500" title="Originals in this location are never renamed or moved — a name you set is recorded in the database and used by the shortcut mirror.">
@@ -345,7 +352,7 @@ export function TriagePage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-xs">
+                  <td className="col-secondary px-4 py-3 text-xs">
                     <DocumentDate date={row.document_date} source={row.document_date_source} />
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -371,7 +378,7 @@ export function TriagePage() {
                       )}
                       {hasPermission("document.delete") && (
                         <button
-                          className="btn-ghost btn-sm text-rose-300"
+                          className="btn-ghost btn-sm text-rose-700"
                           disabled={busyId === row.id}
                           onClick={() => setDeleteTarget(row)}
                           title="Remove this file from Atlas. Nothing is erased from your disk."

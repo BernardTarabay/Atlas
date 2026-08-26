@@ -16,7 +16,6 @@ const { Pool } = require("pg");
 const storageLocationService = require("../src/services/storageLocationService");
 const scanProcessor = require("../src/jobs/processors/scanProcessor");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const pool = new Pool({ connectionString: env.databaseUrl });
 const log = (...a) => console.log(...a);
@@ -50,7 +49,7 @@ async function cleanup() {
   // The scan enqueues real BullMQ jobs, which opens queue + Redis handles
   // that would otherwise keep this process alive after it has finished.
   await closeAllQueues();
-  await closeRedisConnection();
+ 
 }
 
 async function run() {

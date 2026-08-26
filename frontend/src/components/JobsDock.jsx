@@ -91,7 +91,7 @@ export function JobsDock() {
         onClick={() => setDismissed(false)}
         title="Background activity"
       >
-        <Activity size={13} className={active.length ? "text-emerald-400" : "text-base-500"} />
+        <Activity size={13} className={active.length ? "text-emerald-600" : "text-base-500"} />
         {active.length > 0 ? `${active.length} running` : "No activity"}
       </button>
     );
@@ -121,7 +121,7 @@ export function JobsDock() {
 
         <Link
           to="/jobs"
-          className="mt-2 flex items-center justify-center gap-1.5 rounded-lg border border-white/5 py-2 text-[11px] text-base-400 hover:text-base-200"
+          className="mt-2 flex items-center justify-center gap-1.5 rounded-lg border border-line py-2 text-[11px] text-base-400 hover:text-base-200"
         >
           <ExternalLink size={11} /> Full history
         </Link>
@@ -137,13 +137,13 @@ function JobRow({ job, finished = false }) {
   const failed = job.status === "failed";
 
   return (
-    <div className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2">
+    <div className="rounded-lg border border-line bg-base-900 px-3 py-2">
       <div className="flex items-center gap-2">
         {finished &&
           (failed ? (
-            <XCircle size={12} className="shrink-0 text-rose-400" />
+            <XCircle size={12} className="shrink-0 text-rose-600" />
           ) : (
-            <CheckCircle2 size={12} className="shrink-0 text-emerald-400" />
+            <CheckCircle2 size={12} className="shrink-0 text-emerald-600" />
           ))}
         <p className="truncate text-xs text-base-100">{label(job.job_type)}</p>
         <span className="ml-auto shrink-0 text-[11px] tabular-nums text-base-500">
@@ -154,13 +154,13 @@ function JobRow({ job, finished = false }) {
       {/* Only render a bar when the job actually reported a denominator --
           a bar that cannot move is worse than no bar. */}
       {pct !== null && !finished && (
-        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/10">
+        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-base-850">
           <div className="h-full rounded-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
         </div>
       )}
 
       {failed && job.error_message && (
-        <p className="mt-1 line-clamp-2 text-[11px] text-rose-300/80">{job.error_message}</p>
+        <p className="mt-1 line-clamp-2 text-[11px] text-rose-700/80">{job.error_message}</p>
       )}
     </div>
   );

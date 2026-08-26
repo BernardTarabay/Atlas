@@ -1,5 +1,16 @@
-// One outgoing-call budget for the whole process, shared by every Gemini
-// caller.
+// Optional client-side pacing for outgoing Gemini calls, plus the parser for
+// Google's own retry hint.
+//
+// PACING IS OFF BY DEFAULT. env.ai.rateLimitPerMinute defaults to 0, and at 0
+// acquireRateLimitSlot() returns immediately -- this application does not
+// impose an artificial rate on itself (see config/env.js). What remains
+// load-bearing here is parseRetryDelayMs: when Google answers 429 it says how
+// long to wait, and every caller honours that and retries. That is real
+// backpressure against the real quota, which is why guessing at a lower rate
+// ourselves was only ever slowing down work that would have been allowed.
+//
+// The window below still exists so a deliberately constrained key can opt back
+// in by setting GEMINI_RATE_LIMIT_PER_MINUTE to a positive number.
 //
 // WHY THIS WAS EXTRACTED
 //

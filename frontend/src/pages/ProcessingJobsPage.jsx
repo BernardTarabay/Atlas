@@ -39,24 +39,29 @@ export function ProcessingJobsPage() {
         <div className="table-shell glass-card">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-white/5 text-xs uppercase tracking-wider text-base-400">
+              <tr className="border-b border-line text-xs uppercase tracking-wider text-base-400">
                 <th className="px-4 py-3 font-medium">Type</th>
                 <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Progress</th>
+                <th className="col-secondary px-4 py-3 font-medium">Progress</th>
                 <th className="px-4 py-3 font-medium">Created</th>
               </tr>
             </thead>
             <tbody>
               {jobs.map((j) => (
-                <tr key={j.id} className="table-row-hover cursor-pointer border-b border-white/5 last:border-0" onClick={() => setSelectedId(j.id)}>
-                  <td className="px-4 py-3 font-medium text-base-100">{j.job_type.replace(/_/g, " ")}</td>
+                <tr key={j.id} className="table-row-hover cursor-pointer border-b border-line last:border-0" onClick={() => setSelectedId(j.id)}>
+                  <td className="px-4 py-3 font-medium text-base-100">
+                    {j.job_type.replace(/_/g, " ")}
+                    {j.progress_total > 0 && (
+                      <div className="cell-subline font-normal">{j.progress_current}/{j.progress_total}</div>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <StatusBadge value={j.status} />
                     {(j.status === "running" || j.status === "queued") && (
                       <span className="ml-1.5 inline-block h-1.5 w-1.5 animate-pulse-soft rounded-full bg-sky-400" />
                     )}
                   </td>
-                  <td className="px-4 py-3 text-base-400">
+                  <td className="col-secondary px-4 py-3 text-base-400">
                     {j.progress_total > 0 ? `${j.progress_current}/${j.progress_total}` : "—"}
                   </td>
                   <td className="px-4 py-3 text-base-400" title={formatDate(j.created_at)}>{relativeTime(j.created_at)}</td>
@@ -89,7 +94,7 @@ function JobDetailModal({ jobId, onClose }) {
           </div>
 
           {job.error_message && (
-            <div className="rounded-xl border border-rose-500/25 bg-rose-500/10 p-3 text-rose-200">{job.error_message}</div>
+            <div className="rounded-xl border border-rose-500/25 bg-rose-500/10 p-3 text-rose-700">{job.error_message}</div>
           )}
 
           {job.itemSummary?.length > 0 && (
@@ -106,7 +111,7 @@ function JobDetailModal({ jobId, onClose }) {
           {job.result && (
             <div>
               <p className="label mb-2">Result</p>
-              <pre className="max-h-40 overflow-auto rounded-xl border border-white/5 bg-black/30 p-3 font-mono text-xs text-base-300">
+              <pre className="max-h-40 overflow-auto rounded-xl border border-line bg-inset p-3 font-mono text-xs text-base-300">
                 {JSON.stringify(job.result, null, 2)}
               </pre>
             </div>

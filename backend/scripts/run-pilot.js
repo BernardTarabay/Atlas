@@ -26,8 +26,8 @@ const { spawn } = require("child_process");
 const { Pool } = require("pg");
 const env = require("../src/config/env");
 const storageLocationService = require("../src/services/storageLocationService");
-const { enqueueJob, getQueue, closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
+const { enqueueJob, closeAllQueues } = require("../src/queues");
+const pgQueue = require("../src/queues/pgQueue");
 const { JobType } = require("../src/models/enums");
 
 const args = process.argv.slice(2);
@@ -85,19 +85,16 @@ async function teardown() {
     console.log("Database rows removed.");
   }
 
-  // Any jobs still sitting in Redis would be picked up the moment the normal
-  // worker starts, so they go too.
-  for (const t of Object.values(JobType)) { try { await getQueue(t).obliterate({ force: true }); } catch { /* queue may not exist */ } }
-  console.log("Queues drained.");
-
-  // Obliterating Redis leaves the processing_jobs rows behind claiming to be
-  // queued or running. Nothing will ever pick them up, so leaving them in
-  // that state means the Jobs dock shows permanent phantom work.
+  // Draining the queue and cancelling the rows used to be two steps that could
+  // disagree -- obliterating Redis left processing_jobs rows claiming to be
+  // queued, which showed in the Jobs dock as permanent phantom work. Since
+  // migration 040 the row IS the queue entry, so cancelling the rows is the
+  // drain, and there is nothing left over to reconcile.
   const stranded = await q(
     `UPDATE processing_jobs SET status='cancelled', finished_at=now(),
-            error_message='Cancelled by pilot teardown: the queue was drained, so no BullMQ job remained to run this.'
+            error_message='Cancelled by pilot teardown.'
       WHERE status IN ('queued','running') RETURNING id`);
-  if (stranded.length) console.log(`Cancelled ${stranded.length} job row(s) left without a queue entry.`);
+  console.log(`Queue drained: cancelled ${stranded.length} pending job row(s).`);
   console.log(`\nThe corpus itself is still on disk at ${CORPUS}`);
   console.log(`Delete it with:  node scripts/generate-pilot-corpus.js --clean`);
 }
@@ -105,9 +102,11 @@ async function teardown() {
 // ---------------------------------------------------------------------------
 
 async function activeWorkersElsewhere() {
-  // BullMQ registers each consumer in Redis, so this sees the live worker
-  // process even though it is not a child of this one.
-  try { return (await getQueue(JobType.HASH).getWorkers()).length; } catch { return 0; }
+  // Each worker holds a shared advisory lock for as long as it lives
+  // (pgQueue.registerWorker), so counting holders in pg_locks sees the live
+  // worker process even though it is not a child of this one -- the same
+  // question BullMQ's getWorkers() answered against its Redis registry.
+  return pgQueue.countActiveWorkers();
 }
 
 function startPilotWorker() {
@@ -282,4 +281,4 @@ async function main() {
 
 main()
   .catch((e) => { console.error("\nPILOT FAILED:", e.message); process.exitCode = 1; })
-  .finally(async () => { await pool.end(); await closeAllQueues(); await closeRedisConnection(); });
+  .finally(async () => { await pool.end(); await closeAllQueues(); });

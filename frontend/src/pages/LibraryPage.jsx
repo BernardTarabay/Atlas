@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  FolderTree, Plus, Archive as ArchiveIcon, Trash2, RotateCcw,
+  Plus, Archive as ArchiveIcon, Trash2, RotateCcw,
   FolderInput, Search, X, ListTree,
   FolderOpen, CheckSquare, Square, Keyboard, Table2,
 } from "lucide-react";
@@ -29,6 +29,11 @@ import { LibraryOnboarding } from "../components/LibraryOnboarding";
 import { LibraryOverview } from "../components/LibraryOverview";
 import { MoveManyModal } from "../components/MoveManyModal";
 import { LibraryTable } from "../components/LibraryTable";
+import { LibraryBreadcrumb } from "../components/LibraryBreadcrumb";
+import { useMarqueeSelection } from "../lib/useMarqueeSelection";
+import { MarqueeBox } from "../components/MarqueeBox";
+import { FileContextMenu, useFileContextMenu } from "../components/FileContextMenu";
+import { openFileSmart } from "../lib/openFile";
 import { useToast } from "../context/ToastContext";
 import { useAuth } from "../context/AuthContext";
 
@@ -332,6 +337,54 @@ export function LibraryPage() {
    * filing a hundred documents from a hundred clicks into three.
    */
   const [selectedFileIds, setSelectedFileIds] = useState(() => new Set());
+  const rowsRef = useRef([]);
+
+  /**
+   * Folders the user has ctrl-clicked.
+   *
+   * Kept SEPARATE from `selectedId` on purpose. `selectedId` answers "which
+   * folder am I looking inside", which is navigation and is always exactly
+   * one. This answers "which folders have I picked out", which is selection
+   * and is any number -- including none, which is the normal state. Merging
+   * them would mean ctrl-clicking a second folder had to either navigate
+   * somewhere or leave the file list showing a folder that is no longer
+   * highlighted.
+   */
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState(() => new Set());
+
+  /**
+   * Rubber-band selection over whatever the list is currently showing.
+   *
+   * `additive` is what a modifier key means here: without one the box REPLACES
+   * the selection (drag somewhere empty to clear, as in any file manager),
+   * with one it adds to it. Files and folders both answer to this because both
+   * carry `data-select-id`; the hook does not know or care which is which.
+   */
+  const onMarqueeSelect = useCallback((ids, { additive }) => {
+    const fileIdSet = new Set(rowsRef.current.map((r) => r.id));
+    setSelectedFileIds((current) => {
+      const next = additive ? new Set(current) : new Set();
+      for (const id of ids) if (fileIdSet.has(id)) next.add(id);
+      return next;
+    });
+    setSelectedSubjectIds((current) => {
+      const next = additive ? new Set(current) : new Set();
+      for (const id of ids) if (!fileIdSet.has(id)) next.add(id);
+      return next;
+    });
+  }, []);
+
+  const marquee = useMarqueeSelection({ onSelect: onMarqueeSelect });
+  const fileMenu = useFileContextMenu();
+
+  const toggleSubject = useCallback((id) => {
+    setSelectedSubjectIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
   const [anchorIndex, setAnchorIndex] = useState(null);
   const [bulkFileOpen, setBulkFileOpen] = useState(false);
 
@@ -471,8 +524,26 @@ export function LibraryPage() {
   // the selection callbacks and tear down and re-add the window keydown
   // listener on each pass.
   const rows = useMemo(() => documents || [], [documents]);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
+
+  const previewFile = useMemo(
+    () => (previewFileId ? rows.find((r) => r.id === previewFileId) || null : null),
+    [previewFileId, rows]
+  );
+
   const selectedCount = selectedFileIds.size;
   const allOnPageSelected = rows.length > 0 && rows.every((r) => selectedFileIds.has(r.id));
+
+  /**
+   * Make this the selection, replacing whatever was selected before.
+   *
+   * The plain-click behaviour of every file manager. `toggleFile` remains for
+   * ctrl-click and the checkbox, which ADD rather than replace.
+   */
+  const selectOnly = useCallback((index, d) => {
+    setSelectedFileIds(new Set([d.id]));
+    setAnchorIndex(index);
+  }, []);
 
   const toggleFile = useCallback((index, { shiftKey = false } = {}) => {
     const row = rows[index];
@@ -531,16 +602,48 @@ export function LibraryPage() {
       cursor,
       canMove: hasPermission("document.move"),
       canModify: hasPermission("classification.modify"),
-      canDownload: hasPermission("document.download"),
-      canRename: hasPermission("document.rename"),
-      canDelete: hasPermission("document.delete"),
-      onSelectRow: (index, d) => { setCursor(index); setSelectedFileId(d.id); },
+      /**
+       * SINGLE CLICK SELECTS. That is the whole change.
+       *
+       * It used to open the detail modal, which is why double-click to open
+       * never worked -- the modal mounted over the row between the two clicks
+       * and swallowed the second one. It also meant there was no way to pick a
+       * file without launching something, which is backwards: selecting is the
+       * cheap, reversible act and every file manager binds it to a plain click.
+       *
+       * Ctrl and Shift keep their native meanings on top of that -- add one,
+       * add a range -- so multi-select still works; it just is no longer the
+       * ONLY way to select anything.
+       */
+      onSelectRow: (index, d, e) => {
+        setCursor(index);
+        if (e && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          toggleFile(index, {});
+          return;
+        }
+        if (e && e.shiftKey) {
+          e.preventDefault();
+          toggleFile(index, { shiftKey: true });
+          return;
+        }
+        selectOnly(index, d);
+      },
       onToggleSelect: (index, opts) => toggleFile(index, opts),
-      onPreview: (d) => setPreviewFileId(d.id),
-      onDownload: (d) => downloadFile(d.id, d.display_name || d.filename_current),
-      onEdit: (d) => setEditFileTarget(d),
-      onMove: (d) => setMoveFileTarget(d),
-      onRemove: (d) => setRemoveFileTarget(d),
+      onOpen: (d) => openFile(d),
+      onContextMenu: (e, d, index) => {
+        // A right-DRAG that just finished is a marquee selection, not a
+        // request for this row's menu. The row's handler runs before the
+        // container's, so it has to ask.
+        if (marquee.consumeDrag()) {
+          e.preventDefault();
+          return;
+        }
+        // Select what the menu is about to act on, unless it is already part
+        // of a multi-file selection the user built deliberately.
+        if (!selectedFileIds.has(d.id)) selectOnly(index, d);
+        fileMenu.openAt(e, d);
+      },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rows, selectedFileIds, cursor, toggleFile]
@@ -679,6 +782,22 @@ export function LibraryPage() {
   // Reload after the assistant applies something, since it changes the same
   // data this page is showing.
   useAssistantChanges(() => { reloadSubjects(); reloadFiles(); reloadOverview(); });
+
+  /**
+   * OPEN a file, the way double-clicking one in a file manager does.
+   *
+   * On this machine that means launching it in its real application. From a
+   * phone it means the best view the browser can give. The decision lives in
+   * lib/openFile so the Library and the Files page cannot answer it
+   * differently.
+   */
+  function openFile(d) {
+    return openFileSmart(d, {
+      onPreview: (f) => setPreviewFileId(f.id),
+      onDownload: (f) => downloadFile(f.id, f.display_name || f.filename_current),
+      onNotice: (msg, tone) => push(msg, tone),
+    });
+  }
 
   async function downloadFile(id, filename) {
     try {
@@ -838,7 +957,7 @@ export function LibraryPage() {
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="mb-3 flex shrink-0 items-center gap-2">
-          {isTrash ? <Trash2 size={16} className="text-rose-300" /> : <ArchiveIcon size={16} className="text-base-300" />}
+          {isTrash ? <Trash2 size={16} className="text-rose-700" /> : <ArchiveIcon size={16} className="text-base-300" />}
           <h3 className="text-sm font-semibold text-base-50">{isTrash ? "Trash" : "Archive"}</h3>
           <span className="text-xs text-base-500">
             {isTrash
@@ -852,7 +971,7 @@ export function LibraryPage() {
               </button>
               {isTrash && (
                 <button
-                  className="btn-ghost btn-sm text-rose-300 hover:text-rose-200"
+                  className="btn-ghost btn-sm text-rose-700 hover:text-rose-700"
                   onClick={() => { setPurgeTarget([...selectedFileIds]); setPurgePhrase(""); }}
                 >
                   <Trash2 size={13} /> Delete forever
@@ -878,10 +997,10 @@ export function LibraryPage() {
                   onClick={() => toggleFile(index)}
                   className={
                     "flex cursor-pointer items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-sm " +
-                    (isSelected ? "border-brand-500/40 bg-brand-500/10" : "border-white/5 bg-white/[0.02]")
+                    (isSelected ? "border-brand-500/40 bg-brand-500/10" : "border-line bg-base-900")
                   }
                 >
-                  {isSelected ? <CheckSquare size={15} className="shrink-0 text-brand-400" /> : <Square size={15} className="shrink-0 text-base-500" />}
+                  {isSelected ? <CheckSquare size={15} className="shrink-0 text-brand-600" /> : <Square size={15} className="shrink-0 text-base-500" />}
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-base-100">
                       {d.ai_short_title || d.display_name || d.filename_current}
@@ -895,11 +1014,41 @@ export function LibraryPage() {
                     <span
                       className={
                         "shrink-0 rounded-full px-2 py-0.5 text-[11px] " +
-                        (d.days_left <= 3 ? "bg-rose-500/15 text-rose-200" : "bg-white/[0.05] text-base-400")
+                        (d.days_left <= 3 ? "bg-rose-500/15 text-rose-700" : "bg-base-850 text-base-400")
                       }
                     >
                       {d.days_left === 0 ? "removed today" : `${d.days_left} day${d.days_left === 1 ? "" : "s"} left`}
                     </span>
+                  )}
+
+                  {/* PER-ROW RESTORE.
+                      Restoring existed already, but only as a bulk action that
+                      appeared once something was ticked -- so getting one file
+                      back meant finding a checkbox first, and the Trash looked
+                      like a place things only went one way. Undo belongs on the
+                      thing being undone. The bulk button stays for handfuls. */}
+                  <button
+                    className="btn-secondary btn-sm shrink-0"
+                    onClick={(e) => { e.stopPropagation(); sendToBin([d.id], "restore"); }}
+                    title={isTrash
+                      ? "Put this file back where it was"
+                      : "Return this file to the library"}
+                  >
+                    <RotateCcw size={13} /> Restore
+                  </button>
+
+                  {isTrash && (
+                    <button
+                      className="btn-ghost btn-sm shrink-0 text-rose-600 hover:text-rose-700"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPurgeTarget([d.id]);
+                        setPurgePhrase("");
+                      }}
+                      title="Remove this file's record for good"
+                    >
+                      <Trash2 size={13} />
+                    </button>
                   )}
                 </li>
               );
@@ -934,48 +1083,47 @@ export function LibraryPage() {
 
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="mb-4 flex shrink-0 items-center gap-2">
-          {searching ? (
-            <>
-              <Search size={16} className="text-brand-400" />
-              <h3 className="text-sm font-semibold text-base-50">
-                Results for “{debouncedDocQuery}”
-              </h3>
-              <span className="text-xs text-base-500">across every folder</span>
-              <button className="btn-ghost btn-sm ml-auto" onClick={() => setDocQuery("")}>
-                <X size={13} /> Clear search
+        {/* WHERE YOU ARE. One control for all three modes -- a folder, the
+            unfiled pile, and a search across everything -- so the answer to
+            "where am I" is always in the same place at the same size. Every
+            ancestor is clickable, which is the part the old static
+            `materialized_path` label could not do. */}
+        <LibraryBreadcrumb
+          subjects={subjects}
+          selected={selected}
+          unfiledMode={unfiledMode}
+          searching={searching}
+          query={debouncedDocQuery}
+          count={searching ? null : unfiledMode ? unfiledCount : scopeTotal}
+          countLabel="file"
+          onNavigate={(id) => (id ? openSubject(id) : openSubject(null))}
+          onClearSearch={() => setDocQuery("")}
+          actions={
+            !searching && !unfiledMode && selected && canManage && selected.level !== "subcategory" ? (
+              <button
+                className="btn-secondary btn-sm"
+                onClick={() => setFormTarget({ mode: "create", parentId: selected.id })}
+              >
+                <Plus size={13} /> Add {selected.level === "subject" ? "category" : "subcategory"}
               </button>
-            </>
-          ) : unfiledMode ? (
-            <>
-              <FolderOpen size={16} className="text-amber-300" />
-              <h3 className="text-sm font-semibold text-base-50">Unfiled</h3>
-              <span className="text-xs text-base-500">
-                {unfiledCount.toLocaleString()} document{unfiledCount === 1 ? "" : "s"} with no folder
-              </span>
-            </>
-          ) : (
-            <>
-              <FolderTree size={16} className="text-brand-400" />
-              <h3 className="text-sm font-semibold text-base-50">{selected.name}</h3>
-              <span className="text-xs text-base-500">{selected.materialized_path}</span>
-              {canManage && selected.level !== "subcategory" && (
-                <button
-                  className="btn-secondary btn-sm ml-auto"
-                  onClick={() => setFormTarget({ mode: "create", parentId: selected.id })}
-                >
-                  <Plus size={13} /> Add {selected.level === "subject" ? "category" : "subcategory"}
-                </button>
-              )}
-            </>
-          )}
-        </div>
+            ) : null
+          }
+        />
 
-        {/* The selection bar. Present only when something is ticked, so the
-            panel is not permanently wearing a toolbar it rarely needs. */}
+        {/* THE SELECTION BAR FLOATS. IT IS NOT IN THE LAYOUT.
+            It used to sit inline above the list with `mb-3`, so the instant
+            you clicked a file it appeared and shoved every row down by its own
+            height. The row you had just pressed was no longer under the
+            pointer, so the second click of a double-click landed on whatever
+            had slid into its place -- you had to chase the file downward to
+            open it. A toolbar that moves the thing it acts on is worse than no
+            toolbar.
+            Pinned to the bottom of the viewport instead: it appears and
+            disappears without a single row moving, and it is closer to the
+            pointer than the top of the panel ever was. */}
         {selectedCount > 0 && (
-          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-brand-500/30 bg-brand-500/10 px-3 py-2">
-            <span className="text-sm font-medium text-brand-100">
+          <div className="fixed bottom-4 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border border-brand-500/30 bg-surface/95 px-3 py-2 shadow-[var(--shadow-overlay)] backdrop-blur">
+            <span className="text-sm font-medium text-brand-700">
               {selectedCount.toLocaleString()} selected
             </span>
             {hasPermission("document.move") && (
@@ -995,7 +1143,7 @@ export function LibraryPage() {
                   <ArchiveIcon size={13} /> Archive
                 </button>
                 <button
-                  className="btn-ghost btn-sm text-rose-300 hover:text-rose-200"
+                  className="btn-ghost btn-sm text-rose-700 hover:text-rose-700"
                   onClick={() => sendToBin([...selectedFileIds], "trash")}
                   title={`Recoverable for ${binSummary?.retentionDays ?? 30} days`}
                 >
@@ -1019,7 +1167,7 @@ export function LibraryPage() {
             <button className="btn-ghost btn-sm text-base-400" onClick={clearSelection}>
               Clear
             </button>
-            <span className="ml-auto hidden text-[11px] text-base-500 sm:block">
+            <span className="hidden pl-1 text-[11px] text-base-500 sm:block">
               shift-click for a range · <kbd>f</kbd> to file
             </span>
           </div>
@@ -1048,7 +1196,7 @@ export function LibraryPage() {
                   onClick={toggleAllOnPage}
                   title="Select everything on this page (a)"
                 >
-                  {allOnPageSelected ? <CheckSquare size={14} className="text-brand-400" /> : <Square size={14} />}
+                  {allOnPageSelected ? <CheckSquare size={14} className="text-brand-600" /> : <Square size={14} />}
                   {allOnPageSelected ? "Deselect all" : "Select all"}
                 </button>
                 <button
@@ -1067,7 +1215,16 @@ export function LibraryPage() {
                 many rows the page contains. Heights are measured rather than
                 assumed: a search hit carries a snippet and a plain row does
                 not. */}
-            <div className="min-h-0 flex-1" style={{ minHeight: 320 }}>
+            {/* MARQUEE HOST. Right-drag anywhere over the list draws a
+                selection box; a right-click without movement still opens the
+                normal context menu (lib/useMarqueeSelection). */}
+            <div
+              ref={marquee.containerRef}
+              onMouseDown={marquee.onMouseDown}
+              onContextMenu={marquee.onContextMenu}
+              className={"min-h-0 flex-1" + (marquee.isDragging ? " select-none" : "")}
+              style={{ minHeight: 320 }}
+            >
               <List
                 rowComponent={LibraryFileRow}
                 rowCount={documents.length}
@@ -1091,6 +1248,26 @@ export function LibraryPage() {
 
   return (
     <div>
+      {/* Fixed-position, so it is never clipped by the scrolling list it is
+          drawn over. */}
+      <MarqueeBox rect={marquee.marqueeRect} />
+
+      {/* One menu for the whole page, driven by right-click and by the dots
+          button on each row. */}
+      <FileContextMenu
+        file={fileMenu.menu?.file}
+        at={fileMenu.menu?.at}
+        onClose={fileMenu.close}
+        actions={{
+          onOpen: (d) => openFile(d),
+          onPreview: (d) => setPreviewFileId(d.id),
+          onDetails: (d) => setSelectedFileId(d.id),
+          onDownload: (d) => downloadFile(d.id, d.display_name || d.filename_current),
+          onRename: hasPermission("document.rename") || hasPermission("classification.modify") ? (d) => setEditFileTarget(d) : null,
+          onMove: hasPermission("document.move") ? (d) => setMoveFileTarget(d) : null,
+          onDelete: hasPermission("document.delete") ? (d) => setRemoveFileTarget(d) : null,
+        }}
+      />
       <PageHeader
         title="Library"
         description="Everything you have, organized — and everything still waiting for a home."
@@ -1101,7 +1278,7 @@ export function LibraryPage() {
                 a read-only user could not reach the map or the table at all --
                 hiding the two views that are best at browsing from the people
                 most likely to only be browsing. */}
-            <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
+            <div className="flex items-center gap-0.5 rounded-lg border border-line-strong bg-base-900 p-0.5">
               <button
                 className={view === "list" ? "btn-secondary btn-sm" : "btn-ghost btn-sm"}
                 onClick={() => changeView("list")}
@@ -1165,7 +1342,7 @@ export function LibraryPage() {
       <FileFilters value={filters} onChange={setFilters} showSubject={false} />
 
       {activeFilters > 0 && (
-        <p className="mb-3 text-xs text-amber-300/90">
+        <p className="mb-3 text-xs text-amber-700/90">
           Filters are on — every count in the tree, and the files listed for a subject, describe only the
           matching files.
         </p>
@@ -1204,13 +1381,20 @@ export function LibraryPage() {
           onToggleAll={toggleAllOnPage}
           allOnPageSelected={allOnPageSelected}
           canSelect={hasPermission("document.move")}
-          onOpen={(id, index) => { setCursor(index); setSelectedFileId(id); }}
+          // The exact handlers the card list uses, so the two views cannot
+          // disagree about what a click means (see fileRowProps above).
+          onRowClick={fileRowProps.onSelectRow}
+          onOpenFile={fileRowProps.onOpen}
+          onContextMenu={fileRowProps.onContextMenu}
           offset={fileOffset}
           limit={pageSize}
           onOffsetChange={setFileOffset}
           selectionBar={selectedCount > 0 ? (
-            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-brand-500/30 bg-brand-500/10 px-3 py-2">
-              <span className="text-sm font-medium text-brand-100">{selectedCount.toLocaleString()} selected</span>
+            // Floating, for the same reason the list view's bar is -- see the
+            // comment there. Both views must agree about whether picking a
+            // file moves the page.
+            <div className="fixed bottom-4 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border border-brand-500/30 bg-surface/95 px-3 py-2 shadow-[var(--shadow-overlay)] backdrop-blur">
+              <span className="text-sm font-medium text-brand-700">{selectedCount.toLocaleString()} selected</span>
               {hasPermission("document.move") && (
                 <button className="btn-primary btn-sm" onClick={() => setBulkFileOpen(true)}>
                   <FolderInput size={13} /> File {selectedCount.toLocaleString()}…
@@ -1256,7 +1440,16 @@ export function LibraryPage() {
             compact
           />
         )}
-        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-5">
+        {/* 12 columns rather than 5, so the split can be 3/9 instead of 2/3.
+              The tree was taking 40% of the width and the file list -- the
+              thing the page exists for -- was living in the remaining 60%
+              alongside its own toolbar, which is what made the Library feel
+              cramped at every window size. A folder tree needs enough width
+              for a name and a count; a file inventory needs everything else.
+              25/75 is the ratio every file manager settles on for the same
+              reason. `gap-5` over `gap-4` gives the two panes visible air
+              between them rather than near-touching edges. */}
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
           {/* Two things fix the "click a subject at the bottom, then scroll
               back up to see its files" problem:
               1. The tree scrolls inside its own pane instead of growing the
@@ -1273,7 +1466,18 @@ export function LibraryPage() {
             <SubjectTreePane
               subjects={subjects}
               selectedId={selectedId}
-              onSelect={(node) => openSubject(node.id)}
+              onSelect={(node, e) => {
+                // Same rule as the file rows, so one gesture means one thing
+                // across the whole Library: ctrl-click picks things out,
+                // a plain click goes somewhere.
+                if (e && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  toggleSubject(node.id);
+                  return;
+                }
+                openSubject(node.id);
+              }}
+              selectedSubjectIds={selectedSubjectIds}
               canManage={canManage}
               onAddChild={(parent) => setFormTarget({ mode: "create", parentId: parent.id })}
               onEdit={(subject) => setFormTarget({ mode: "edit", subject })}
@@ -1292,14 +1496,14 @@ export function LibraryPage() {
                     className={
                       "mb-2 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors " +
                       (unfiledMode
-                        ? "bg-amber-500/15 text-amber-100 ring-1 ring-inset ring-amber-400/40"
-                        : "text-base-300 hover:bg-white/[0.04]")
+                        ? "bg-amber-500/15 text-amber-700 ring-1 ring-inset ring-amber-400/40"
+                        : "text-base-300 hover:bg-base-850")
                     }
                     title="Everything that hasn't been filed under a folder yet"
                   >
-                    <FolderOpen size={14} className={unfiledMode ? "text-amber-300" : "text-base-500"} />
+                    <FolderOpen size={14} className={unfiledMode ? "text-amber-700" : "text-base-500"} />
                     <span className="min-w-0 flex-1 truncate font-medium">Unfiled</span>
-                    <span className={"shrink-0 tabular-nums text-xs " + (unfiledCount ? "text-amber-300/90" : "text-base-600")}>
+                    <span className={"shrink-0 tabular-nums text-xs " + (unfiledCount ? "text-amber-700/90" : "text-base-600")}>
                       {unfiledCount.toLocaleString()}
                     </span>
                   </button>
@@ -1334,10 +1538,10 @@ export function LibraryPage() {
                       className={
                         "mb-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors " +
                         (binDropTarget === bin.key
-                          ? "bg-brand-500/25 ring-1 ring-inset ring-brand-400/60 text-brand-100"
+                          ? "bg-brand-500/25 ring-1 ring-inset ring-brand-400/60 text-brand-700"
                           : lifecycleMode === bin.key
-                            ? "bg-white/[0.07] text-base-100"
-                            : "text-base-400 hover:bg-white/[0.04]")
+                            ? "bg-base-800 text-base-100"
+                            : "text-base-400 hover:bg-base-850")
                       }
                     >
                       <bin.icon size={14} className="shrink-0 text-base-500" />
@@ -1347,7 +1551,7 @@ export function LibraryPage() {
                       )}
                     </button>
                   ))}
-                  <div className="mb-2 border-b border-white/5" />
+                  <div className="mb-2 border-b border-line" />
                 </>
               }
             />
@@ -1362,7 +1566,7 @@ export function LibraryPage() {
               itself against a parent that has a height to give it. */}
           <div
             ref={detailPanelRef}
-            className="glass-card flex flex-col p-5 lg:sticky lg:top-4 lg:col-span-3"
+            className="glass-card flex flex-col p-4 lg:sticky lg:top-2 lg:col-span-10"
             style={{ height: `calc(100vh - ${CHROME_HEIGHT} + 11rem)` }}
           >
             {lifecycleMode ? renderBinPanel() : renderFilePanel()}
@@ -1407,7 +1611,7 @@ export function LibraryPage() {
                 { key: "trash", label: "Move them to the Trash with the folder",
                   hint: `Recoverable for ${binSummary?.retentionDays ?? 30} days, then removed for good.` },
               ].map((opt) => (
-                <label key={opt.key} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-white/[0.03]">
+                <label key={opt.key} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-base-900">
                   <input
                     type="radio"
                     className="mt-0.5"
@@ -1512,7 +1716,12 @@ export function LibraryPage() {
         onDelete={(f) => { setSelectedFileId(null); setRemoveFileTarget(f); }}
       />
 
-      <PreviewModal fileId={previewFileId} onClose={() => setPreviewFileId(null)} />
+      <PreviewModal
+        fileId={previewFileId}
+        filename={previewFile?.display_name || previewFile?.filename_current}
+        onDownload={(id) => downloadFile(id, previewFile?.display_name || previewFile?.filename_current)}
+        onClose={() => setPreviewFileId(null)}
+      />
 
       <EditFileModal
         file={editFileTarget}
@@ -1581,7 +1790,7 @@ export function LibraryPage() {
           ].map(([key, what]) => (
             <div key={key} className="flex items-center gap-3">
               <dt className="w-24 shrink-0">
-                <kbd className="rounded border border-white/15 bg-white/[0.06] px-1.5 py-0.5 font-mono text-xs text-base-200">
+                <kbd className="rounded border border-line-strong bg-base-800 px-1.5 py-0.5 font-mono text-xs text-base-200">
                   {key}
                 </kbd>
               </dt>
@@ -1733,7 +1942,7 @@ function SubjectFormModal({ target, subjects, onClose, onSaved }) {
           <label className="label mb-1.5 block">Name</label>
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           {nameClash && (
-            <div className="mt-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+            <div className="mt-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
               <p>
                 {nameClash.sibling ? (
                   <>There is already a folder called <strong>{nameClash.sibling.name}</strong> in this same place.</>
@@ -1750,7 +1959,7 @@ function SubjectFormModal({ target, subjects, onClose, onSaved }) {
                 <button
                   type="button"
                   onClick={() => setName(suggestedName)}
-                  className="mt-1.5 rounded-md border border-amber-400/40 px-2 py-1 text-[11px] font-medium text-amber-100 hover:bg-amber-500/20"
+                  className="mt-1.5 rounded-md border border-amber-400/40 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-500/20"
                 >
                   Use “{suggestedName}” instead
                 </button>

@@ -1,8 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
-  LayoutDashboard, FileText, FolderTree, LifeBuoy, Images, Copy, Wand2,
-  HardDrive, Inbox, ScrollText, Users, Boxes, Menu, X, MoreHorizontal,
+  LayoutDashboard, FileText, FolderTree, LifeBuoy, Images, HardDrive, Inbox, ScrollText, Users, Boxes, Menu, X, MoreHorizontal,
   LogOut, User as UserIcon, ChevronDown, MonitorSmartphone, Stamp,
   GripVertical, Pin, PinOff, RotateCcw,
 } from "lucide-react";
@@ -59,7 +58,6 @@ const PRIMARY = [
   { to: "/document-types", label: "Types", icon: Stamp, defaultPrimary: true },
   { to: "/triage", label: "Triage", icon: LifeBuoy, badgeKey: "triage", defaultPrimary: true },
   { to: "/photos", label: "Photos", icon: Images, badgeKey: "photos", defaultPrimary: true },
-  { to: "/duplicates", label: "Duplicates", icon: Copy, permission: "duplicate.manage", defaultPrimary: true },
 ];
 
 // Reached occasionally and deliberately. Behind "More" rather than removed --
@@ -72,7 +70,6 @@ const SECONDARY = [
   // much is still being processed) now sit on the Library itself, and this
   // answers the deeper questions you go looking for on purpose.
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/rename-proposals", label: "Rename proposals", icon: Wand2, badgeKey: "pendingProposals" },
   { to: "/storage-locations", label: "Storage locations", icon: HardDrive },
   { to: "/devices", label: "Devices", icon: MonitorSmartphone },
   { to: "/inbox", label: "Inbox", icon: Inbox, permission: "email.manage" },
@@ -119,15 +116,13 @@ export function TopNav() {
   const { data: badgeData } = usePolling(
     () =>
       Promise.all([
-        api.get("/rename-proposals/pending-count").catch(() => null),
         api.get("/triage/summary").catch(() => null),
         api.get("/photos/summary").catch(() => null),
-      ]).then(([pending, triage, photos]) => ({ pending, triage, photos })),
+      ]).then(([triage, photos]) => ({ triage, photos })),
     BADGE_POLL_MS
   );
 
   const badges = {
-    pendingProposals: badgeData?.pending?.count || 0,
     triage: badgeData?.triage?.total || 0,
     // Only the ones actually waiting on a person -- a count that included
     // every already-read photo would sit permanently at four figures and mean
@@ -241,7 +236,7 @@ export function TopNav() {
   const customised = pinned !== null;
 
   return (
-    <header className="sticky top-0 z-40 shrink-0 border-b border-white/5 bg-base-900/70 backdrop-blur-xl">
+    <header className="sticky top-0 z-40 shrink-0 border-b border-line bg-base-900/70 backdrop-blur-xl">
       <div className="mx-auto flex h-14 w-full max-w-[1600px] items-center gap-2 px-4 sm:px-6">
         {/* Brand */}
         <NavLink to="/" className="flex shrink-0 items-center gap-2.5" aria-label="Atlas home">
@@ -317,7 +312,6 @@ export function TopNav() {
               >
                 <MoreHorizontal size={15} aria-hidden="true" />
                 <span className="hidden lg:inline">More</span>
-                <Badge count={badges.pendingProposals} />
               </button>
               {moreOpen && (
                 <>
@@ -336,7 +330,7 @@ export function TopNav() {
                           onClick={() => setMoreOpen(false)}
                           className={({ isActive }) =>
                             "flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-3 py-2 text-sm " +
-                            (isActive ? "bg-white/[0.06] text-base-50" : "text-base-300 hover:bg-white/[0.04]")
+                            (isActive ? "bg-base-800 text-base-50" : "text-base-300 hover:bg-base-850")
                           }
                         >
                           <item.icon size={15} aria-hidden="true" />
@@ -352,7 +346,7 @@ export function TopNav() {
                           onClick={() => pinToHeader(item.to)}
                           title={`Show ${item.label} on the header`}
                           aria-label={`Show ${item.label} on the header`}
-                          className="shrink-0 rounded-lg p-1.5 text-base-500 opacity-0 hover:bg-white/[0.06] hover:text-brand-300 focus:opacity-100 group-hover/nav:opacity-100"
+                          className="shrink-0 rounded-lg p-1.5 text-base-500 opacity-0 hover:bg-base-800 hover:text-brand-700 focus:opacity-100 group-hover/nav:opacity-100"
                         >
                           <Pin size={13} />
                         </button>
@@ -363,7 +357,7 @@ export function TopNav() {
                         again without a mouse. */}
                     {primary.length > 0 && (
                       <>
-                        <div className="my-1.5 border-t border-white/5" />
+                        <div className="my-1.5 border-t border-line" />
                         <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-base-500">
                           On the header — drag to reorder
                         </p>
@@ -379,7 +373,7 @@ export function TopNav() {
                               onClick={() => unpinFromHeader(item.to)}
                               title={`Move ${item.label} into More`}
                               aria-label={`Move ${item.label} into More`}
-                              className="shrink-0 rounded-lg p-1.5 text-base-500 opacity-0 hover:bg-white/[0.06] hover:text-base-200 focus:opacity-100 group-hover/pin:opacity-100"
+                              className="shrink-0 rounded-lg p-1.5 text-base-500 opacity-0 hover:bg-base-800 hover:text-base-200 focus:opacity-100 group-hover/pin:opacity-100"
                             >
                               <PinOff size={13} />
                             </button>
@@ -390,11 +384,11 @@ export function TopNav() {
 
                     {customised && (
                       <>
-                        <div className="my-1.5 border-t border-white/5" />
+                        <div className="my-1.5 border-t border-line" />
                         <button
                           type="button"
                           onClick={() => { resetOrder(); setMoreOpen(false); }}
-                          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs text-base-400 hover:bg-white/[0.04] hover:text-base-200"
+                          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs text-base-400 hover:bg-base-850 hover:text-base-200"
                         >
                           <RotateCcw size={13} aria-hidden="true" />
                           Reset to the default order
@@ -417,7 +411,7 @@ export function TopNav() {
             onClick={() => setAccountOpen((v) => !v)}
             aria-expanded={accountOpen}
             aria-haspopup="menu"
-            className="flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-white/[0.05]"
+            className="flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-base-850"
           >
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-700 text-[11px] font-semibold text-white">
               {(user?.full_name || user?.email || "?").slice(0, 1).toUpperCase()}
@@ -438,7 +432,7 @@ export function TopNav() {
                 </div>
                 <button
                   onClick={logout}
-                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-rose-300 hover:bg-rose-500/10"
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-rose-700 hover:bg-rose-500/10"
                 >
                   <LogOut size={15} aria-hidden="true" /> Sign out
                 </button>
@@ -453,7 +447,7 @@ export function TopNav() {
           onClick={() => setDrawerOpen(true)}
           aria-label="Open navigation menu"
           aria-controls="app-nav-drawer"
-          className="rounded-xl p-2 text-base-300 hover:bg-white/[0.05] hover:text-base-100 md:hidden"
+          className="rounded-xl p-2 text-base-300 hover:bg-base-850 hover:text-base-100 md:hidden"
         >
           <Menu size={18} aria-hidden="true" />
         </button>
@@ -466,13 +460,13 @@ export function TopNav() {
       {drawerOpen && (
         <div className="md:hidden">
           <div
-            className="fixed inset-0 z-40 bg-base-950/60 backdrop-blur-sm"
+            className="fixed inset-0 z-40 bg-scrim/60 backdrop-blur-sm"
             onClick={() => setDrawerOpen(false)}
             aria-hidden="true"
           />
           <nav
             id="app-nav-drawer"
-            className="fixed inset-y-0 right-0 z-50 flex w-72 flex-col gap-1 overflow-y-auto border-l border-white/5 bg-base-900 p-3"
+            className="fixed inset-y-0 right-0 z-50 flex w-72 flex-col gap-1 overflow-y-auto border-l border-line bg-base-900 p-3"
             aria-label="Main"
           >
             <div className="mb-1 flex items-center justify-between px-2 py-1">
@@ -481,7 +475,7 @@ export function TopNav() {
                 type="button"
                 onClick={() => setDrawerOpen(false)}
                 aria-label="Close navigation menu"
-                className="rounded-lg p-1.5 text-base-400 hover:bg-white/[0.05] hover:text-base-100"
+                className="rounded-lg p-1.5 text-base-400 hover:bg-base-850 hover:text-base-100"
               >
                 <X size={16} aria-hidden="true" />
               </button>

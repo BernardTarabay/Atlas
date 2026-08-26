@@ -154,14 +154,14 @@ export function PhotosPage() {
       {engine && !engine.available && (
         <div className="glass-card mb-5 border-amber-500/25 bg-amber-500/[0.04] p-4">
           <div className="flex items-start gap-3">
-            <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-400" aria-hidden="true" />
+            <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-700" aria-hidden="true" />
             <div className="min-w-0">
-              <p className="text-sm font-medium text-amber-200">No OCR engine is installed</p>
+              <p className="text-sm font-medium text-amber-700">No OCR engine is installed</p>
               <p className="mt-1 text-xs leading-relaxed text-base-400">
                 Your photos are still listed, viewable and filable — they just have no text read out
                 of them yet. Atlas uses Tesseract, which is a one-time install:
               </p>
-              <pre className="mt-2 overflow-x-auto rounded-lg bg-base-950/60 p-3 text-[11px] leading-relaxed text-base-300">
+              <pre className="mt-2 overflow-x-auto rounded-lg border border-line bg-inset p-3 text-[11px] leading-relaxed text-base-300">
 {engine.reason}
               </pre>
             </div>
@@ -176,7 +176,7 @@ export function PhotosPage() {
           says what is actually happening and what the gap costs, rather than
           implying nothing works. */}
       {engine?.available && engine.missingLanguages?.length > 0 && (
-        <div className="glass-card mb-5 border-white/10 bg-white/[0.02] p-4 text-xs leading-relaxed text-base-400">
+        <div className="glass-card mb-5 border-line-strong bg-base-900 p-4 text-xs leading-relaxed text-base-400">
           <Info size={14} className="mr-1.5 inline text-base-400" aria-hidden="true" />
           OCR is running in <strong className="text-base-200">{engine.usingLanguages || "eng"}</strong>.
           Tesseract {engine.version} has no language data for{" "}
@@ -206,14 +206,14 @@ export function PhotosPage() {
               className={
                 "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors " +
                 (active
-                  ? "bg-brand-500/20 text-brand-100 ring-1 ring-brand-500/40"
-                  : "text-base-400 hover:bg-white/[0.04] hover:text-base-200")
+                  ? "bg-brand-500/20 text-brand-700 ring-1 ring-brand-500/40"
+                  : "text-base-400 hover:bg-base-850 hover:text-base-200")
               }
             >
               {tab.icon && <tab.icon size={13} aria-hidden="true" />}
               {tab.label}
               {count !== undefined && (
-                <span className={active ? "text-brand-200/80" : "text-base-500"}>{count}</span>
+                <span className={active ? "text-brand-700/80" : "text-base-500"}>{count}</span>
               )}
             </button>
           );
@@ -235,7 +235,7 @@ export function PhotosPage() {
             </button>
           )}
           {hasPermission("document.delete") && (
-            <button className="btn-ghost btn-sm text-rose-300" onClick={archiveSelected}>
+            <button className="btn-ghost btn-sm text-rose-700" onClick={archiveSelected}>
               <Archive size={14} /> Archive
             </button>
           )}
@@ -337,12 +337,12 @@ function PhotoTile({ photo, onOpen, selected, onToggle, onRename, canRename }) {
   const { url, loading, error } = useAuthedImage(photo.previewUrl);
 
   const ocrBadge = {
-    completed: { label: "Read", cls: "bg-emerald-500/15 text-emerald-300" },
+    completed: { label: "Read", cls: "bg-emerald-500/15 text-emerald-700" },
     pending: { label: "Waiting", cls: "bg-base-700/60 text-base-300" },
-    queued: { label: "Queued", cls: "bg-sky-500/15 text-sky-300" },
-    running: { label: "Reading…", cls: "bg-sky-500/15 text-sky-300" },
-    failed: { label: "Failed", cls: "bg-rose-500/15 text-rose-300" },
-    unavailable: { label: "No engine", cls: "bg-amber-500/15 text-amber-300" },
+    queued: { label: "Queued", cls: "bg-sky-500/15 text-sky-700" },
+    running: { label: "Reading…", cls: "bg-sky-500/15 text-sky-700" },
+    failed: { label: "Failed", cls: "bg-rose-500/15 text-rose-700" },
+    unavailable: { label: "No engine", cls: "bg-amber-500/15 text-amber-700" },
     not_needed: null,
   }[photo.ocr.status];
 
@@ -366,11 +366,11 @@ function PhotoTile({ photo, onOpen, selected, onToggle, onRename, canRename }) {
         aria-label={selected ? `Deselect ${photo.filename}` : `Select ${photo.filename}`}
         aria-pressed={selected}
         className={
-          "absolute left-2 top-2 z-10 rounded-md bg-base-950/70 p-1 text-base-200 backdrop-blur transition-opacity hover:text-white " +
+          "absolute left-2 top-2 z-10 rounded-md bg-scrim/70 p-1 text-white backdrop-blur transition-opacity hover:text-white " +
           (selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus:opacity-100")
         }
       >
-        {selected ? <CheckSquare size={15} className="text-brand-300" /> : <Square size={15} />}
+        {selected ? <CheckSquare size={15} className="text-brand-700" /> : <Square size={15} />}
       </button>
 
       {canRename && (
@@ -378,7 +378,7 @@ function PhotoTile({ photo, onOpen, selected, onToggle, onRename, canRename }) {
           type="button"
           onClick={onRename}
           aria-label={`Rename ${photo.filename}`}
-          className="absolute right-2 top-2 z-10 rounded-md bg-base-950/70 p-1 text-base-300 opacity-0 backdrop-blur transition-opacity hover:text-white group-hover:opacity-100 focus:opacity-100"
+          className="absolute right-2 top-2 z-10 rounded-md bg-scrim/70 p-1 text-white/80 opacity-0 backdrop-blur transition-opacity hover:text-white group-hover:opacity-100 focus:opacity-100"
         >
           <Pencil size={14} />
         </button>
@@ -389,7 +389,7 @@ function PhotoTile({ photo, onOpen, selected, onToggle, onRename, canRename }) {
       onClick={onOpen}
       className="flex w-full flex-col text-left"
     >
-      <div className="relative aspect-[4/3] w-full overflow-hidden bg-base-950/60">
+      <div className="relative aspect-[4/3] w-full overflow-hidden bg-base-850">
         {loading ? (
           <div className="flex h-full w-full items-center justify-center">
             <Loader2 size={18} className="animate-spin text-base-600" aria-hidden="true" />
@@ -411,7 +411,7 @@ function PhotoTile({ photo, onOpen, selected, onToggle, onRename, canRename }) {
         )}
         {!photo.reviewed && (
           <span
-            className="absolute right-2 top-2 h-2 w-2 rounded-full bg-brand-400 ring-2 ring-base-950/70"
+            className="absolute right-2 top-2 h-2 w-2 rounded-full bg-brand-400 ring-2 ring-surface/80"
             title="Not reviewed yet"
           />
         )}
@@ -607,9 +607,9 @@ function PhotoViewer({ photos, index, onIndexChange, onClose, onChanged, engineA
     : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-base-950/95 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex flex-col bg-canvas">
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/5 px-4 py-2.5">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-4 py-2.5">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-base-50">{photo.filename}</p>
           <p className="text-[11px] text-base-500">
@@ -643,10 +643,10 @@ function PhotoViewer({ photos, index, onIndexChange, onClose, onChanged, engineA
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* The picture */}
-        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto bg-base-950 p-4">
+        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto bg-viewer p-4">
           <button
             type="button"
-            className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-base-900/80 p-2 text-base-300 hover:text-base-50 disabled:opacity-30"
+            className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-surface/90 p-2 text-base-300 shadow-sm hover:text-base-50 disabled:opacity-30"
             onClick={() => go(-1)}
             disabled={index === 0}
             aria-label="Previous photo"
@@ -655,9 +655,9 @@ function PhotoViewer({ photos, index, onIndexChange, onClose, onChanged, engineA
           </button>
 
           {imageLoading ? (
-            <Loader2 size={28} className="animate-spin text-base-600" aria-hidden="true" />
+            <Loader2 size={28} className="animate-spin text-white/60" aria-hidden="true" />
           ) : imageError || !imageUrl ? (
-            <div className="flex flex-col items-center gap-2 text-base-500">
+            <div className="flex flex-col items-center gap-2 text-white/60">
               <Images size={32} aria-hidden="true" />
               <p className="max-w-sm text-center text-xs">
                 No preview could be rendered for this file. It can still be filed, renamed and
@@ -675,7 +675,7 @@ function PhotoViewer({ photos, index, onIndexChange, onClose, onChanged, engineA
 
           <button
             type="button"
-            className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-base-900/80 p-2 text-base-300 hover:text-base-50 disabled:opacity-30"
+            className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-surface/90 p-2 text-base-300 shadow-sm hover:text-base-50 disabled:opacity-30"
             onClick={() => go(1)}
             disabled={index === photos.length - 1}
             aria-label="Next photo"
@@ -685,7 +685,7 @@ function PhotoViewer({ photos, index, onIndexChange, onClose, onChanged, engineA
         </div>
 
         {/* The panel */}
-        <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto border-t border-white/5 p-4 lg:w-96 lg:border-l lg:border-t-0">
+        <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto border-t border-line bg-surface p-4 lg:w-96 lg:border-l lg:border-t-0">
           {loading && !detail ? (
             <PageSpinner />
           ) : (
@@ -697,9 +697,9 @@ function PhotoViewer({ photos, index, onIndexChange, onClose, onChanged, engineA
                 {ocr?.status === "completed" ? (
                   <>
                     <div className="mb-2 flex items-center gap-2 text-xs">
-                      <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-300">Read</span>
+                      <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-700">Read</span>
                       {confidencePct !== null && (
-                        <span className={confidencePct >= 55 ? "text-base-400" : "text-amber-300"}>
+                        <span className={confidencePct >= 55 ? "text-base-400" : "text-amber-700"}>
                           {confidencePct}% confidence
                         </span>
                       )}
@@ -708,20 +708,20 @@ function PhotoViewer({ photos, index, onIndexChange, onClose, onChanged, engineA
                     {/* Below the naming floor, say so rather than letting a
                         low-confidence reading look authoritative. */}
                     {ocr.usableForNaming === false && (
-                      <p className="mb-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-amber-300/90">
+                      <p className="mb-2 flex items-start gap-1.5 text-[11px] leading-relaxed text-amber-700/90">
                         <Info size={12} className="mt-0.5 shrink-0" />
                         Below the {Math.round((ocr.namingConfidenceFloor || 0.55) * 100)}% bar, so Atlas
                         will not name or classify from this text. Read it yourself and decide.
                       </p>
                     )}
-                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-base-950/60 p-3 text-[11px] leading-relaxed text-base-300">
+                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-inset p-3 text-[11px] leading-relaxed text-base-300">
 {ocr.text || "(no text found in the image)"}
                     </pre>
                   </>
                 ) : ocr?.status === "failed" ? (
-                  <p className="text-xs leading-relaxed text-rose-300">{ocr.error}</p>
+                  <p className="text-xs leading-relaxed text-rose-700">{ocr.error}</p>
                 ) : ocr?.status === "unavailable" ? (
-                  <p className="text-xs leading-relaxed text-amber-300">
+                  <p className="text-xs leading-relaxed text-amber-700">
                     No OCR engine is installed, so nothing has been read from this image.
                   </p>
                 ) : (
@@ -765,7 +765,7 @@ function PhotoViewer({ photos, index, onIndexChange, onClose, onChanged, engineA
                     </button>
                   )}
                   {hasPermission("document.delete") && (
-                    <button className="btn-ghost btn-sm w-full text-rose-300" onClick={archive} disabled={busy}>
+                    <button className="btn-ghost btn-sm w-full text-rose-700" onClick={archive} disabled={busy}>
                       <Archive size={14} /> Archive
                     </button>
                   )}

@@ -29,7 +29,6 @@ const subjectService = require("../src/services/subjectService");
 const subjectRepository = require("../src/repositories/subjectRepository");
 const { ACTION_TYPES } = require("../src/services/ai/geminiChatService");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -54,7 +53,7 @@ async function cleanup() {
   } catch (e) { console.log(`   (cleanup) ${e.message}`); }
   await p.end().catch(() => {});
   await closeAllQueues().catch(() => {});
-  await closeRedisConnection().catch(() => {});
+  
 }
 
 (async () => {

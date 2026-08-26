@@ -12,6 +12,7 @@
 // checking hourly would buy nothing except a busier job list -- a document
 // whose window closes at 3am being removed at noon is exactly as deleted.
 const { enqueueJob } = require("../queues");
+const lifecycleService = require("../services/lifecycleService");
 const { JobType } = require("../models/enums");
 const env = require("../config/env");
 
@@ -24,11 +25,42 @@ let intervalHandle = null;
 let firstRunHandle = null;
 
 async function tick() {
+  // ONE JOB PER OWNER, not one job for everybody.
+  //
+  // This used to enqueue a single ownerless purge, and it never once ran. Every
+  // job is a processing_jobs row and every such row must name an owner
+  // (migration 028), so processingJobs.create refused it -- correctly -- and
+  // the rejection went to a console log nobody was reading. The Trash was never
+  // emptied, silently, for as long as the feature has existed.
+  //
+  // Exempting this job from ownership was the tempting fix and the wrong one:
+  // the purge would then be the one operation reading and deleting across every
+  // account at once, and it would be invisible on the Jobs page of the person
+  // whose files it removed. Scoping it instead keeps the invariant and makes
+  // each purge answerable to somebody.
+  const retentionDays = env.trash.retentionDays;
+  let owners;
   try {
-    await enqueueJob(JobType.PURGE_TRASH, { retentionDays: env.trash.retentionDays });
+    owners = await lifecycleService.findOwnersWithExpired({ retentionDays });
   } catch (err) {
-    console.error("[trash-purge-scheduler] Failed to enqueue a purge:", err.message);
+    console.error("[trash-purge-scheduler] Could not list owners with expired Trash:", err.message);
+    return;
   }
+
+  if (owners.length === 0) return;
+
+  let queued = 0;
+  for (const ownerUserId of owners) {
+    try {
+      await enqueueJob(JobType.PURGE_TRASH, { retentionDays, ownerUserId }, { ownerUserId });
+      queued += 1;
+    } catch (err) {
+      // One owner failing must not stop the others -- a purge skipped this
+      // cycle is retried tomorrow, but only if the loop survives.
+      console.error(`[trash-purge-scheduler] Failed to enqueue a purge for owner ${ownerUserId}:`, err.message);
+    }
+  }
+  console.log(`[trash-purge-scheduler] Queued ${queued} purge job(s) for ${owners.length} owner(s).`);
 }
 
 function startTrashPurgeScheduler() {

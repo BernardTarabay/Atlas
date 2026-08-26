@@ -215,7 +215,7 @@ rescan the location), `job_failed`, `extraction_failed`, `stalled`, `needs_ocr`,
 waiting their turn, not stuck, and during an import that is most of the repository.
 `summary.inFlight` reports that number separately so a small queue mid-import is
 legible. Also excluded: a job that failed less than five minutes ago (still inside
-BullMQ's retry ladder), and a file whose `text_quality` is `NULL` (indexed before
+the queue's retry ladder), and a file whose `text_quality` is `NULL` (indexed before
 migration 023 — never judged, which is not the same as judged bad).
 
 Renaming, re-filing and previewing a triaged file are **not** endpoints here — they are
@@ -259,7 +259,7 @@ Gmail is integrated via raw `fetch()` OAuth2 calls (no `googleapis` SDK), matchi
 style already used for the Gemini client. It is the only provider; Outlook was removed. Refresh
 tokens are encrypted at rest with AES-256-GCM (`utils/tokenCrypto.js`, key derived from
 `TOKEN_ENCRYPTION_KEY`). See `docs/10-email-inbox.md` for the full design, including why
-periodic sync uses a plain `setInterval` (`emailSyncScheduler.js`) instead of BullMQ's
+periodic sync uses a plain `setInterval` (`emailSyncScheduler.js`) instead of the queue's
 native repeatable-job feature — every job in this codebase is created through the single
 `enqueueJob()` entry point, and the scheduler preserves that by calling `enqueueJob()`
 itself on each tick rather than going around it.

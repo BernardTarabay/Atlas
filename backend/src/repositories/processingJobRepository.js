@@ -35,10 +35,6 @@ async function create({
   return rows[0];
 }
 
-async function attachBullMqId(id, bullmqJobId) {
-  await db.query("UPDATE processing_jobs SET bullmq_job_id = $2 WHERE id = $1", [id, bullmqJobId]);
-}
-
 async function markStarted(id) {
   const { rows } = await db.query(
     "UPDATE processing_jobs SET status = 'running', started_at = now() WHERE id = $1 RETURNING *",
@@ -131,7 +127,7 @@ async function findByIdForOwner(id, ownerUserId) {
 }
 
 module.exports = {
-  ...base, create, attachBullMqId, markStarted, updateProgress, updateProgressTotal,
+  ...base, create, markStarted, updateProgress, updateProgressTotal,
   markCompleted, markFailed, markCancelled, listActive, listForOwner, countForOwner,
   findByIdForOwner,
 };

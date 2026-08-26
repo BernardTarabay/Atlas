@@ -37,7 +37,6 @@ const processingJobRepository = require("../src/repositories/processingJobReposi
 const { parseFileFilters } = require("../src/repositories/fileFilters");
 const { ConfidenceLevel, ClassificationMethod } = require("../src/models/enums");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -69,7 +68,7 @@ async function cleanup() {
   } catch (e) { console.log(`   (cleanup) ${e.message}`); }
   await p.end().catch(() => {});
   await closeAllQueues().catch(() => {});
-  await closeRedisConnection().catch(() => {});
+  
 }
 
 async function makeFile(locationId, ownerUserId, { ext, date, folder }) {

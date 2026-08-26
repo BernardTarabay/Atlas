@@ -48,7 +48,6 @@ const fileRepository = require("../src/repositories/fileRepository");
 const fileDescriptionRepository = require("../src/repositories/fileDescriptionRepository");
 const { parseFileFilters } = require("../src/repositories/fileFilters");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 const { dequeueFixtureJobs, pauseQueues, resumeQueues } = require("./_fixtureQueue");
 
 let passed = 0;
@@ -84,7 +83,7 @@ async function cleanup() {
   descriptionSearchService.invalidate();
   await resumeQueues().catch(() => {});
   await closeAllQueues().catch(() => {});
-  await closeRedisConnection().catch(() => {});
+  
   await db.pool.end().catch(() => {});
 }
 

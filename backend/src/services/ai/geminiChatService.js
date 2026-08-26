@@ -62,8 +62,9 @@ const RESPONSE_SCHEMA = {
           toSubjectId: { type: ["string", "null"], description: "Required for move_file, move_subject_contents and move_by_filter -- the destination subject." },
           filter: {
             type: ["object", "null"],
-            description: "Required for move_by_filter -- WHICH files to move, by criteria rather than by id. Every field is optional and they combine as AND. Omit a field entirely rather than sending null or an empty string. At least one field must be set: an empty filter would move the entire repository and is refused.",
+            description: "Required for move_by_filter -- WHICH files to move, by criteria rather than by id. Every field is optional and they combine as AND. Omit a field entirely rather than sending null or an empty string. At least one field must be set: an empty filter would move the entire repository and is refused. `q` expresses what the files are ABOUT and can be used on its own.",
             properties: {
+              q: { type: ["string", "null"], description: "WHAT THE FILES ARE ABOUT, in the user's own words -- 'invoices from the Marina project', '2025 financial reports', 'anything about the roof repair'. Matched against filenames, document contents AND each file's description, by meaning as well as wording, so it works for photos, video and audio too. Use this whenever the user describes the files by subject rather than by a structured property. Combines with the other fields as AND." },
               ext: { type: ["string", "null"], description: "File extensions, comma-separated, without dots: 'pdf' or 'pdf,docx'. Use 'none' for files that have no extension." },
               dateFrom: { type: ["string", "null"], description: "Earliest DOCUMENT date, YYYY-MM-DD. This is the date the document is FROM (read out of the file), not when it was imported. Inclusive." },
               dateTo: { type: ["string", "null"], description: "Latest document date, YYYY-MM-DD. Inclusive of the whole of that day. For a whole year use dateFrom 2019-01-01 and dateTo 2019-12-31." },
@@ -153,10 +154,21 @@ Action types:
   a rule rather than as a list. Prefer it strongly over proposing many move_file actions:
   it is one reviewable card instead of thousands, it runs as a background job the user can
   watch, and it catches files that are not currently on screen. The filter uses the same
-  fields as the app's own filter bar (see the schema). Set only the fields the user
-  actually specified. If they asked for something the filter cannot express -- "all the
-  blurry ones", "anything about my mother" -- say so and offer find_files instead of
-  quietly approximating it with a filter that means something else.
+  fields as the app's own filter bar, PLUS 'q' for what the files are about. Set only the
+  fields the user actually specified.
+
+  'q' is the important one for instructions like "move everything related to project X into
+  the Project X folder", "file the 2025 financial reports under Financial Reports", or "put
+  anything with invoice in the name into Invoices". It is matched against filenames, the
+  text inside documents, and every file's stored description -- by MEANING as well as
+  wording -- which is the same search find_files runs. So a request phrased by subject is a
+  move_by_filter with 'q', not a refusal and not a hand-listed pile of move_file actions.
+  Pass the user's description in full; cutting it to two keywords throws away the meaning
+  matching that makes it work.
+
+  Combine 'q' with the structured fields when the user gave both: "every PDF about the
+  Marina lease" is 'q' plus 'ext=pdf'. The card still tells the user how many files matched
+  before anything moves, so a broad 'q' is visible rather than silent.
 - create_subject: create a new folder anywhere in the tree. Needs name, plus
   parentSubjectId (the folder to nest inside) or null for a new top-level folder. Nest as
   deep as the user's structure calls for. When someone describes how they want to organize

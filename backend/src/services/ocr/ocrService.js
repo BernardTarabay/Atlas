@@ -269,20 +269,12 @@ async function runForFile(fileId, { languages, force = false } = {}) {
  *
  * COST
  *
- * One Gemini call per image, charged against the SAME daily cap the classifier
- * uses (AI_DAILY_CALL_CAP), counted through the same audit action so the two
- * cannot collectively overrun a budget each thinks it is respecting.
+ * One Gemini call per image. There is no daily ceiling: the call is still
+ * recorded as `ai_image_description.called` so spend remains auditable, but
+ * nothing refuses it.
  */
 async function describeImage(file, localPath) {
   if (!env.ai.enabled || !env.ai.apiKey) return { skipped: true, reason: "AI disabled" };
-
-  if (env.ai.dailyCallCap > 0) {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const callsToday = await auditLogRepository.countSince("ai_image_description.called", since);
-    if (callsToday >= env.ai.dailyCallCap) {
-      return { skipped: true, reason: `Daily AI cap (${env.ai.dailyCallCap}) reached.` };
-    }
-  }
 
   // The folder list is the user's OWN tree, so a suggestion can only ever
   // point somewhere they actually have.

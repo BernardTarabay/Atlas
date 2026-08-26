@@ -81,9 +81,9 @@ export function AuditLogPage() {
         <div className="table-shell glass-card">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-white/5 text-xs uppercase tracking-wider text-base-400">
+              <tr className="border-b border-line text-xs uppercase tracking-wider text-base-400">
                 <th className="px-4 py-3 font-medium">Action</th>
-                <th className="px-4 py-3 font-medium">Entity</th>
+                <th className="col-secondary px-4 py-3 font-medium">Entity</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">When</th>
               </tr>
@@ -92,11 +92,14 @@ export function AuditLogPage() {
               {logs.map((entry) => (
                 <tr
                   key={entry.id}
-                  className="table-row-hover cursor-pointer border-b border-white/5 last:border-0"
+                  className="table-row-hover cursor-pointer border-b border-line last:border-0"
                   onClick={() => setSelected(entry)}
                 >
-                  <td className="px-4 py-3 font-medium text-base-100">{entry.action.replace(/_/g, " ")}</td>
-                  <td className="px-4 py-3 text-base-400">
+                  <td className="px-4 py-3 font-medium text-base-100">
+                    {entry.action.replace(/_/g, " ")}
+                    <div className="cell-subline font-normal">{entry.entity_type}</div>
+                  </td>
+                  <td className="col-secondary px-4 py-3 text-base-400">
                     {entry.entity_type}
                     {entry.entity_id && <span className="ml-1 font-mono text-xs text-base-500">#{entry.entity_id.slice(0, 8)}</span>}
                   </td>
@@ -148,7 +151,7 @@ function AuditEntryModal({ entry, onClose }) {
           {entry.reason && (
             <div>
               <p className="label mb-1.5">Reason</p>
-              <p className={entry.status === "failed" ? "rounded-xl border border-rose-500/25 bg-rose-500/10 p-3 text-rose-200" : "text-base-200"}>
+              <p className={entry.status === "failed" ? "rounded-xl border border-rose-500/25 bg-rose-500/10 p-3 text-rose-700" : "text-base-200"}>
                 {entry.reason}
               </p>
             </div>
@@ -157,7 +160,7 @@ function AuditEntryModal({ entry, onClose }) {
           {entry.previous_state && (
             <div>
               <p className="label mb-1.5">Previous state</p>
-              <pre className="max-h-40 overflow-auto rounded-xl border border-white/5 bg-black/30 p-3 font-mono text-xs text-base-300">
+              <pre className="max-h-40 overflow-auto rounded-xl border border-line bg-inset p-3 font-mono text-xs text-base-300">
                 {JSON.stringify(entry.previous_state, null, 2)}
               </pre>
             </div>
@@ -166,7 +169,7 @@ function AuditEntryModal({ entry, onClose }) {
           {entry.new_state && (
             <div>
               <p className="label mb-1.5">New state</p>
-              <pre className="max-h-40 overflow-auto rounded-xl border border-white/5 bg-black/30 p-3 font-mono text-xs text-base-300">
+              <pre className="max-h-40 overflow-auto rounded-xl border border-line bg-inset p-3 font-mono text-xs text-base-300">
                 {JSON.stringify(entry.new_state, null, 2)}
               </pre>
             </div>

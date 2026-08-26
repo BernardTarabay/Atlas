@@ -57,7 +57,7 @@ export function LibraryOnboarding({ unfiledCount = 0, canManage, onCreateFolder,
       <div className={compact ? "flex items-start gap-4" : ""}>
         {!compact && (
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-500/15">
-            <FolderTree size={22} className="text-brand-300" aria-hidden="true" />
+            <FolderTree size={22} className="text-brand-700" aria-hidden="true" />
           </div>
         )}
 
@@ -115,7 +115,7 @@ export function LibraryOnboarding({ unfiledCount = 0, canManage, onCreateFolder,
                 <button
                   key={opener.label}
                   onClick={() => askAssistant(opener.text)}
-                  className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-base-300 transition-colors hover:border-brand-400/40 hover:bg-brand-500/10 hover:text-brand-100"
+                  className="rounded-full border border-line-strong bg-base-900 px-3 py-1.5 text-xs text-base-300 transition-colors hover:border-brand-400/40 hover:bg-brand-500/10 hover:text-brand-700"
                 >
                   {opener.label}
                 </button>

@@ -32,6 +32,7 @@
 // callers, four implementations" failure that module's header warns about, and
 // the one that skips a check is always the fastest one written last.
 const fileRepository = require("../../repositories/fileRepository");
+const fileService = require("../../services/fileService");
 const subjectRepository = require("../../repositories/subjectRepository");
 const processingJobItemRepository = require("../../repositories/processingJobItemRepository");
 const fileOrganizeService = require("../../services/fileOrganizeService");
@@ -54,6 +55,14 @@ const MAX_FILES_PER_MOVE = 50000;
 
 async function handle(payload, bullJob) {
   const { filters: rawFilters, toSubjectId, actorUserId, confirmDuplicates = false } = payload;
+
+  // `q` rides inside the filter object (that is how the assistant sends it and
+  // how the filter bar sends it), but it is not a structured column, so it is
+  // taken out before parseFileFilters -- which validates the shape and would
+  // reject a field it does not know.
+  const semanticQuery = typeof rawFilters?.q === "string" && rawFilters.q.trim()
+    ? rawFilters.q.trim()
+    : null;
   // Taken from the payload rather than re-derived, and never defaulted: an
   // unscoped filter would enumerate every account's corpus. Same rule as
   // bulkDeleteProcessor.
@@ -84,11 +93,36 @@ async function handle(payload, bullJob) {
    * cannot move while it is being processed, and the number reported at the
    * end is the number that was matched at the start.
    */
-  const matched = await fileRepository.idsMatching({
-    filters,
-    subjectId: null, // subject is a FILTER here (descendant-inclusive), not a scope
-    limit: MAX_FILES_PER_MOVE + 1,
-  });
+  /**
+   * SEMANTIC CRITERIA, when the request cannot be expressed as a filter.
+   *
+   * "Move all the documents about project X" is not a filter -- there is no
+   * column for aboutness. It is a SEARCH, and the app already has one that
+   * matches on meaning as well as wording (descriptionSearchService: every
+   * file carries a plain-language description, and photos, video and audio
+   * are described too). Running the move over those results is what lets the
+   * assistant act on a description instead of refusing and offering to search.
+   *
+   * The query and the structured filters COMBINE. "Every PDF about the Marina
+   * lease" is `q` plus `ext=pdf`, and the search path applies both, so a
+   * semantic move is still narrowable by the ordinary fields.
+   *
+   * Ordering is irrelevant here and relevance ranking is not: a move either
+   * includes a file or it does not. What the ranking DOES do is decide the cut
+   * when there are more matches than the cap, which is why the cap check below
+   * is left exactly as it was -- an over-large semantic match should be
+   * narrowed by the user, not silently truncated to the top N.
+   */
+  const matched = semanticQuery
+    ? await fileService.idsMatchingSearch(semanticQuery, {
+        filters,
+        limit: MAX_FILES_PER_MOVE + 1,
+      })
+    : await fileRepository.idsMatching({
+        filters,
+        subjectId: null, // subject is a FILTER here (descendant-inclusive), not a scope
+        limit: MAX_FILES_PER_MOVE + 1,
+      });
 
   if (matched.length > MAX_FILES_PER_MOVE) {
     throw new Error(

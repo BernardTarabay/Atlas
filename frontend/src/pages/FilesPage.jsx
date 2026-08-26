@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  Search, FileText, Download, Sparkles, Trash2, Eye, Pencil, FolderInput,
+  Search, FileText, Sparkles, Trash2, MoreVertical,
   RefreshCw, FolderOpen, Check, Clock, Minus, Cloud,
 } from "lucide-react";
 import { SearchSnippet, MatchReason } from "../components/SearchSnippet";
@@ -16,8 +16,10 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Pagination } from "../components/Pagination";
 import { FileDetailModal } from "../components/FileDetailModal";
 import { FileFilters, EMPTY_FILTERS, filtersToParams, countActiveFilters } from "../components/FileFilters";
-import { DocumentDate, LocationLabel } from "../components/DocumentDate";
+import { DocumentDate, DocumentDateInline, LocationLabel } from "../components/DocumentDate";
 import { PreviewModal } from "../components/PreviewModal";
+import { FileContextMenu, useFileContextMenu } from "../components/FileContextMenu";
+import { openFileSmart } from "../lib/openFile";
 import { EditFileModal } from "../components/EditFileModal";
 import { MoveFileModal } from "../components/MoveFileModal";
 import { useToast } from "../context/ToastContext";
@@ -116,6 +118,11 @@ export function FilesPage() {
     }
   });
   const [selectedId, setSelectedId] = useState(null);
+  // Which row is picked. Separate from `selectedId`, which is "whose detail
+  // modal is open" -- those became two different things when single click
+  // stopped opening the modal.
+  const [pickedId, setPickedId] = useState(null);
+  const fileMenu = useFileContextMenu();
   const [removeTarget, setRemoveTarget] = useState(null);
   const [removing, setRemoving] = useState(false);
   const [removeAllOpen, setRemoveAllOpen] = useState(false);
@@ -196,6 +203,15 @@ export function FilesPage() {
     [debouncedQ, filterKey]
   );
   const { data: totalData } = useApiData(() => api.get("/files/count"), []);
+
+  /** The default action. Same rule as the Library -- see lib/openFile. */
+  function openFile(f) {
+    return openFileSmart(f, {
+      onPreview: (x) => setPreviewFileId(x.id),
+      onDownload: (x) => downloadFile(x.id, x.filename_current),
+      onNotice: (msg, tone) => push(msg, tone),
+    });
+  }
 
   async function downloadFile(id, filename) {
     try {
@@ -313,7 +329,7 @@ export function FilesPage() {
             </button>
             {hasPermission("document.delete") && files?.length > 0 ? (
               <button
-                className="btn-ghost btn-sm text-rose-400 hover:text-rose-300"
+                className="btn-ghost btn-sm text-rose-600 hover:text-rose-700"
                 onClick={() => setRemoveAllOpen(true)}
               >
                 <Trash2 size={13} /> Remove all files
@@ -378,19 +394,19 @@ export function FilesPage() {
         <div className="table-shell glass-card">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-white/5 text-xs uppercase tracking-wider text-base-400">
+              <tr className="border-b border-line text-xs uppercase tracking-wider text-base-400">
                 <th className="px-4 py-3 font-medium">Filename</th>
-                <th className="px-4 py-3 font-medium">Subject</th>
-                <th className="px-4 py-3 font-medium">Naming</th>
+                <th className="col-secondary px-4 py-3 font-medium">Subject</th>
+                <th className="col-tertiary px-4 py-3 font-medium">Naming</th>
                 {/* Document date, not import date. "Imported" answered a
                     question nobody was asking -- this archive was assembled
                     from backups, so every file was "imported" the same week
                     and the column sorted at random. */}
-                <th className="px-4 py-3 font-medium" title="When the document is from — read out of the file where possible.">
+                <th className="col-secondary px-4 py-3 font-medium" title="When the document is from — read out of the file where possible.">
                   Date
                 </th>
-                <th className="px-4 py-3 font-medium">Location</th>
-                <th className="px-4 py-3 font-medium">Size</th>
+                <th className="col-tertiary px-4 py-3 font-medium">Location</th>
+                <th className="col-tertiary px-4 py-3 font-medium">Size</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
@@ -398,10 +414,39 @@ export function FilesPage() {
               {files.map((f) => (
                 <tr
                   key={f.id}
-                  className="table-row-hover cursor-pointer border-b border-white/5 last:border-0"
-                  onClick={() => setSelectedId(f.id)}
+                  data-select-id={f.id}
+                  // Same interaction model as the Library, deliberately: a file
+                  // behaves the same way wherever it is listed. Single click
+                  // selects, double click opens, right click offers the actions.
+                  // Clicking used to open the detail modal, which is what made
+                  // double-click impossible -- the modal caught the second click.
+                  className={
+                    "table-row-hover cursor-pointer border-b border-line last:border-0 " +
+                    (pickedId === f.id ? "row-selected" : "")
+                  }
+                  onClick={() => setPickedId(f.id)}
+                  onDoubleClick={(e) => { e.preventDefault(); openFile(f); }}
+                  onContextMenu={(e) => { setPickedId(f.id); fileMenu.openAt(e, f); }}
                 >
-                  <td className="max-w-sm px-4 py-3">
+                  <td className="w-full max-w-0 px-4 py-3">
+                    {/* max-w-0 + w-full below sm, and ONLY below sm.
+                        `truncate` sets white-space: nowrap, so this cell's
+                        MIN-CONTENT width is the full untruncated filename --
+                        an auto-layout table honours that and pushes itself
+                        wider than its shell, which is why dropping columns
+                        alone still left the table scrolling sideways at 375px.
+                        max-w-0 removes that floor and w-full then hands the
+                        cell the slack, so the text truncates instead of the
+                        table growing.
+
+                        Applied at EVERY width, not just below sm: restoring the
+                        old max-w-sm cap from sm up brought the overflow straight
+                        back between 640px and roughly 900px, where the column
+                        set is still wide but the cap is active again. Keeping it
+                        uniform also lets the filename use the slack on a wide
+                        screen instead of truncating at 384px with empty space to
+                        its right. .table-shell still scrolls if a table genuinely
+                        cannot fit; it just no longer has to here. */}
                     <div className="flex items-center gap-2">
                       <p className="truncate font-medium text-base-100">{f.ai_short_title || f.filename_current}</p>
                       {/* Status only when it is NOT the normal case -- a
@@ -416,7 +461,7 @@ export function FilesPage() {
                     </div>
                     {f.ai_summary ? (
                       <p className="mt-0.5 flex items-start gap-1 truncate text-xs text-base-400">
-                        <Sparkles size={11} className="mt-0.5 shrink-0 text-brand-400" />
+                        <Sparkles size={11} className="mt-0.5 shrink-0 text-brand-600" />
                         <span className="truncate">{f.ai_summary}</span>
                       </p>
                     ) : (
@@ -424,13 +469,20 @@ export function FilesPage() {
                     )}
                     <SearchSnippet snippet={f.snippet} />
                     <MatchReason file={f} />
+                    {/* The two dropped values worth keeping on a phone. Hidden
+                        again from `sm` up, where their own columns reappear,
+                        so this never duplicates what is already on screen. */}
+                    <div className="cell-subline">
+                      <DocumentDateInline date={f.document_date} source={f.document_date_source} />
+                      <span>{formatBytes(f.size_bytes)}</span>
+                    </div>
                   </td>
-                  <td className="px-4 py-3"><SubjectCell file={f} /></td>
-                  <td className="px-4 py-3"><NamingCell file={f} /></td>
-                  <td className="px-4 py-3">
+                  <td className="col-secondary px-4 py-3"><SubjectCell file={f} /></td>
+                  <td className="col-tertiary px-4 py-3"><NamingCell file={f} /></td>
+                  <td className="col-secondary px-4 py-3">
                     <DocumentDate date={f.document_date} source={f.document_date_source} />
                   </td>
-                  <td className="max-w-[10rem] px-4 py-3 text-xs text-base-400">
+                  <td className="col-tertiary max-w-[10rem] px-4 py-3 text-xs text-base-400">
                     <LocationLabel name={f.location_name} isReadOnly={f.location_is_read_only} />
                     {f.current_path && (
                       <p className="mt-0.5 truncate font-mono text-[10px] text-base-600" title={f.current_path}>
@@ -438,53 +490,20 @@ export function FilesPage() {
                       </p>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-base-400">{formatBytes(f.size_bytes)}</td>
+                  <td className="col-tertiary px-4 py-3 text-base-400">{formatBytes(f.size_bytes)}</td>
                   <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-1">
-                      {hasPermission("document.download") && (
-                        <button
-                          className="btn-ghost btn-sm"
-                          onClick={(e) => { e.stopPropagation(); setPreviewFileId(f.id); }}
-                          title="Preview"
-                        >
-                          <Eye size={13} />
-                        </button>
-                      )}
-                      <button
-                        className="btn-ghost btn-sm"
-                        onClick={(e) => { e.stopPropagation(); downloadFile(f.id, f.filename_current); }}
-                        title="Download"
-                      >
-                        <Download size={13} />
-                      </button>
-                      {(hasPermission("document.rename") || hasPermission("classification.modify")) && f.status !== "deleted" && (
-                        <button
-                          className="btn-ghost btn-sm"
-                          onClick={(e) => { e.stopPropagation(); setEditTarget(f); }}
-                          title="Edit"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                      )}
-                      {hasPermission("classification.modify") && f.status !== "deleted" && (
-                        <button
-                          className="btn-ghost btn-sm"
-                          onClick={(e) => { e.stopPropagation(); setMoveTarget(f); }}
-                          title="Move to another subject"
-                        >
-                          <FolderInput size={13} />
-                        </button>
-                      )}
-                      {hasPermission("document.delete") && f.status !== "deleted" && (
-                        <button
-                          className="btn-ghost btn-sm text-rose-400 hover:text-rose-300"
-                          onClick={(e) => { e.stopPropagation(); setRemoveTarget(f); }}
-                          title="Remove file"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
+                    {/* One affordance instead of five icons, matching the
+                        Library. Everything that used to be a button is in the
+                        menu, which right-click opens too. */}
+                    <button
+                      className="rounded-lg p-1 text-base-500 transition-colors hover:bg-base-850 hover:text-base-100"
+                      onClick={(e) => { e.stopPropagation(); setPickedId(f.id); fileMenu.openAt(e, f); }}
+                      title="Actions"
+                      aria-label={`Actions for ${f.filename_current}`}
+                      aria-haspopup="menu"
+                    >
+                      <MoreVertical size={16} />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -516,7 +535,30 @@ export function FilesPage() {
         onDelete={(f) => { setSelectedId(null); setRemoveTarget(f); }}
       />
 
-      <PreviewModal fileId={previewFileId} onClose={() => setPreviewFileId(null)} />
+      <PreviewModal
+        fileId={previewFileId}
+        filename={files?.find((f) => f.id === previewFileId)?.filename_current}
+        onDownload={(id) => downloadFile(id, files?.find((f) => f.id === id)?.filename_current)}
+        onClose={() => setPreviewFileId(null)}
+      />
+
+      {/* The same menu component the Library uses, with the same actions in
+          the same order -- so the gesture and the result are identical
+          wherever a file is listed. */}
+      <FileContextMenu
+        file={fileMenu.menu?.file}
+        at={fileMenu.menu?.at}
+        onClose={fileMenu.close}
+        actions={{
+          onOpen: (f) => openFile(f),
+          onPreview: hasPermission("document.download") ? (f) => setPreviewFileId(f.id) : null,
+          onDetails: (f) => setSelectedId(f.id),
+          onDownload: (f) => downloadFile(f.id, f.filename_current),
+          onRename: hasPermission("document.rename") ? (f) => setEditTarget(f) : null,
+          onMove: hasPermission("document.move") ? (f) => setMoveTarget(f) : null,
+          onDelete: hasPermission("document.delete") ? (f) => setRemoveTarget(f) : null,
+        }}
+      />
 
       <EditFileModal
         file={editTarget}

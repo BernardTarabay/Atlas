@@ -27,7 +27,6 @@ const triageRepository = require("../src/repositories/triageRepository");
 const triageService = require("../src/services/triageService");
 const { closeAllQueues } = require("../src/queues");
 const { dequeueFixtureJobs, pauseQueues, resumeQueues } = require("./_fixtureQueue");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -63,7 +62,7 @@ async function cleanup() {
   // Hand the queues back to whatever worker is running, even if the
   // script threw part-way through.
   await resumeQueues().catch(() => {});
-  await p.end(); await closeAllQueues(); await closeRedisConnection();
+  await p.end(); await closeAllQueues();
 }
 
 /** A processing_jobs row in a chosen state, without going through Redis. */

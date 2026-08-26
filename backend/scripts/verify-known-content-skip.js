@@ -44,7 +44,6 @@ const dashboardRepository = require("../src/repositories/dashboardRepository");
 const { parseFileFilters } = require("../src/repositories/fileFilters");
 const { closeAllQueues } = require("../src/queues");
 const { dequeueFixtureJobs, pauseQueues, resumeQueues } = require("./_fixtureQueue");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -80,7 +79,7 @@ async function cleanup() {
   // Hand the queues back to whatever worker is running, even if the
   // script threw part-way through.
   await resumeQueues().catch(() => {});
-  await p.end(); await closeAllQueues(); await closeRedisConnection();
+  await p.end(); await closeAllQueues();
 }
 
 // Real enough to survive the text-quality gate (40+ words, proper prose) --

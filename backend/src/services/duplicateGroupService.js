@@ -105,6 +105,17 @@ function pickCanonicalMember(members) {
 }
 
 /**
+ * The confidence at or above which the system resolves a duplicate group
+ * without asking. Below it the group is simply left open.
+ *
+ * There is no longer a Duplicates page to review the leftovers on -- resolving
+ * is not a queue somebody works through, it is something that either happens
+ * or does not. An unresolved group is not a task; it is the system declining
+ * to guess.
+ */
+const AUTO_RESOLVE_MIN_CONFIDENCE = 0.8;
+
+/**
  * Resolves one group automatically -- same effect as a human clicking
  * "Set canonical" (never deletes any member, spec §13), just with the pick
  * made by pickCanonicalMember() instead of a person. Returns null (not an
@@ -115,14 +126,21 @@ async function autoResolveGroup(groupId, actorUserId) {
   const group = await duplicateGroupRepository.findByIdForOwner(groupId, actorUserId);
   if (!group || group.status !== "open") return null;
 
-  // Defense in depth alongside the 'exact' filter the job passes to
-  // listOpen(). A PROBABLE group is a suggestion built from content
-  // similarity, not proof; docs/01-domain-model.md §1.3 forbids resolving
-  // one without a human. The heuristic below is also simply invalid for
-  // them -- it assumes the members are byte-identical, so "which copy is
-  // canonical" is a metadata-quality question. For probable duplicates the
-  // files genuinely differ, and picking a winner could discard real content.
-  if (group.group_type !== DuplicateGroupType.EXACT) return null;
+  // CONFIDENCE, NOT TYPE.
+  //
+  // This used to refuse anything that was not an EXACT group outright. The
+  // rule is now the confidence score: at or above AUTO_RESOLVE_MIN_CONFIDENCE
+  // the system resolves the group itself, below it the group is left alone.
+  //
+  // That is safe for probable groups specifically because resolving NEVER
+  // deletes a member (spec §13) -- it records which copy is canonical, and
+  // nothing else. The old objection was that the canonical heuristic assumes
+  // byte-identical members and so is "invalid" for probable ones; that is
+  // still true, and the consequence is only that the pick among genuinely
+  // different files is arbitrary rather than wrong. No content is discarded
+  // either way, and the group stays visible and re-openable.
+  const score = Number(group.confidence_score ?? 0);
+  if (score < AUTO_RESOLVE_MIN_CONFIDENCE) return null;
 
   const members = await duplicateGroupRepository.listMembers(groupId);
   if (members.length === 0) return null;
@@ -169,6 +187,7 @@ async function enqueueAutoResolveAll(actorUserId) {
 }
 
 module.exports = {
+  AUTO_RESOLVE_MIN_CONFIDENCE,
   NotFoundError, search, getById, resolve,
   pickCanonicalMember, autoResolveGroup, enqueueAutoResolveAll,
 };

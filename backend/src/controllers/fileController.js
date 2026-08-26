@@ -219,6 +219,18 @@ async function reveal(req, res) {
   res.json(await fileService.revealInFileManager(req.params.id, req.user.id));
 }
 
+/**
+ * Launch the file in the host's default application.
+ *
+ * Same permission bar as download and reveal: it exposes the same content,
+ * just to an application instead of to the browser. Nothing crosses the
+ * network -- which is exactly why the client only offers it when the browser
+ * and the server are the same machine.
+ */
+async function openLocally(req, res) {
+  res.json(await fileService.openOnHost(req.params.id, req.user.id));
+}
+
 async function compare(req, res) {
   const { fileIdA, fileIdB } = req.body || {};
   res.json(await fileService.compareFiles(fileIdA, fileIdB, req.user.id));
@@ -249,6 +261,7 @@ async function mirrorStatus(req, res) {
 
 module.exports = {
   list, count, filterOptions, matchingIds, getOne, download, preview, remove, removeAll, compare, update, reveal,
+  openLocally,
   moveMany,
   moveByFilter,
   lifecycleList, lifecycleSummary, lifecycleMove, lifecycleRestore, lifecyclePurge,

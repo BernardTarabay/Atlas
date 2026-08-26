@@ -18,7 +18,6 @@ const { Pool } = require("pg");
 const storageLocationService = require("../src/services/storageLocationService");
 const agentService = require("../src/services/agentService");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const DEMO_FOLDER = path.join(os.homedir(), "Documents", "DMS Agent Demo");
 const LOCATION_NAME = "Agent Demo Folder";
@@ -92,5 +91,5 @@ async function create() {
   .finally(async () => {
     await pool.end();
     await closeAllQueues();
-    await closeRedisConnection();
+   
   });

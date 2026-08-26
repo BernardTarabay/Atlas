@@ -24,7 +24,6 @@ const mirrorService = require("../src/services/mirror/mirrorService");
 const { StorageWatcher, shouldIgnore, RECURSIVE_SUPPORTED } = require("../src/jobs/storageWatcher");
 const cloudPlaceholder = require("../src/utils/cloudPlaceholder");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -50,7 +49,7 @@ async function cleanup() {
     console.log("\ncleaned up.");
   } catch (e) { console.log("cleanup warning:", e.message); }
   env.mirrorRoot = savedMirror;
-  await p.end(); await closeAllQueues(); await closeRedisConnection();
+  await p.end(); await closeAllQueues();
 }
 
 (async () => {

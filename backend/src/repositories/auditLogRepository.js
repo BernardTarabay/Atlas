@@ -60,14 +60,13 @@ async function countSince(action, since) {
 /**
  * The same count across SEVERAL actions at once.
  *
- * AI_DAILY_CALL_CAP is a budget for one API key, but each caller was checking
- * it against only its own audit action -- so the classifier could spend the
- * full cap, the image describer could spend it again, and each would correctly
- * report that it had stayed inside the limit. Three tiers each respecting a
- * 500-call cap is a 1,500-call day.
+ * Written for the daily AI cap, which counted three tiers of AI call against
+ * one budget -- and which is now removed, because each tier was checking only
+ * its own audit action and a "500-call cap" therefore allowed 1,003 calls.
  *
- * Callers that share a budget pass the whole family of actions here and get
- * the number that the cap actually applies to.
+ * Kept because the question it answers is still a real one: "how many AI calls
+ * of any kind have we made since X" is what reporting and dashboards want. It
+ * simply no longer gates anything.
  */
 async function countSinceAny(actions, since) {
   const list = (Array.isArray(actions) ? actions : [actions]).filter(Boolean);

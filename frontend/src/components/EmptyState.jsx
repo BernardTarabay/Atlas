@@ -3,9 +3,9 @@ export function EmptyState({ icon: Icon, title, description, action, onClick }) 
   return (
     <div
       className={
-        "flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-white/10 px-6 py-16 text-center" +
+        "flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-line-strong px-6 py-16 text-center" +
         (clickable
-          ? " cursor-pointer transition-colors hover:border-brand-400/40 hover:bg-white/[0.02]"
+          ? " cursor-pointer transition-colors hover:border-brand-400/40 hover:bg-base-900"
           : "")
       }
       onClick={onClick}
@@ -14,7 +14,7 @@ export function EmptyState({ icon: Icon, title, description, action, onClick }) 
       onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") onClick(); } : undefined}
     >
       {Icon && (
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03]">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line-strong bg-base-900">
           <Icon size={22} className="text-base-400" />
         </div>
       )}

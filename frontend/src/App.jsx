@@ -11,8 +11,6 @@ import { FilesPage } from "./pages/FilesPage";
 import { DocumentsPage } from "./pages/DocumentsPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { DocumentTypesPage } from "./pages/DocumentTypesPage";
-import { DuplicateGroupsPage } from "./pages/DuplicateGroupsPage";
-import { RenameProposalsPage } from "./pages/RenameProposalsPage";
 import { ProcessingJobsPage } from "./pages/ProcessingJobsPage";
 import { TriagePage } from "./pages/TriagePage";
 import { PhotosPage } from "./pages/PhotosPage";
@@ -52,8 +50,6 @@ function App() {
                   went rather than on the not-found redirect. */}
               <Route path="/subjects" element={<Navigate to="/" replace />} />
               <Route path="/document-types" element={<DocumentTypesPage />} />
-              <Route path="/duplicates" element={<DuplicateGroupsPage />} />
-              <Route path="/rename-proposals" element={<RenameProposalsPage />} />
               <Route path="/triage" element={<TriagePage />} />
               <Route path="/photos" element={<PhotosPage />} />
               <Route path="/devices" element={<DevicesPage />} />

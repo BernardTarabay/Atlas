@@ -377,60 +377,80 @@ async function handle({ fileId }) {
     return created;
   });
 
-  const autoApplied = await maybeAutoApply(proposal, file, latest);
+  const autoApplied = await autoDecide(proposal, file, latest);
 
   // The machine is done with this document either way.
   //
-  // Auto-applied: finished outright. Proposal pending: finished as far as the
-  // PIPELINE goes -- the outstanding decision is a review on the Rename
-  // proposals page, which is its own queue and does not need this file to look
-  // unprocessed to be found. Marking it needs_user here would double-count it
-  // in triage, which is precisely the "same file in two worklists" confusion
-  // the state machine exists to prevent.
+  // Either way the decision has already been made by autoDecide -- applied or
+  // rejected -- so there is no outstanding human step and nothing to leave the
+  // file looking unprocessed for. Marking it needs_user here would put it in
+  // triage for a question nobody is going to be asked.
   await pipelineState.markCompleted(fileId, "generate_names");
 
   return { renameProposalId: proposal.id, proposedFilename, proposedRelativeDir, autoApplied };
 }
 
-// Confidence tiers, strongest first (docs/01-domain-model.md §1.5).
-const CONFIDENCE_RANK = { high: 3, medium: 2, low: 1 };
-
 /**
- * Approve and apply a proposal without human review, when the location is
- * configured for it and the classifier was confident enough.
+ * Decide the proposal's fate immediately, without a review queue.
  *
- * The reason this is defensible at all is that auto-apply is gated on the
- * location, and the locations it is meant for are READ-ONLY -- applying a
- * name there writes `files.canonical_filename` and rebuilds a shortcut. The
- * original file is not touched. So the worst case is a badly-named shortcut
- * in a regenerable folder, not a mangled document.
+ * WHY THERE IS NO LONGER A PENDING STATE TO SIT IN
  *
- * On a writable location the same setting would rename real files
- * unattended, which is a genuinely different risk. That is refused here
- * rather than left to whoever ticks the checkbox: turning auto-apply on for
- * a writable location does nothing.
+ * A proposal used to be created `pending` and wait on the Rename Proposals
+ * page for somebody to click approve. That page is gone: if the system is 90%
+ * confident about a filename, asking a person to confirm it adds friction
+ * without adding judgement, and 410 pending proposals is not a worklist
+ * anybody works.
+ *
+ *   score >= 0.90   approve and apply
+ *   score <  0.90   reject, and move on
+ *
+ * Rejecting is the honest low-confidence outcome, not a deferral. It rejects
+ * THE NAME and never the file -- the document keeps its classification and its
+ * place, exactly as renameProposalService.review documents.
+ *
+ * SCORE, NOT LEVEL. This used to compare confidence LEVELS (high/medium/low),
+ * which cannot express 0.90: 'high' covers a range, and the boundary the user
+ * actually wants sits inside it.
+ *
+ * WHAT THIS DOES TO A WRITABLE LOCATION
+ *
+ * On a READ-ONLY location, applying writes `files.canonical_filename` and
+ * rebuilds a shortcut; the original is untouched. On a WRITABLE one,
+ * bulkRenameProcessor calls `storageService.rename()` and the real file on
+ * disk is renamed, unattended.
+ *
+ * That was refused here for a while, and the refusal was lifted deliberately:
+ * automating a decision the system is 90% sure of is the whole point, and
+ * carving out an exception for the case where it matters most is not much of
+ * an automation. What makes it defensible is what bulkRenameProcessor already
+ * guarantees -- a name that collides is suffixed rather than overwriting
+ * anything, the database writes are one transaction, a failed transaction
+ * renames the file BACK, and every rename records its previous path and
+ * filename in the audit log. Nothing is destroyed and every step is traceable.
+ *
+ * Below 0.90 nothing is touched at all.
  */
-async function maybeAutoApply(proposal, file, classification) {
-  const location = await storageLocationRepository.findById(file.storage_location_id);
-  if (!location?.auto_apply_naming) return false;
+const AUTO_APPLY_MIN_SCORE = 0.9;
 
-  if (!location.is_read_only) {
+async function autoDecide(proposal, file, classification) {
+  const score = Number(proposal.confidence_score ?? classification.confidence_score ?? 0);
+
+  if (score < AUTO_APPLY_MIN_SCORE) {
+    await renameProposalRepository.review(proposal.id, { status: "rejected", reviewedBy: null });
     await auditLogRepository.record({
-      action: "rename.auto_apply_refused",
+      action: "rename.auto_rejected",
       entityType: "file",
       entityId: file.id,
-      newState: { proposalId: proposal.id, locationId: location.id },
+      newState: { proposalId: proposal.id, confidenceScore: score },
       reason:
-        `Auto-apply is enabled on "${location.name}" but that location is WRITABLE, so applying ` +
-        "would rename the real file with nobody reviewing it. Left pending for review. Make the " +
-        "location read-only to use auto-apply safely.",
+        `Proposed name scored ${score.toFixed(2)}, below the ${AUTO_APPLY_MIN_SCORE} needed to rename ` +
+        "without review. The name was rejected; the file keeps its classification and its place.",
     });
     return false;
   }
 
-  const required = CONFIDENCE_RANK[env.autoApply.minConfidence] || CONFIDENCE_RANK.high;
-  const actual = CONFIDENCE_RANK[classification.confidence_level] || 0;
-  if (actual < required) return false;
+  const location = await storageLocationRepository.findById(file.storage_location_id);
+  const writesToDisk = Boolean(location && !location.is_read_only);
 
   // reviewedBy stays null: nobody reviewed it. Recording a user here would
   // put a person's name against a decision they never made.
@@ -438,21 +458,32 @@ async function maybeAutoApply(proposal, file, classification) {
   await enqueueJob(
     JobType.BULK_RENAME,
     { proposalIds: [proposal.id] },
-    { storageLocationId: location.id, progressTotal: 1 }
+    { storageLocationId: file.storage_location_id, progressTotal: 1 }
   );
 
   await auditLogRepository.record({
     action: "rename.auto_applied",
     entityType: "file",
     entityId: file.id,
-    newState: { proposalId: proposal.id, confidence: classification.confidence_level },
+    newState: {
+      proposalId: proposal.id,
+      confidenceScore: score,
+      // Recorded explicitly, because the two cases have genuinely different
+      // consequences and "it was auto-applied" alone does not say which
+      // happened. Anyone reading this log later needs to know whether a file
+      // on disk moved.
+      renamedOnDisk: writesToDisk,
+    },
     reason:
-      `Auto-applied without review: "${location.name}" has auto-apply enabled and is read-only, and the ` +
-      `classification was ${classification.confidence_level} confidence. The original file is not renamed -- ` +
-      "only the canonical name and the shortcut mirror change, both of which are reversible.",
+      `Auto-applied without review: the proposed name scored ${score.toFixed(2)}, at or above ` +
+      `${AUTO_APPLY_MIN_SCORE}. ` +
+      (writesToDisk
+        ? `"${location.name}" is WRITABLE, so the file itself is renamed on disk. The previous path and ` +
+          "filename are recorded on the file.renamed entry, which is what makes this reversible."
+        : "The original file is not renamed -- only the canonical name and the shortcut mirror change."),
   });
 
   return true;
 }
 
-module.exports = { handle };
+module.exports = { handle, AUTO_APPLY_MIN_SCORE };

@@ -65,13 +65,13 @@ export function DevicesPage() {
           concluding sync is broken when it was never claimed. */}
       <div className="glass-card p-5">
         <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-base-100">
-          <Info size={15} className="text-brand-400" aria-hidden="true" />
+          <Info size={15} className="text-brand-600" aria-hidden="true" />
           What travels between your devices
         </h2>
 
         <dl className="grid grid-cols-1 gap-4 text-xs leading-relaxed sm:grid-cols-2">
           <div>
-            <dt className="mb-1 flex items-center gap-1.5 font-medium text-emerald-300">
+            <dt className="mb-1 flex items-center gap-1.5 font-medium text-emerald-700">
               <Check size={13} aria-hidden="true" /> Already shared everywhere
             </dt>
             <dd className="text-base-400">
@@ -82,7 +82,7 @@ export function DevicesPage() {
             </dd>
           </div>
           <div>
-            <dt className="mb-1 flex items-center gap-1.5 font-medium text-amber-300">
+            <dt className="mb-1 flex items-center gap-1.5 font-medium text-amber-700">
               <CloudOff size={13} aria-hidden="true" /> Needs the origin machine online
             </dt>
             <dd className="text-base-400">
@@ -96,7 +96,7 @@ export function DevicesPage() {
         </dl>
 
         {replication && !replication.implemented && (
-          <p className="mt-4 border-t border-white/5 pt-3 text-[11px] leading-relaxed text-base-500">
+          <p className="mt-4 border-t border-line pt-3 text-[11px] leading-relaxed text-base-500">
             <strong className="text-base-400">Server-side replication is not built.</strong>{" "}
             {replication.reason}
           </p>
@@ -130,10 +130,10 @@ function DeviceCard({ device, canRename, onRenamed }) {
   };
 
   const status = {
-    online: { label: "Connected", cls: "text-emerald-300", Icon: Wifi },
+    online: { label: "Connected", cls: "text-emerald-700", Icon: Wifi },
     offline: { label: "Not connected", cls: "text-base-500", Icon: WifiOff },
     never_connected: { label: "Never connected", cls: "text-base-500", Icon: WifiOff },
-    revoked: { label: "Revoked", cls: "text-rose-300", Icon: WifiOff },
+    revoked: { label: "Revoked", cls: "text-rose-700", Icon: WifiOff },
   }[device.status] || { label: device.status, cls: "text-base-500", Icon: WifiOff };
 
   const KindIcon = device.isThisServer ? Server : MonitorSmartphone;
@@ -142,14 +142,14 @@ function DeviceCard({ device, canRename, onRenamed }) {
     <div className="glass-card p-4">
       <div className="mb-3 flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2.5">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.04]">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-base-850">
             <KindIcon size={17} className="text-base-300" aria-hidden="true" />
           </div>
           <div className="min-w-0">
             {editing ? (
               <div className="flex items-center gap-1">
                 <input
-                  className="w-full rounded-md border border-white/10 bg-base-900/60 px-2 py-1 text-sm text-base-100"
+                  className="w-full rounded-md border border-line-strong bg-base-900/60 px-2 py-1 text-sm text-base-100"
                   value={name}
                   autoFocus
                   disabled={saving}
@@ -199,11 +199,11 @@ function DeviceCard({ device, canRename, onRenamed }) {
       </div>
 
       <dl className="grid grid-cols-2 gap-2 text-[11px]">
-        <div className="rounded-lg bg-white/[0.02] px-2.5 py-2">
+        <div className="rounded-lg bg-base-900 px-2.5 py-2">
           <dt className="flex items-center gap-1 text-base-500"><HardDrive size={11} /> Locations</dt>
           <dd className="mt-0.5 text-sm text-base-100">{device.locationCount}</dd>
         </div>
-        <div className="rounded-lg bg-white/[0.02] px-2.5 py-2">
+        <div className="rounded-lg bg-base-900 px-2.5 py-2">
           <dt className="flex items-center gap-1 text-base-500"><FileText size={11} /> Files held</dt>
           <dd className="mt-0.5 text-sm text-base-100">{device.fileCount.toLocaleString()}</dd>
         </div>

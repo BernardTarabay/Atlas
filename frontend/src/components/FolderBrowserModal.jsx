@@ -60,12 +60,12 @@ export function FolderBrowserModal({ open, onClose, onSelect, initialPath }) {
       }
     >
       <div className="space-y-3">
-        <p className="truncate rounded-lg border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-base-300">
+        <p className="truncate rounded-lg border border-line-strong bg-inset px-3 py-2 font-mono text-xs text-base-300">
           {current || "…"}
         </p>
 
         {error && (
-          <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-700">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span>{error}</span>
           </div>

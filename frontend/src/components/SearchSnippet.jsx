@@ -23,7 +23,7 @@ export function SearchSnippet({ snippet, className = "" }) {
       {parts.map((part, i) =>
         // Odd indices are what sat between the tags -- the matched term.
         i % 2 === 1 ? (
-          <mark key={i} className="rounded bg-brand-500/25 px-0.5 text-brand-100">{part}</mark>
+          <mark key={i} className="rounded bg-brand-500/25 px-0.5 text-brand-700">{part}</mark>
         ) : (
           <span key={i}>{part}</span>
         )

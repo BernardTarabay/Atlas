@@ -64,15 +64,20 @@ discards it after use.
    or `?error=<message>` — the Inbox page reads those query params on mount, shows a toast,
    and strips them from the URL.
 
-## Sync: why a plain `setInterval`, not BullMQ's repeatable jobs
+## Sync: why a plain `setInterval`, not a scheduler inside the queue
 
 Every background job in this codebase is created through one function,
 `enqueueJob(jobType, payload, opts)` (`queues/index.js`), which writes a `processing_jobs`
-row *before* creating the BullMQ job — that ordering is relied on elsewhere (job list/
-status endpoints assume a DB row always exists for anything running). BullMQ's native
-repeatable-job/scheduler feature creates jobs directly in Redis on its own schedule,
-bypassing `enqueueJob()` entirely, which would produce sync runs with no
-`processing_jobs` row.
+row — and since migration 040 that row *is* the queue entry, so a job cannot exist
+without one. Job list and status endpoints rely on that: they assume a DB row exists for
+anything running.
+
+The original reason for this section was that BullMQ's native repeatable-job feature
+created jobs directly in Redis on its own schedule, bypassing `enqueueJob()` and
+producing sync runs with no `processing_jobs` row. That specific hazard is gone with
+Redis, but the conclusion is unchanged and now has a simpler justification: there is one
+way to create work, and a second scheduling mechanism inside the queue would be a second
+way.
 
 Instead, `jobs/emailSyncScheduler.js` runs a plain `setInterval` (default
 `EMAIL_SYNC_INTERVAL_MINUTES=15`) inside the API process. Each tick calls

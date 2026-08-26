@@ -11,7 +11,7 @@ instead of a validation library).
 
 ## What's covered, and why these things specifically
 
-Every test here is a **pure unit test**: no live Postgres, no Redis, no network.
+Every test here is a **pure unit test**: no live Postgres, no network.
 They run in well under a second and can't fail for environmental reasons. Files
 that set secrets do so *before* requiring `config/env` — `dotenv` never
 overrides an already-present variable, so the suite is hermetic and does not
@@ -35,7 +35,7 @@ depend on whatever is in your `.env`.
   `emailTriageClassifier.callGemini`) — these need a live `GEMINI_API_KEY` and a
   network call. Only the free rule tier is unit-tested.
 - **Repositories and the job pipeline** — these are genuinely integration-level
-  (they need Postgres + Redis). The README documents that they were verified
+  (they need Postgres). The README documents that they were verified
   by hand against real services; that verification has not been automated.
 - **The frontend** — no component tests. `npm run build` in `frontend/` is
   currently the only automated check there.

@@ -91,9 +91,46 @@ async function create(file) {
   return rows[0];
 }
 
+/**
+ * Move a file between statuses, and keep `deleted_at` honest while doing it.
+ *
+ * THE BUG THIS FIXES
+ *
+ * This used to set `status` alone. Every file removed through the normal path
+ * -- the Files page "x", bulk delete, the assistant -- therefore landed in the
+ * Trash with `status='deleted'` and `deleted_at = NULL`, and two things
+ * silently depended on that column:
+ *
+ *   lifecycleService.findExpired  requires `deleted_at IS NOT NULL`, so the
+ *                                 nightly purge could never see these files.
+ *                                 The Trash was not a 30-day holding area, it
+ *                                 was permanent storage.
+ *   the Trash listing             computes days_left from it, so the countdown
+ *                                 the retention promise is made with had
+ *                                 nothing to count from.
+ *
+ * Stamped here rather than at the call sites because there are several and
+ * they would drift; the timestamp belongs to the transition, not to whoever
+ * happened to trigger it.
+ *
+ * Restoring CLEARS it, for the same reason: a file back in the library with a
+ * deletion date still on it is one rescan away from being purged out again.
+ */
 async function updateStatus(id, status) {
   const { rows } = await db.query(
-    "UPDATE files SET status = $2 WHERE id = $1 RETURNING *",
+    // $2 is cast explicitly in both places it appears. Without the casts
+    // Postgres has to deduce one type for a parameter used as a file_status in
+    // the SET and as text in the CASE, and refuses: "inconsistent types deduced
+    // for parameter $2 (text versus file_status)".
+    `UPDATE files
+        SET status = $2::file_status,
+            deleted_at = CASE
+                           WHEN $2::text = 'deleted' THEN COALESCE(deleted_at, now())
+                           WHEN $2::text = 'active'  THEN NULL
+                           ELSE deleted_at
+                         END
+      WHERE id = $1
+      RETURNING *`,
     [id, status]
   );
   return rows[0] || null;

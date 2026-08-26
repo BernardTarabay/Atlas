@@ -83,7 +83,6 @@ const env = {
 
   bcryptSaltRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS || "12", 10),
 
-  redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
 
   // Optional: unset simply means no Filesystem Agent can connect (agentService
   // throws a clear message at first use). But if it IS set, it is a signing
@@ -181,19 +180,43 @@ const env = {
     // Only escalate to the LLM when the rule-based pass wasn't confident --
     // a clean keyword match doesn't need an API call to confirm.
     escalateBelowConfidence: process.env.AI_ESCALATE_BELOW_CONFIDENCE || "high",
-    // Hard ceiling so a big scan can never spend more than this without a
-    // human deciding to raise it. 0 = unlimited (not recommended).
-    dailyCallCap: parseInt(process.env.AI_DAILY_CALL_CAP || "500", 10),
+    // AI_DAILY_CALL_CAP IS GONE, DELIBERATELY.
+    //
+    // It was one env var enforced three different ways: classifyProcessor
+    // counted only `ai_classification.called`, ocrService counted only
+    // `ai_image_description.called`, and descriptionService counted the sum of
+    // all three. So a "500-call cap" let through 1,003 calls in a day -- each
+    // stage correctly reporting it had stayed inside the limit -- while the
+    // description stage, the only one measuring the true total, starved four
+    // seconds into a scan and left 6,953 files undescribed.
+    //
+    // The fix is not a fourth counting rule. A cap that silently converts
+    // "your files are being processed" into "6,953 files failed" is worse than
+    // no cap: the work still needs doing, the user still wants it done, and
+    // the failure surfaces as a broken pipeline rather than a budget decision.
+    // Spend stays visible in the audit log (BILLED_AI_ACTIONS in
+    // descriptionService), which is the honest place for it -- reporting, not
+    // refusing.
     timeoutMs: parseInt(process.env.AI_REQUEST_TIMEOUT_MS || "20000", 10),
-    // Google's Gemini free tier caps gemini-3.1-flash-lite at 15
-    // requests/minute (seen firsthand: 429 body says "limit: 15, model:
-    // gemini-3.1-flash-lite"). With AI_ESCALATE_BELOW_CONFIDENCE=always,
-    // every classified file calls Gemini, so reprocessing even a couple
-    // hundred files at once bursts straight through that cap. Default of
-    // 12 leaves a safety margin under the free tier's 15; raise this (or
-    // set to 0 to disable client-side pacing entirely) once on a paid plan
-    // with a higher quota.
-    rateLimitPerMinute: parseInt(process.env.GEMINI_RATE_LIMIT_PER_MINUTE || "12", 10),
+    // CLIENT-SIDE PACING IS OFF BY DEFAULT. 0 = no artificial throttle.
+    //
+    // This used to default to 12 requests/minute, chosen to sit under the free
+    // tier's 15. That is the same mistake as the daily cap one comment up,
+    // just measured per minute instead of per day: it is this application
+    // inventing a limit and then failing its own work against it. At 12/min a
+    // 5,730-file recovery takes eight hours, and the pipeline spends that time
+    // looking stalled.
+    //
+    // The real limit belongs to Google and Google enforces it -- a 429 comes
+    // back carrying "Please retry in 25.054123681s", and every AI caller here
+    // already honours that hint and retries (see parseRetryDelayMs in
+    // services/ai/rateLimiter.js). That is genuine backpressure measured
+    // against the real quota, rather than a guess at it. Guessing low only
+    // slows down work that would have been allowed.
+    //
+    // Set GEMINI_RATE_LIMIT_PER_MINUTE to a positive number to opt back into
+    // client-side pacing on a constrained key. Nothing sets it by default.
+    rateLimitPerMinute: parseInt(process.env.GEMINI_RATE_LIMIT_PER_MINUTE || "0", 10),
   },
 };
 

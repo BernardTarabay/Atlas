@@ -27,7 +27,6 @@ const renameProposalRepository = require("../src/repositories/renameProposalRepo
 const auditLogRepository = require("../src/repositories/auditLogRepository");
 const { looksLikeMojibake } = require("../src/services/extraction/ole/codePageString");
 const { enqueueJob, closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 const { JobType } = require("../src/models/enums");
 
 const APPLY = process.argv.includes("--apply");
@@ -129,4 +128,4 @@ const pool = new Pool({ connectionString: env.databaseUrl });
   }
 })()
   .catch((e) => { console.error("FAILED:", e.message); process.exitCode = 1; })
-  .finally(async () => { await pool.end(); await closeAllQueues(); await closeRedisConnection(); });
+  .finally(async () => { await pool.end(); await closeAllQueues(); });

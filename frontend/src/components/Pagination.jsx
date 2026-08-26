@@ -58,7 +58,7 @@ export function Pagination({ offset, limit, total, pageCount, onChange, pageSize
 
   return (
     <nav
-      className="flex flex-col gap-3 border-t border-white/5 px-4 py-3 text-sm text-base-400 sm:flex-row sm:items-center sm:justify-between"
+      className="flex flex-col gap-3 border-t border-line px-4 py-3 text-sm text-base-400 sm:flex-row sm:items-center sm:justify-between"
       aria-label="Pagination"
     >
       <div className="flex items-center gap-3">
@@ -67,7 +67,7 @@ export function Pagination({ offset, limit, total, pageCount, onChange, pageSize
           <label className="hidden items-center gap-1.5 text-xs text-base-500 md:flex">
             <span>Per page</span>
             <select
-              className="rounded-md border border-white/10 bg-base-900/60 px-1.5 py-1 text-xs text-base-200"
+              className="rounded-md border border-line-strong bg-base-900/60 px-1.5 py-1 text-xs text-base-200"
               value={limit}
               onChange={(e) => onLimitChange(Number(e.target.value))}
             >
@@ -187,7 +187,7 @@ function GoToPage({ page, totalPages, limit, onChange }) {
         inputMode="numeric"
         // A page number, not free text: the widest realistic value is five
         // digits, and a box sized for that reads as a number field.
-        className="w-14 rounded-md border border-white/10 bg-base-900/60 px-2 py-1 text-center text-xs text-base-100 focus:border-brand-500/60 focus:outline-none"
+        className="w-14 rounded-md border border-line-strong bg-base-900/60 px-2 py-1 text-center text-xs text-base-100 focus:border-brand-500/60 focus:outline-none"
         value={value}
         onChange={(e) => setValue(e.target.value.replace(/[^\d]/g, ""))}
         onBlur={commit}

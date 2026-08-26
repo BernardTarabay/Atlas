@@ -87,7 +87,7 @@ export function Modal({ open, onClose, title, children, footer, width = "max-w-l
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-base-950/70 backdrop-blur-sm animate-fade-in-up" onClick={onClose} />
+      <div className="absolute inset-0 bg-scrim/70 backdrop-blur-sm animate-fade-in-up" onClick={onClose} />
       <div
         ref={panelRef}
         role="dialog"
@@ -97,19 +97,19 @@ export function Modal({ open, onClose, title, children, footer, width = "max-w-l
         onKeyDown={onKeyDownTrap}
         className={`glass-card animate-fade-in-up relative w-full ${width} p-0 shadow-2xl focus:outline-none`}
       >
-        <div className="flex items-center justify-between border-b border-white/5 px-5 py-4">
+        <div className="flex items-center justify-between border-b border-line px-5 py-4">
           <h3 id={titleId} className="text-sm font-semibold text-base-50">{title}</h3>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close dialog"
-            className="rounded-lg p-1 text-base-400 hover:bg-white/5 hover:text-base-100"
+            className="rounded-lg p-1 text-base-400 hover:bg-base-900 hover:text-base-100"
           >
             <X size={16} />
           </button>
         </div>
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="flex items-center justify-end gap-2 border-t border-white/5 px-5 py-3">{footer}</div>}
+        {footer && <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>}
       </div>
     </div>
   );

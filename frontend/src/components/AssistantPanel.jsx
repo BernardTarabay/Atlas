@@ -401,12 +401,12 @@ export function AssistantPanel() {
           className="glass-card animate-fade-in-up fixed bottom-24 right-6 z-40 flex w-[380px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden p-0 shadow-2xl"
           style={{ height: "min(560px, 70vh)" }}
         >
-          <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+          <div className="flex items-center justify-between border-b border-line px-4 py-3">
             <div className="flex items-center gap-1.5">
-              <Sparkles size={13} className="text-brand-300" />
+              <Sparkles size={13} className="text-brand-700" />
               <h3 className="text-sm font-semibold text-base-50">Ask Gemini</h3>
             </div>
-            <button onClick={() => setOpen(false)} className="rounded-lg p-1 text-base-400 hover:bg-white/5 hover:text-base-100">
+            <button onClick={() => setOpen(false)} className="rounded-lg p-1 text-base-400 hover:bg-base-900 hover:text-base-100">
               <X size={15} />
             </button>
           </div>
@@ -422,7 +422,7 @@ export function AssistantPanel() {
             {messages.map((m, mi) => (
               <div key={mi} className={`flex gap-2 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 {m.role === "assistant" && (
-                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-500/15 text-brand-300">
+                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-500/15 text-brand-700">
                     <Bot size={13} />
                   </div>
                 )}
@@ -440,7 +440,7 @@ export function AssistantPanel() {
                     dir="auto"
                     className={
                       "whitespace-pre-wrap rounded-xl px-3.5 py-2.5 text-sm " +
-                      (m.role === "user" ? "bg-brand-500/15 text-brand-100" : "border border-white/5 bg-white/[0.03] text-base-200")
+                      (m.role === "user" ? "bg-brand-500/15 text-brand-700" : "border border-line bg-base-900 text-base-200")
                     }
                   >
                     {m.text}
@@ -460,7 +460,7 @@ export function AssistantPanel() {
                   )}
                 </div>
                 {m.role === "user" && (
-                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/10 text-base-300">
+                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-base-850 text-base-300">
                     <User size={13} />
                   </div>
                 )}
@@ -473,11 +473,11 @@ export function AssistantPanel() {
             )}
           </div>
 
-          <div className="flex items-center gap-1.5 border-t border-white/5 px-3 py-3">
+          <div className="flex items-center gap-1.5 border-t border-line px-3 py-3">
             {SpeechRecognitionCtor && (
               <button
                 type="button"
-                className={`btn-ghost btn-sm ${listening ? "text-rose-400 hover:text-rose-300" : ""}`}
+                className={`btn-ghost btn-sm ${listening ? "text-rose-600 hover:text-rose-700" : ""}`}
                 onClick={toggleListening}
                 title={listening ? "Stop listening" : "Speak your message"}
               >
@@ -523,13 +523,13 @@ function FoundFiles({ matches, onReveal }) {
   return (
     <div className="mt-2 space-y-1">
       {matches.map((m) => (
-        <div key={m.id} className="rounded-md border border-white/10 bg-black/20 px-2 py-1.5">
+        <div key={m.id} className="rounded-md border border-line-strong bg-inset px-2 py-1.5">
           <p dir="auto" className="truncate text-[11px] font-medium text-base-100">{m.name}</p>
           <div className="mt-0.5 flex items-center justify-between gap-2">
             <span className="truncate text-[10px] text-base-500">{m.subjectName || "unfiled"}</span>
             {m.subjectId ? (
               <button
-                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-brand-300 hover:bg-brand-500/10"
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-brand-700 hover:bg-brand-500/10"
                 onClick={() => onReveal?.(m.subjectId, m.id)}
                 title="Show where this sits in the subject map"
               >
@@ -566,9 +566,9 @@ function ActionCard({ action, onApply, onReject, onReveal }) {
   const danger = action.type === "delete_subject" || action.type === "delete_file";
 
   return (
-    <div className={`rounded-lg border px-3 py-2 text-xs ${danger ? "border-rose-500/25 bg-rose-500/[0.06]" : "border-white/10 bg-white/[0.03]"}`}>
+    <div className={`rounded-lg border px-3 py-2 text-xs ${danger ? "border-rose-500/25 bg-rose-500/[0.06]" : "border-line-strong bg-base-900"}`}>
       <div className="flex items-start gap-2">
-        <Icon size={13} className={`mt-0.5 shrink-0 ${danger ? "text-rose-400" : "text-brand-400"}`} />
+        <Icon size={13} className={`mt-0.5 shrink-0 ${danger ? "text-rose-600" : "text-brand-600"}`} />
         {/* Same reason as the message bubbles: the model now writes these
             in the user's own language, so they need per-element direction. */}
         <p dir="auto" className="flex-1 text-base-200">{action.summary}</p>
@@ -593,7 +593,7 @@ function ActionCard({ action, onApply, onReject, onReveal }) {
       {action._matches && <FoundFiles matches={action._matches} onReveal={onReveal} />}
 
       {action._result && (
-        <p className="mt-1.5 flex items-center gap-1.5 text-emerald-300">
+        <p className="mt-1.5 flex items-center gap-1.5 text-emerald-700">
           <Check size={11} /> {action._result}
         </p>
       )}
@@ -614,7 +614,7 @@ function ActionCard({ action, onApply, onReject, onReveal }) {
         </p>
       )}
       {action._status === "applied" && (
-        <p className="mt-1.5 flex items-center gap-1.5 text-emerald-300">
+        <p className="mt-1.5 flex items-center gap-1.5 text-emerald-700">
           <Check size={11} /> Applied
         </p>
       )}
@@ -626,7 +626,7 @@ function ActionCard({ action, onApply, onReject, onReveal }) {
       )}
       {action._status === "error" && (
         <div className="mt-1.5 space-y-1">
-          <p className="text-rose-300">{action._error}</p>
+          <p className="text-rose-700">{action._error}</p>
           <button className="btn-ghost btn-sm" onClick={onApply}>Retry</button>
         </div>
       )}
@@ -656,7 +656,7 @@ function MatchingProposalCount({ minConfidence }) {
   }, [minConfidence]);
 
   if (state.loading) return <p className="mt-1.5 text-base-500">Checking how many match…</p>;
-  if (state.error) return <p className="mt-1.5 text-rose-300">{state.error}</p>;
+  if (state.error) return <p className="mt-1.5 text-rose-700">{state.error}</p>;
 
   return (
     <p className={`mt-1.5 ${state.count === 0 ? "text-base-500" : "text-base-300"}`}>
@@ -686,10 +686,10 @@ function DiscardableProposalCount({ maxConfidence }) {
   }, [maxConfidence]);
 
   if (state.loading) return <p className="mt-1.5 text-base-500">Checking how many match…</p>;
-  if (state.error) return <p className="mt-1.5 text-rose-300">{state.error}</p>;
+  if (state.error) return <p className="mt-1.5 text-rose-700">{state.error}</p>;
 
   return (
-    <p className={`mt-1.5 ${state.count === 0 ? "text-base-500" : "text-amber-300"}`}>
+    <p className={`mt-1.5 ${state.count === 0 ? "text-base-500" : "text-amber-700"}`}>
       {state.count === 0
         ? "No pending proposals are at or below that confidence."
         : `${state.count} pending proposal${state.count === 1 ? "" : "s"} at or below ` +
@@ -699,9 +699,9 @@ function DiscardableProposalCount({ maxConfidence }) {
 }
 
 const COMPARISON_TONE = {
-  exact: "text-rose-300",
-  probable: "text-amber-300",
-  distinct: "text-emerald-300",
+  exact: "text-rose-700",
+  probable: "text-amber-700",
+  distinct: "text-emerald-700",
   not_comparable: "text-base-400",
 };
 
@@ -709,7 +709,7 @@ const COMPARISON_TONE = {
 function ComparisonResult({ result }) {
   const percent = result.similarity === null ? null : (result.similarity * 100).toFixed(1);
   return (
-    <div className="mt-2 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2">
+    <div className="mt-2 rounded-lg border border-line-strong bg-inset px-2.5 py-2">
       <div className="flex items-baseline justify-between gap-2">
         <span className={`font-medium ${COMPARISON_TONE[result.verdict] || "text-base-300"}`}>
           {result.verdict === "exact" ? "Identical"

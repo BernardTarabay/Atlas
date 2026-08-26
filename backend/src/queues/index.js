@@ -1,34 +1,22 @@
-// One BullMQ queue per job_type (see docs/06-processing-pipeline.md §6.1).
-// This is the ONLY place that should call `new Queue(...)` or `new
-// Worker(...)` for a given name -- job processors and API controllers use
-// `enqueueJob()` below, never BullMQ directly, so the "a job is always a
-// processing_jobs row" invariant (spec §18) can't be bypassed.
-const { Queue } = require("bullmq");
-const { getRedisConnection } = require("../config/redis");
+// Enqueuing work (see docs/06-processing-pipeline.md §6.1).
+//
+// This is the ONLY place that writes a queued job -- job processors and API
+// controllers use `enqueueJob()` below, so the "a job is always a
+// processing_jobs row" invariant (spec §18) cannot be bypassed.
+//
+// As of migration 040 that invariant is structural rather than maintained.
+// There used to be one BullMQ queue per job_type backed by Redis, which meant
+// a job existed in two places and the two could disagree. Now the
+// processing_jobs row IS the queue entry; the mechanics of claiming and
+// retrying it live in ./pgQueue.js.
 const processingJobRepository = require("../repositories/processingJobRepository");
+const pgQueue = require("./pgQueue");
 const { JobType } = require("../models/enums");
 
-const queues = new Map();
-
-function getQueue(jobType) {
+function assertKnownJobType(jobType) {
   if (!Object.values(JobType).includes(jobType)) {
     throw new Error(`Unknown job type "${jobType}"`);
   }
-  if (!queues.has(jobType)) {
-    queues.set(
-      jobType,
-      new Queue(jobType, {
-        connection: getRedisConnection(),
-        defaultJobOptions: {
-          attempts: 3,
-          backoff: { type: "exponential", delay: 5000 },
-          removeOnComplete: { age: 3600 },     // keep BullMQ's own history bounded; source of truth is processing_jobs
-          removeOnFail: { age: 24 * 3600 },
-        },
-      })
-    );
-  }
-  return queues.get(jobType);
 }
 
 /**
@@ -71,10 +59,11 @@ async function resolveOwner(jobType, payload = {}, opts = {}) {
 }
 
 /**
- * Create the `processing_jobs` row (source of truth) AND enqueue the BullMQ
- * job that will act on it, atomically enough for our purposes: the DB row is
- * created first, so even if the Redis enqueue fails, the job is visible as
- * failed/stuck rather than invisible.
+ * Create the `processing_jobs` row, which IS the queue entry.
+ *
+ * One write, not two. This used to create the row and then enqueue a separate
+ * BullMQ job on Redis, and the doc comment here conceded the pair was only
+ * "atomic enough for our purposes". It was not -- see the note in the body.
  *
  * OWNERSHIP
  *
@@ -95,8 +84,24 @@ async function resolveOwner(jobType, payload = {}, opts = {}) {
  * @param {number} [opts.progressTotal]
  */
 async function enqueueJob(jobType, payload, opts = {}) {
+  assertKnownJobType(jobType);
+
   const ownerUserId = await resolveOwner(jobType, payload, opts);
 
+  // ONE WRITE, NOT TWO.
+  //
+  // This used to create the row and then enqueue it on Redis, with a comment
+  // conceding the two were only "atomic enough for our purposes". They were
+  // not. A Redis failure between the two steps left the row at 'queued' with
+  // nothing on any queue to ever move it -- and fileRepository.listUnprocessed,
+  // the self-healing rescan built to rescue stranded files, skips anything with
+  // a 'queued' job on the reasonable assumption that it is merely waiting its
+  // turn. So a blip excluded a file permanently from the one mechanism meant to
+  // recover it, and the workaround was to catch the enqueue failure and mark
+  // the row failed.
+  //
+  // There is no second step now. The row is the queue entry, so the window it
+  // guarded against cannot open.
   const jobRow = await processingJobRepository.create({
     jobType,
     storageLocationId: opts.storageLocationId || null,
@@ -106,39 +111,25 @@ async function enqueueJob(jobType, payload, opts = {}) {
     progressTotal: opts.progressTotal || 0,
   });
 
-  const queue = getQueue(jobType);
-  let bullJob;
-  try {
-    bullJob = await queue.add(
-      jobType,
-      { processingJobId: jobRow.id, ...payload },
-      { jobId: jobRow.id } // reuse our UUID as the BullMQ job id -- one id to look up everywhere
-    );
-  } catch (err) {
-    // The header above promised that a failed Redis enqueue leaves the job
-    // "visible as failed/stuck rather than invisible". It did not: the row was
-    // left at 'queued' with nothing on any queue to ever move it, and that is
-    // considerably worse than invisible. fileRepository.listUnprocessed --
-    // the self-healing rescan that exists precisely to rescue stranded files
-    // -- skips any file with a 'queued' or 'running' job, on the reasonable
-    // assumption that such a file is merely waiting its turn. So a Redis blip
-    // during a scan left the file permanently excluded from the one mechanism
-    // built to recover it.
-    //
-    // Marking the row failed restores the promise: it is visible on the
-    // Processing Jobs page, and the next scan picks the file back up.
-    await processingJobRepository
-      .markFailed(jobRow.id, `Could not enqueue on Redis: ${err.message}`)
-      .catch(() => { /* the original error is the one worth reporting */ });
-    throw err;
-  }
+  // A hint to any idle worker, so it does not wait out its poll interval.
+  // Deliberately after the commit and deliberately unawaited-on-failure: the
+  // job is already durable, and a missed hint costs latency, never work.
+  await pgQueue.notifyJobAvailable();
 
-  await processingJobRepository.attachBullMqId(jobRow.id, bullJob.id);
   return jobRow;
 }
 
+/**
+ * Kept as the teardown every script already calls.
+ *
+ * Under BullMQ this closed a set of Redis connections that would otherwise hold
+ * the event loop open forever. There is nothing queue-specific left to close --
+ * the pg pool is owned by config/database -- so this is now a no-op that exists
+ * so the ~30 scripts calling it keep working, and so there remains one obvious
+ * place to hang queue teardown if it ever needs some again.
+ */
 async function closeAllQueues() {
-  await Promise.all([...queues.values()].map((q) => q.close()));
+  /* nothing to close: the queue is a table */
 }
 
-module.exports = { getQueue, enqueueJob, closeAllQueues };
+module.exports = { enqueueJob, closeAllQueues };

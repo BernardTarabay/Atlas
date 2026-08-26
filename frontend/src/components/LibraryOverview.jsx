@@ -52,7 +52,7 @@ export function LibraryOverview({ summary, unfiledActive, onShowUnfiled, loading
             ? "border-amber-400/50 bg-amber-500/15"
             : unfiled > 0
               ? "border-amber-500/25 bg-amber-500/[0.07] hover:border-amber-400/40 hover:bg-amber-500/[0.12]"
-              : "border-white/5 bg-white/[0.02] hover:border-white/15")
+              : "border-line bg-base-900 hover:border-line-strong")
         }
         title={
           unfiled > 0
@@ -60,7 +60,7 @@ export function LibraryOverview({ summary, unfiledActive, onShowUnfiled, loading
             : "Nothing is waiting to be filed"
         }
       >
-        <FolderOpen size={18} className={unfiled > 0 ? "shrink-0 text-amber-300" : "shrink-0 text-base-500"} />
+        <FolderOpen size={18} className={unfiled > 0 ? "shrink-0 text-amber-700" : "shrink-0 text-base-500"} />
         <span className="min-w-0">
           <span className="block text-lg font-semibold tabular-nums leading-tight text-base-50">
             {loading ? "—" : unfiled.toLocaleString()}
@@ -76,7 +76,7 @@ export function LibraryOverview({ summary, unfiledActive, onShowUnfiled, loading
           information. */}
       {inFlight > 0 && (
         <div className="flex min-w-[9rem] flex-1 items-center gap-3 rounded-2xl border border-brand-500/25 bg-brand-500/[0.07] px-4 py-3">
-          <Loader2 size={18} className="shrink-0 animate-spin text-brand-300" />
+          <Loader2 size={18} className="shrink-0 animate-spin text-brand-700" />
           <span className="min-w-0">
             <span className="block text-lg font-semibold tabular-nums leading-tight text-base-50">
               {inFlight.toLocaleString()}
@@ -91,7 +91,7 @@ export function LibraryOverview({ summary, unfiledActive, onShowUnfiled, loading
 
 function Stat({ icon: Icon, label, value, hint, loading }) {
   return (
-    <div className="flex min-w-[9rem] flex-1 items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] px-4 py-3">
+    <div className="flex min-w-[9rem] flex-1 items-center gap-3 rounded-2xl border border-line bg-base-900 px-4 py-3">
       <Icon size={18} className="shrink-0 text-base-500" />
       <span className="min-w-0">
         <span className="block text-lg font-semibold tabular-nums leading-tight text-base-50">

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { List } from "react-window";
-import { ChevronRight, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { ChevronRight, Folder, FolderOpen, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import {
   buildTree, buildTreeIndex, matchSubjects, flattenVisible, ancestorsOf, MAX_FILTER_ROWS,
 } from "../lib/subjectTree";
@@ -30,7 +30,13 @@ import {
  * renders one line and nothing else.
  */
 
-const ROW_HEIGHT = 34;
+// 38, not 34. The pane is windowed, so this constant IS the row height --
+// changing the class alone would leave the list measuring one thing and
+// painting another. Four more pixels is the difference between a folder list
+// that reads as a dense config panel and one that reads as somewhere you
+// browse; at tree depth the rows also carry an indent, an icon and a count,
+// and 34 left those touching.
+const ROW_HEIGHT = 38;
 const FILTER_DEBOUNCE_MS = 150;
 
 /** Marks the matched substring inside a folder name. */
@@ -44,7 +50,7 @@ function HighlightedName({ name, term }) {
   return (
     <span className="truncate">
       {name.slice(0, at)}
-      <mark className="rounded bg-brand-500/30 px-0.5 text-brand-100">{name.slice(at, at + needle.length)}</mark>
+      <mark className="rounded bg-brand-500/30 px-0.5 text-brand-700">{name.slice(at, at + needle.length)}</mark>
       {name.slice(at + needle.length)}
     </span>
   );
@@ -68,7 +74,7 @@ function SubjectCount({ node }) {
  * of its own, because react-window will unmount it as soon as it scrolls away.
  */
 function TreeRow({
-  index, style, rows, selectedId, term, canManage,
+  index, style, rows, selectedId, selectedSubjectIds, term, canManage,
   onToggle, onSelect, onAddChild, onEdit, onDelete,
   onDropFile, onDropSubject, onSubjectDragStart, onSubjectDragEnd, draggingSubjectId,
 }) {
@@ -79,6 +85,8 @@ function TreeRow({
 
   const has = (e, type) => [...e.dataTransfer.types].includes(type);
   const canDragFolders = Boolean(canManage && onDropSubject);
+  // Ctrl-picked, as opposed to `selectedId` which is the folder being viewed.
+  const picked = Boolean(selectedSubjectIds?.has?.(node.id));
 
   /**
    * A folder will not accept itself. Its own DESCENDANTS are refused by the
@@ -126,11 +134,19 @@ function TreeRow({
             if (subjectId) onDropSubject(subjectId, node);
           }
         }}
-        className={`group flex h-[34px] w-full items-center gap-1 rounded-lg pr-1.5 text-left text-sm transition-colors
+        data-select-id={node.id}
+        className={`group flex h-[38px] w-full items-center gap-1 rounded-lg pr-1.5 text-left text-sm transition-colors
           ${dropTarget ? "bg-brand-500/25 ring-1 ring-inset ring-brand-400/60" : ""}
           ${draggingSubjectId === node.id ? "opacity-40" : ""}
           ${canDragFolders ? "cursor-grab active:cursor-grabbing" : ""}
-          ${selectedId === node.id ? "bg-brand-500/15 text-brand-200" : "text-base-300 hover:bg-white/[0.04]"}`}
+          ${selectedId === node.id
+            ? "bg-brand-50 font-medium text-brand-700 shadow-[inset_2px_0_0_var(--color-brand-500)]"
+            : picked
+              // Picked-but-not-open: the same blue language as a selected
+              // file row, so a mixed selection of files and folders looks
+              // like one selection rather than two systems.
+              ? "bg-brand-50/70 text-brand-700 ring-1 ring-inset ring-brand-200"
+              : "text-base-300 hover:bg-base-850"}`}
       >
         {/* Its own control, not part of the select button -- expanding a branch
             and choosing a folder are different intentions, and merging them
@@ -151,9 +167,20 @@ function TreeRow({
         )}
         <button
           type="button"
-          onClick={() => onSelect(node)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
+          // The event is passed through so the page can tell a plain click
+          // (navigate into the folder) from a ctrl-click (add it to the
+          // selection) -- see LibraryPage.
+          onClick={(e) => onSelect(node, e)}
+          className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left"
         >
+          {/* Folders get a glyph of their own. It is the amber every file
+              manager uses for a container, which is worth borrowing: it means
+              "folder" to people before they have read a word of the UI, and it
+              is deliberately a different hue from every file-type tint in
+              lib/fileType so a folder can never be mistaken for a file. */}
+          {expanded && hasChildren
+            ? <FolderOpen size={15} className="shrink-0 text-amber-500" aria-hidden="true" />
+            : <Folder size={15} className="shrink-0 text-amber-500" aria-hidden="true" />}
           <HighlightedName name={node.name} term={term} />
           <SubjectCount node={node} />
         </button>
@@ -167,7 +194,7 @@ function TreeRow({
               title="Rename" aria-label={`Rename ${node.name}`}>
               <Pencil size={12} />
             </button>
-            <button type="button" className="btn-ghost btn-sm text-rose-400 hover:text-rose-300"
+            <button type="button" className="btn-ghost btn-sm text-rose-600 hover:text-rose-700"
               onClick={() => onDelete(node)} title="Delete" aria-label={`Delete ${node.name}`}>
               <Trash2 size={12} />
             </button>
@@ -179,6 +206,7 @@ function TreeRow({
 }
 
 export function SubjectTreePane({
+  selectedSubjectIds,
   subjects, selectedId, onSelect, canManage,
   onAddChild, onEdit, onDelete, onDropFile, onDropSubject, header,
 }) {
@@ -313,20 +341,20 @@ export function SubjectTreePane({
 
   const rowProps = useMemo(
     () => ({
-      rows, selectedId, term: debouncedTerm, canManage,
+      rows, selectedId, selectedSubjectIds, term: debouncedTerm, canManage,
       onToggle: toggle, onSelect, onAddChild, onEdit, onDelete,
       onDropFile, onDropSubject,
       onSubjectDragStart: setDraggingSubjectId,
       onSubjectDragEnd: () => setDraggingSubjectId(null),
       draggingSubjectId,
     }),
-    [rows, selectedId, debouncedTerm, canManage, toggle, onSelect, onAddChild, onEdit, onDelete,
+    [rows, selectedId, selectedSubjectIds, debouncedTerm, canManage, toggle, onSelect, onAddChild, onEdit, onDelete,
      onDropFile, onDropSubject, draggingSubjectId]
   );
 
   return (
     <>
-      <div className="border-b border-white/5 p-3">
+      <div className="border-b border-line p-3">
         {/* Finding a FOLDER by name, which is a different job from finding a
             document -- so it is a small input next to the thing it affects,
             not the prominent search at the top of the page. */}
@@ -356,7 +384,7 @@ export function SubjectTreePane({
             note would read as "you only have 2,000 folders matching", which is
             a different and wrong statement. */}
         {truncated && (
-          <p className="mt-2 text-xs text-amber-300/90">
+          <p className="mt-2 text-xs text-amber-700/90">
             Showing the first {MAX_FILTER_ROWS.toLocaleString()} of {matched.size.toLocaleString()} matches — keep typing to narrow it.
           </p>
         )}
@@ -416,8 +444,8 @@ export function SubjectTreePane({
             className={
               "mt-2 shrink-0 rounded-lg border border-dashed px-3 py-2 text-center text-xs transition-colors " +
               (rootDropActive
-                ? "border-brand-400/70 bg-brand-500/15 text-brand-100"
-                : "border-white/15 text-base-500")
+                ? "border-brand-400/70 bg-brand-500/15 text-brand-700"
+                : "border-line-strong text-base-500")
             }
           >
             Drop here to move it to the top level

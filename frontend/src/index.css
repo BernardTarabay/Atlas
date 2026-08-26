@@ -1,34 +1,122 @@
 @import "tailwindcss";
 
+/* ATLAS DESIGN SYSTEM
+   ===================
+   The product is a document intelligence platform, but the thing a person
+   actually does with it is explore files. So the interface is designed as a
+   file explorer: its job is to communicate hierarchy and organisation, not
+   atmosphere.
+
+   WHY THIS MOVED FROM DARK TO LIGHT
+
+   The previous palette was near-black with violet, and it failed at the one
+   thing this interface has to do. Separation between a file, its row, its
+   table, and the panel around it was drawn with `border-white/5` and
+   `bg-white/[0.02]` -- a 5%-opacity hairline and a 2% tint on a #08090d
+   background. Those are differences of two or three RGB values. The result
+   read as one continuous dark mass with text floating in it: files wedged
+   together rather than filed.
+
+   Contrast on a light canvas is simply cheaper. A 1px #dde5ef line on white is
+   unmistakable and still quiet; getting the same legibility on near-black
+   needs a border bright enough to look like a cage.
+
+   THE HIERARCHY, IN ORDER
+
+     canvas    the page              a cool off-white the app sits on
+     surface   cards, panels, rows   pure white, bordered, faintly raised
+     inset     headers, code, wells  recessed a step below surface
+     line      separators            visible without being a box
+
+   Three surface levels and one line colour is the whole system. Every
+   compartment in the app is built from those, which is what keeps a dense
+   table and a settings panel feeling like the same product.
+
+   WHAT DID NOT CHANGE
+
+   Component structure, class names, information architecture and layout are
+   untouched -- this is a re-skin of the visual language, not a redesign. Every
+   class below kept its name so no component markup had to be rewritten to
+   follow along. */
+
 @theme {
   --font-sans: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
 
-  --color-base-950: #08090d;
-  --color-base-900: #0d0f16;
-  --color-base-850: #12141d;
-  --color-base-800: #171a25;
-  --color-base-700: #232633;
-  --color-base-600: #33374a;
-  --color-base-500: #4b5065;
-  --color-base-400: #6b7085;
-  --color-base-300: #9297ab;
-  --color-base-200: #c2c5d3;
-  --color-base-100: #e4e6ee;
-  --color-base-50: #f6f7fb;
+  /* THE INK RAMP, REVERSED.
+     The numbers kept their meaning -- low is prominent, high is recessive --
+     but the values are inverted, so `text-base-100` is still the strongest
+     text and `text-base-500` is still the quietest. That is what let ~470
+     existing `text-base-*` usages stay correct without being touched.
+     Cool-tinted rather than neutral grey: a blue-grey ink on a blue-grey
+     canvas reads as considered, where pure grey reads as unstyled. */
+  --color-base-50:  #0b1220;   /* display headings */
+  --color-base-100: #16202e;   /* primary text */
+  --color-base-200: #243244;
+  --color-base-300: #3d4b5f;   /* secondary text */
+  --color-base-400: #55647a;   /* supporting text */
+  --color-base-500: #64748b;   /* muted labels -- 4.76:1 on white, AA for body text.
+                                 Measured first at #6f7d91, which came out at 4.18:1;
+                                 with 147 usages this is the most-read muted tone in
+                                 the app and the one least worth guessing at. */
+  --color-base-600: #8794a6;   /* faint icons and disabled states only -- 3.2:1,
+                                 deliberately below body-text contrast, so never
+                                 use it for prose. */
+  --color-base-700: #c9d3e0;   /* strong borders */
+  --color-base-800: #e2e9f1;   /* borders */
+  --color-base-850: #edf2f8;   /* inset fills */
+  --color-base-900: #f6f9fc;   /* raised-but-quiet fills */
+  --color-base-950: #ffffff;   /* surface */
 
-  --color-brand-400: #8b7bff;
-  --color-brand-500: #7c5cff;
-  --color-brand-600: #6a3ff0;
-  --color-brand-700: #5a2fd6;
+  /* SURFACES. Named by role rather than by lightness, because the whole point
+     is that a card is a card wherever it appears. */
+  --color-canvas: #f2f5fa;
+  --color-surface: #ffffff;
+  --color-inset: #eef3f9;
+  --color-line: #e3eaf3;
+  --color-line-strong: #cfd9e6;
 
-  --color-accent-cyan: #3ee6d8;
-  --color-accent-amber: #f5b94f;
-  --color-accent-rose: #f2617a;
-  --color-accent-emerald: #3ecf8e;
+  /* Row states. A file explorer spends its life showing lists, so these three
+     carry more of the design than anything else in the file. */
+  --color-row-hover: #f2f7fe;
+  --color-row-selected: #e7f0fe;
+  --color-row-selected-line: #b9d4fd;
 
-  --shadow-glow: 0 0 0 1px rgba(124, 92, 255, 0.15), 0 8px 30px -8px rgba(124, 92, 255, 0.35);
-  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px -16px rgba(0, 0, 0, 0.6);
+  /* BRAND: light blue rather than violet.
+     Blue is the colour of every file manager a person has already used, and
+     borrowing that association is worth more here than looking distinctive. */
+  --color-brand-50:  #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-300: #93c5fd;
+  --color-brand-400: #60a5fa;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+
+  /* Semantic accents, darkened from the old dark-theme versions so they carry
+     enough contrast to be read as text on white. */
+  --color-accent-cyan: #0891b2;
+  --color-accent-amber: #b45309;
+  --color-accent-rose: #be123c;
+  --color-accent-emerald: #047857;
+
+  /* SURFACES THAT MUST STAY DARK.
+     A modal scrim has to darken what is behind it, and a photo viewer is dark
+     in every serious tool because a bright frame changes how the image reads.
+     These used `base-950` when that token was near-black; inverting the ramp
+     would have turned the scrim white and quietly removed both effects. */
+  --color-scrim: #0d1526;
+  --color-viewer: #0b111c;
+
+  /* ELEVATION.
+     Light UI gets its depth from shadow, and the temptation is to overdo it.
+     These are deliberately shallow -- a card should look like paper on a desk,
+     not a button hovering in space. */
+  --shadow-card: 0 1px 2px rgba(15, 30, 55, 0.04), 0 1px 3px rgba(15, 30, 55, 0.05);
+  --shadow-raised: 0 2px 4px -2px rgba(15, 30, 55, 0.05), 0 6px 16px -6px rgba(15, 30, 55, 0.10);
+  --shadow-overlay: 0 24px 48px -16px rgba(15, 30, 55, 0.22), 0 4px 12px -4px rgba(15, 30, 55, 0.10);
+  --shadow-glow: 0 1px 2px rgba(37, 99, 235, 0.20), 0 6px 16px -6px rgba(37, 99, 235, 0.35);
 }
 
 * {
@@ -42,100 +130,141 @@ html, body, #root {
 body {
   margin: 0;
   font-family: var(--font-sans);
+  /* Two very faint cool washes over the canvas. Enough to keep a large empty
+     page from looking like blank paper, far too subtle to compete with a
+     white card sitting on top of it. */
   background:
-    radial-gradient(1200px 600px at 90% -10%, rgba(124, 92, 255, 0.16), transparent 60%),
-    radial-gradient(900px 500px at -10% 10%, rgba(62, 230, 216, 0.08), transparent 55%),
-    var(--color-base-950);
-  color: var(--color-base-100);
+    radial-gradient(1100px 520px at 88% -12%, rgba(59, 130, 246, 0.07), transparent 62%),
+    radial-gradient(820px 460px at -8% 6%, rgba(14, 165, 233, 0.05), transparent 58%),
+    var(--color-canvas);
+  background-attachment: fixed;
+  color: var(--color-base-200);
+  /* Inter is drawn slightly wide for UI at these sizes; a touch of negative
+     tracking is what makes it look typeset rather than merely set. */
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-::selection {
-  background: rgba(124, 92, 255, 0.35);
-  color: #fff;
+/* Headings tighten further, as display sizes need proportionally less space
+   between letters than body text does. */
+h1, h2, h3, h4 {
+  letter-spacing: -0.018em;
+  color: var(--color-base-50);
 }
 
-/* Slim, unobtrusive scrollbars that still fit the dark theme. */
+::selection {
+  background: rgba(59, 130, 246, 0.20);
+  color: var(--color-base-50);
+}
+
+/* Scrollbars: visible enough to grab, quiet enough to ignore. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-base-600) transparent;
+  scrollbar-color: var(--color-base-700) transparent;
 }
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--color-base-600);
+  background: var(--color-base-700);
   border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-base-600);
+  background-clip: content-box;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
 }
 
 @layer components {
+  /* THE CARD. The single most important compartment in the app.
+     A real border AND a shallow shadow, not one or the other: the border does
+     the work of saying "this is a distinct thing" at a glance, the shadow says
+     "it sits above the page". The old version had neither in any readable
+     amount, which is why panels dissolved into the background. */
   .glass-card {
-    @apply rounded-2xl border border-white/5 bg-base-900/60 backdrop-blur-xl;
+    @apply rounded-2xl border border-line bg-surface;
     box-shadow: var(--shadow-card);
+  }
+
+  /* A panel that should read as recessed rather than raised -- inset wells,
+     preview backdrops, empty states inside a card. */
+  .inset-panel {
+    @apply rounded-xl border border-line bg-inset;
   }
 
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium
            transition-all duration-150 select-none disabled:opacity-50 disabled:pointer-events-none
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60;
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40
+           focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
   }
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium
            transition-all duration-150 select-none disabled:opacity-50 disabled:pointer-events-none
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 text-white;
-    background: linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700));
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40
+           focus-visible:ring-offset-2 focus-visible:ring-offset-canvas text-white;
+    background: linear-gradient(180deg, var(--color-brand-500), var(--color-brand-600));
     box-shadow: var(--shadow-glow);
   }
   .btn-primary:hover {
-    filter: brightness(1.08);
-    transform: translateY(-1px);
+    background: linear-gradient(180deg, var(--color-brand-600), var(--color-brand-700));
   }
+  .btn-primary:active {
+    transform: translateY(0.5px);
+  }
+  /* The default action for anything that is not the primary one. On white it
+     needs a real border -- a borderless grey button on a white card is
+     indistinguishable from a label until you hover it. */
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium
            transition-all duration-150 select-none disabled:opacity-50 disabled:pointer-events-none
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60
-           border border-white/10 bg-white/[0.03] text-base-100 hover:bg-white/[0.07];
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40
+           focus-visible:ring-offset-2 focus-visible:ring-offset-canvas
+           border border-line-strong bg-surface text-base-200 hover:bg-base-900 hover:border-base-600;
   }
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium
            transition-all duration-150 select-none disabled:opacity-50 disabled:pointer-events-none
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60
-           text-base-300 hover:bg-white/[0.05] hover:text-base-100;
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40
+           focus-visible:ring-offset-2 focus-visible:ring-offset-canvas
+           text-base-400 hover:bg-base-850 hover:text-base-100;
   }
   .btn-danger {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium
            transition-all duration-150 select-none disabled:opacity-50 disabled:pointer-events-none
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60
-           border border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20;
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40
+           focus-visible:ring-offset-2 focus-visible:ring-offset-canvas
+           border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 hover:border-rose-300;
   }
   .btn-sm {
     @apply px-3 py-1.5 text-xs;
   }
 
   .input {
-    @apply w-full rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-sm text-base-100
-           placeholder:text-base-400 outline-none transition-colors
-           focus:border-brand-500/60 focus:bg-white/[0.05];
+    @apply w-full rounded-xl border border-line-strong bg-surface px-3.5 py-2.5 text-sm text-base-100
+           placeholder:text-base-600 outline-none transition-all
+           focus:border-brand-500 focus:ring-4 focus:ring-brand-500/12;
   }
 
   .label {
-    @apply mb-1.5 block text-xs font-medium uppercase tracking-wider text-base-400;
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wider text-base-500;
   }
 
   .badge {
     @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium;
   }
-  .badge-neutral { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-white/10 bg-white/5 text-base-300; }
-  .badge-blue { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-sky-500/25 bg-sky-500/10 text-sky-300; }
-  .badge-emerald { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-emerald-500/25 bg-emerald-500/10 text-emerald-300; }
-  .badge-amber { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-amber-500/25 bg-amber-500/10 text-amber-300; }
-  .badge-rose { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-rose-500/25 bg-rose-500/10 text-rose-300; }
-  .badge-violet { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-violet-500/25 bg-violet-500/10 text-violet-300; }
+  .badge-neutral { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-line-strong bg-base-850 text-base-400; }
+  .badge-blue { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-brand-200 bg-brand-50 text-brand-700; }
+  .badge-emerald { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-emerald-200 bg-emerald-50 text-emerald-700; }
+  .badge-amber { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-amber-200 bg-amber-50 text-amber-700; }
+  .badge-rose { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-rose-200 bg-rose-50 text-rose-700; }
+  .badge-violet { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium border-violet-200 bg-violet-50 text-violet-700; }
 
   .table-shell {
     /* overflow-x-auto, not overflow-hidden. Six pages put wide tables in
@@ -145,21 +274,111 @@ body {
        action buttons -- with no scrollbar to reveal them. Scrolling the
        table inside its own box also keeps the page body from scrolling
        sideways, which is the thing that actually feels broken. */
-    @apply overflow-x-auto rounded-2xl border border-white/5;
+    @apply overflow-x-auto rounded-2xl border border-line;
   }
+
+  /* Table header: an inset band, so the column names read as a fixed frame
+     around the data rather than as the first row of it. */
+  .table-shell thead tr {
+    background: var(--color-inset);
+  }
+  .table-shell thead th {
+    /* base-400, not the base-500 used for muted text elsewhere. Measured at
+       4.27:1 against the inset fill this band sits on -- under AA, and column
+       headers are small uppercase text, which is the least forgiving case
+       there is. One step darker puts it at 5.4:1. */
+    @apply text-base-400;
+    border-bottom: 1px solid var(--color-line);
+  }
+
+  /* ROW SEPARATION -- the fix for the original complaint.
+     Every row gets a real hairline. At 1px of #e3eaf3 on white this is quiet
+     enough to scan past and definite enough that a file is visibly its own
+     object, which a 5%-white line on near-black never managed. */
+  .table-shell tbody tr {
+    border-bottom: 1px solid var(--color-line);
+  }
+  .table-shell tbody tr:last-child {
+    border-bottom: 0;
+  }
+
   .table-row-hover {
-    @apply transition-colors hover:bg-white/[0.03];
+    @apply transition-colors;
+  }
+  .table-row-hover:hover {
+    background: var(--color-row-hover);
+  }
+
+  /* Numbers in a file listing are compared far more often than they are read
+     -- sizes against sizes, dates against dates -- and tabular figures make a
+     column of them line up on the digit instead of drifting. */
+  .table-shell td,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A row the user has selected, and a row the keyboard cursor is on. These
+     stay two distinct statements, as they were before: a fill means "this is
+     chosen", a ring means "you are here". */
+  .row-selected {
+    background: var(--color-row-selected);
+    box-shadow: inset 2px 0 0 var(--color-brand-500);
+  }
+  .row-cursor {
+    background: var(--color-base-900);
+    box-shadow: inset 0 0 0 1px var(--color-row-selected-line);
+  }
+
+  /* RESPONSIVE TABLE COLUMNS
+     ------------------------
+     .table-shell keeps a wide table from pushing the page sideways, but on a
+     phone it only converts "broken layout" into "scroll right to find the
+     buttons". Seven columns do not belong on a 375px screen at all.
+
+     The usual fix is to reflow rows into cards -- set every table element to
+     `display: block` and print the column name from a data-label. It is not
+     used here, deliberately: changing the display of a table element DESTROYS
+     its semantics for screen readers. The table stops being a table, rows stop
+     being rows, and the association between a cell and its header is gone --
+     so the reflow that makes the table readable by eye makes it unreadable by
+     ear. Restoring that needs an explicit role on every table, row and cell,
+     which is a large amount of markup to keep correct in seven files.
+
+     So columns are DROPPED by priority instead. The markup stays a real table
+     at every width, semantics are untouched, and nothing is hidden that the
+     user cannot reach -- tapping a row opens the detail view, which carries
+     every field. `display: none` is also honestly hidden: it is removed from
+     the accessibility tree rather than left for a screen reader to read out as
+     a phantom column.
+
+     Apply the SAME class to the <th> and to every <td> in that column, or the
+     header and body drift out of alignment at that breakpoint.
+
+       .col-secondary   gone below 640px   -- useful, not needed on a phone
+       .col-tertiary    gone below 1024px  -- detail for a desktop reader
+
+     Use .cell-subline inside the primary cell to carry the one dropped value
+     that is genuinely needed on a phone (usually a date or a size). It appears
+     only at the widths where the secondary columns are gone, so it never
+     duplicates a visible column. */
+  .col-secondary {
+    @apply hidden sm:table-cell;
+  }
+  .col-tertiary {
+    @apply hidden lg:table-cell;
+  }
+  .cell-subline {
+    @apply mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-base-500 sm:hidden;
   }
 
   .nav-link {
-    @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-base-300
-           transition-all duration-150 hover:bg-white/[0.05] hover:text-base-100;
+    @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-base-400
+           transition-all duration-150 hover:bg-base-850 hover:text-base-100;
   }
   .nav-link-active {
     @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium
-           transition-all duration-150 text-white;
-    background: linear-gradient(135deg, rgba(124, 92, 255, 0.22), rgba(124, 92, 255, 0.06));
-    box-shadow: inset 0 0 0 1px rgba(124, 92, 255, 0.3);
+           transition-all duration-150 text-brand-700 bg-brand-50;
+    box-shadow: inset 0 0 0 1px var(--color-brand-200);
   }
 
   /* Horizontal navigation (components/TopNav.jsx).
@@ -168,14 +387,25 @@ body {
      the whole bar two rows tall at one awkward width. */
   .topnav-link {
     @apply flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-sm
-           font-medium text-base-300 transition-colors duration-150
-           hover:bg-white/[0.05] hover:text-base-100;
+           font-medium text-base-400 transition-colors duration-150
+           hover:bg-base-850 hover:text-base-100;
   }
   .topnav-link-active {
     @apply flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-sm
-           font-medium text-white transition-colors duration-150;
-    background: linear-gradient(135deg, rgba(124, 92, 255, 0.24), rgba(124, 92, 255, 0.07));
-    box-shadow: inset 0 0 0 1px rgba(124, 92, 255, 0.32);
+           font-medium text-brand-700 bg-brand-50 transition-colors duration-150;
+    box-shadow: inset 0 0 0 1px var(--color-brand-200);
+  }
+
+  /* A section heading with a rule running to the edge of its container --
+     the cheapest way to compartmentalise a long page without adding a box
+     around everything. */
+  .section-rule {
+    @apply flex items-center gap-3 text-xs font-semibold uppercase tracking-wider text-base-500;
+  }
+  .section-rule::after {
+    content: "";
+    @apply h-px flex-1;
+    background: var(--color-line);
   }
 }
 

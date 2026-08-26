@@ -29,8 +29,16 @@ const env = require("../../config/env");
 const BATCH_SIZE = 500;
 
 async function handle(payload = {}) {
-  const retentionDays = payload.retentionDays || env.trash.retentionDays;
-  const expired = await lifecycleService.findExpired({ retentionDays, limit: BATCH_SIZE });
+  // `??`, not `||`. A retention of 0 -- "empty the Trash now" -- is a
+  // legitimate instruction, and `0 || 30` silently turns it into the default,
+  // so the one value that means "purge everything" was the one value that
+  // could never be passed.
+  const retentionDays = payload.retentionDays ?? env.trash.retentionDays;
+  // One owner per job (trashPurgeScheduler). The purge deletes rows for good,
+  // so the blast radius is bounded to a single account by construction rather
+  // than by the WHERE clause happening to be right.
+  const { ownerUserId } = payload;
+  const expired = await lifecycleService.findExpired({ retentionDays, limit: BATCH_SIZE, ownerUserId });
 
   if (expired.length === 0) {
     return { purged: 0, retentionDays, message: "Nothing in the Trash is old enough to remove." };
@@ -53,7 +61,27 @@ async function handle(payload = {}) {
   }
 
   const ids = expired.map((f) => f.id);
-  await db.query("DELETE FROM files WHERE id = ANY($1::uuid[])", [ids]);
+  // The owner is re-asserted in the DELETE even though findExpired already
+  // scoped the SELECT.
+  //
+  // Not redundancy to be tidied away: this is the only statement in the
+  // application that destroys rows with nobody watching, so it should not be
+  // possible for a future change to findExpired -- or a caller that passes ids
+  // from somewhere else -- to turn it into a cross-account delete. The same
+  // reasoning the agent path checks use (docs/04 §4.5): the destructive step
+  // validates for itself rather than trusting its caller got it right.
+  const { rowCount } = await db.query(
+    "DELETE FROM files WHERE id = ANY($1::uuid[]) AND owner_user_id = $2",
+    [ids, ownerUserId]
+  );
+  if (rowCount !== ids.length) {
+    // Surfaces as a failed job rather than a quiet miscount, because the only
+    // ways this happens are a scoping bug or a concurrent write, and both are
+    // worth knowing about on an unattended delete.
+    throw new Error(
+      `Purge selected ${ids.length} file(s) but deleted ${rowCount}. Refusing to report a purge that did not happen as described.`
+    );
+  }
 
   return {
     purged: ids.length,

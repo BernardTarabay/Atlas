@@ -111,8 +111,12 @@ const usd = (n) => `$${n.toFixed(n < 1 ? 4 : 2)}`;
   console.log(`cost per file        ${usd(costPerFile)}`);
   console.log(`\nextrapolated`);
   for (const n of [1000, 10000, 50000, 100000]) {
-    const hoursFree = n / env.ai.rateLimitPerMinute / 60;
-    console.log(`  ${String(n).padStart(6)} files   ${usd(costPerFile * n).padStart(10)}   ${hoursFree.toFixed(1)}h at ${env.ai.rateLimitPerMinute}/min`);
+    // Client-side pacing is off by default now (config/env.js), so there is
+    // no fixed rate to project a duration from -- throughput is whatever
+    // Google allows. Only quote wall-clock when someone opted into a pace.
+    const pace = env.ai.rateLimitPerMinute;
+    const duration = pace > 0 ? `   ${(n / pace / 60).toFixed(1)}h at ${pace}/min` : "";
+    console.log(`  ${String(n).padStart(6)} files   ${usd(costPerFile * n).padStart(10)}${duration}`);
   }
 
   console.log(`\nnotes`);
@@ -120,7 +124,10 @@ const usd = (n) => `$${n.toFixed(n < 1 ? 4 : 2)}`;
   console.log(`    sampled documents ranged ${Math.min(...rows.map((r) => r.chars))} to ${Math.max(...rows.map((r) => r.chars))} chars`);
   console.log(`    and every one over the cap costs the same.`);
   console.log(`  - Exact duplicates reuse a sibling's result and cost nothing.`);
-  console.log(`  - AI_DAILY_CALL_CAP is currently ${env.ai.dailyCallCap}, so a single day can spend at most ${usd(costPerFile * env.ai.dailyCallCap)}.`);
+  // No ceiling to report against: the daily cap and the default per-minute
+  // pace were both removed (config/env.js). Spend is reported, not refused.
+  console.log(`  - There is no artificial AI cap. Spend is bounded by how many files you`);
+  console.log(`    process, not by a quota this application enforces.`);
 })()
   .catch((e) => { console.error("\nFAILED:", e.message); process.exitCode = 1; })
   .finally(() => pool.end());

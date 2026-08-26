@@ -132,7 +132,7 @@ export function StorageLocationsPage() {
             <div key={loc.id} className="glass-card animate-fade-in-up relative p-5">
               {hasPermission("storage.manage") && (
                 <button
-                  className="absolute right-3 top-3 rounded-lg p-1 text-base-500 hover:bg-white/5 hover:text-rose-300"
+                  className="absolute right-3 top-3 rounded-lg p-1 text-base-500 hover:bg-base-900 hover:text-rose-700"
                   onClick={() => setRemoveTarget(loc)}
                   title="Remove storage location"
                 >
@@ -140,8 +140,8 @@ export function StorageLocationsPage() {
                 </button>
               )}
               <div className="mb-3 flex items-start justify-between pr-6">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-                  <HardDrive size={16} className="text-brand-300" />
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-line-strong bg-base-900">
+                  <HardDrive size={16} className="text-brand-700" />
                 </div>
                 {/* "pending" used to mean "agent mode isn't built yet".
                     Both modes are real now, so this just states which one. */}

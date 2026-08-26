@@ -34,7 +34,6 @@ const hashProcessor = require("../src/jobs/processors/hashProcessor");
 const quickIdentityService = require("../src/services/quickIdentityService");
 const { closeAllQueues } = require("../src/queues");
 const { dequeueFixtureJobs, pauseQueues, resumeQueues } = require("./_fixtureQueue");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -82,7 +81,7 @@ async function cleanup() {
     console.log("\ncleaned up.");
   } catch (e) { console.log("cleanup warning:", e.message); }
   await resumeQueues().catch(() => {});
-  await p.end(); await closeAllQueues(); await closeRedisConnection();
+  await p.end(); await closeAllQueues();
 }
 
 /** A file big enough that reading it whole is meaningfully dearer than sampling it. */

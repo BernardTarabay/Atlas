@@ -34,7 +34,6 @@ const subjectRepository = require("../src/repositories/subjectRepository");
 const fileService = require("../src/services/fileService");
 const { closeAllQueues } = require("../src/queues");
 const { dequeueFixtureJobs, pauseQueues, resumeQueues } = require("./_fixtureQueue");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -70,7 +69,7 @@ async function cleanup() {
   // Hand the queues back to whatever worker is running, even if the
   // script threw part-way through.
   await resumeQueues().catch(() => {});
-  await p.end(); await closeAllQueues(); await closeRedisConnection();
+  await p.end(); await closeAllQueues();
 }
 
 // Long enough to clear MIN_TOKENS_FOR_COMPARISON (40 words) -- below that the

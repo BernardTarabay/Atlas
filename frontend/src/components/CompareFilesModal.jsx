@@ -188,14 +188,14 @@ function FilePicker({ label, selected, onSelect, excludeId, candidates = null })
           the answer -- searching for a file you are already looking at is
           the step this removes. */}
       {quickPicks.length > 0 && q.trim().length < 2 && (
-        <div className="mt-1.5 max-h-44 overflow-y-auto rounded-xl border border-white/5 bg-white/[0.02]">
-          <p className="border-b border-white/5 px-3 py-1.5 text-[10px] uppercase tracking-wider text-base-500">
+        <div className="mt-1.5 max-h-44 overflow-y-auto rounded-xl border border-line bg-base-900">
+          <p className="border-b border-line px-3 py-1.5 text-[10px] uppercase tracking-wider text-base-500">
             In this group
           </p>
           {quickPicks.map((f) => (
             <button
               key={f.id}
-              className="block w-full border-b border-white/5 px-3 py-2 text-left last:border-0 hover:bg-white/[0.04]"
+              className="block w-full border-b border-line px-3 py-2 text-left last:border-0 hover:bg-base-850"
               onClick={() => onSelect(f)}
             >
               <p className="truncate text-xs text-base-100">{f.ai_short_title || f.filename_current}</p>
@@ -206,7 +206,7 @@ function FilePicker({ label, selected, onSelect, excludeId, candidates = null })
       )}
 
       {q.trim().length >= 2 && (
-        <div className="mt-1.5 max-h-44 overflow-y-auto rounded-xl border border-white/5 bg-white/[0.02]">
+        <div className="mt-1.5 max-h-44 overflow-y-auto rounded-xl border border-line bg-base-900">
           {searching ? (
             <p className="px-3 py-2 text-xs text-base-500">Searching…</p>
           ) : visible.length === 0 ? (
@@ -215,7 +215,7 @@ function FilePicker({ label, selected, onSelect, excludeId, candidates = null })
             visible.map((f) => (
               <button
                 key={f.id}
-                className="block w-full border-b border-white/5 px-3 py-2 text-left last:border-0 hover:bg-white/[0.04]"
+                className="block w-full border-b border-line px-3 py-2 text-left last:border-0 hover:bg-base-850"
                 onClick={() => { onSelect(f); setQ(""); }}
               >
                 <p className="truncate text-xs text-base-100">{f.ai_short_title || f.filename_current}</p>
@@ -230,10 +230,10 @@ function FilePicker({ label, selected, onSelect, excludeId, candidates = null })
 }
 
 const VERDICT_STYLES = {
-  exact: { label: "Identical", className: "border-rose-500/30 bg-rose-500/10 text-rose-200" },
-  probable: { label: "Probable duplicate", className: "border-amber-500/30 bg-amber-500/10 text-amber-200" },
-  distinct: { label: "Distinct documents", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" },
-  not_comparable: { label: "Cannot compare", className: "border-white/10 bg-white/[0.03] text-base-300" },
+  exact: { label: "Identical", className: "border-rose-500/30 bg-rose-500/10 text-rose-700" },
+  probable: { label: "Probable duplicate", className: "border-amber-500/30 bg-amber-500/10 text-amber-700" },
+  distinct: { label: "Distinct documents", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700" },
+  not_comparable: { label: "Cannot compare", className: "border-line-strong bg-base-900 text-base-300" },
 };
 
 function ComparisonResult({ result }) {
@@ -253,10 +253,10 @@ function ComparisonResult({ result }) {
         <div className="mt-2.5">
           {/* The threshold marker matters: a bare percentage says nothing
               about whether the pipeline would act on it. */}
-          <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-black/30">
+          <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-base-800">
             <div className="h-full rounded-full bg-current opacity-70" style={{ width: `${percent}%` }} />
             <div
-              className="absolute top-0 h-full w-px bg-white/60"
+              className="absolute top-0 h-full w-px bg-base-400"
               style={{ left: `${result.threshold * 100}%` }}
               title={`Probable-duplicate threshold: ${(result.threshold * 100).toFixed(0)}%`}
             />

@@ -11,7 +11,6 @@
 const { Pool } = require("pg");
 const env = require("../src/config/env");
 const { enqueueJob, closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 const { JobType } = require("../src/models/enums");
 
 const APPLY = process.argv.includes("--apply");
@@ -46,4 +45,4 @@ const pool = new Pool({ connectionString: env.databaseUrl });
   console.log(`\nQueued ${rows.length} file(s). Watch the Processing Jobs dock; dates appear as they complete.`);
 })()
   .catch((e) => { console.error("FAILED:", e.message); process.exitCode = 1; })
-  .finally(async () => { await pool.end(); await closeAllQueues(); await closeRedisConnection(); });
+  .finally(async () => { await pool.end(); await closeAllQueues(); });

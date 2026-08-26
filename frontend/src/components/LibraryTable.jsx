@@ -26,18 +26,23 @@ import { formatBytes } from "../utils/format";
  * whitelist, see repositories/fileFilters.parseSort — and re-fetches from the
  * first page.
  */
+// The responsive classes are part of the column definition rather than sprinkled
+// on the cells, because the header is rendered from THIS list -- so a column can
+// only ever be dropped from both halves at once, and cannot drift out of
+// alignment with its own <td>. See .col-secondary / .col-tertiary in index.css.
 const COLUMNS = [
   { key: "name", label: "Document", className: "" },
-  { key: "date", label: "Date", className: "w-36" },
-  { key: "size", label: "Size", className: "w-24 text-right" },
-  { key: "extension", label: "Type", className: "w-20" },
-  { key: "imported", label: "Added", className: "w-32" },
+  { key: "date", label: "Date", className: "col-secondary w-36" },
+  { key: "size", label: "Size", className: "col-tertiary w-24 text-right" },
+  { key: "extension", label: "Type", className: "col-tertiary w-20" },
+  { key: "imported", label: "Added", className: "col-tertiary w-32" },
 ];
 
 export function LibraryTable({
   rows, loading, scopeLabel, scopeTotal, searching, sort, onSort,
   selectedFileIds, cursor, onToggle, onToggleAll, allOnPageSelected, canSelect,
-  onOpen, offset, limit, onOffsetChange, selectionBar, scopePicker,
+  onRowClick, onOpenFile, onContextMenu,
+  offset, limit, onOffsetChange, selectionBar, scopePicker,
 }) {
   return (
     <div>
@@ -66,12 +71,12 @@ export function LibraryTable({
           <div className="table-shell glass-card overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr className="border-b border-white/5 text-xs uppercase tracking-wider text-base-400">
+                <tr className="border-b border-line text-xs uppercase tracking-wider text-base-400">
                   {canSelect && (
                     <th className="w-10 px-3 py-2.5">
                       <button onClick={onToggleAll} title="Select everything on this page (a)">
                         {allOnPageSelected
-                          ? <CheckSquare size={14} className="text-brand-400" />
+                          ? <CheckSquare size={14} className="text-brand-600" />
                           : <Square size={14} />}
                       </button>
                     </th>
@@ -87,7 +92,7 @@ export function LibraryTable({
                           col.label
                         ) : (
                           <button
-                            className={"inline-flex items-center gap-1 hover:text-base-200 " + (active ? "text-brand-300" : "")}
+                            className={"inline-flex items-center gap-1 hover:text-base-200 " + (active ? "text-brand-700" : "")}
                             onClick={() => onSort(col.key)}
                           >
                             {col.label}
@@ -106,13 +111,31 @@ export function LibraryTable({
                   return (
                     <tr
                       key={f.id}
-                      onClick={() => onOpen(f.id, index)}
+                      // SINGLE CLICK SELECTS. DOUBLE CLICK OPENS.
+                      //
+                      // The same rule the card list uses, and it is here for
+                      // the same reason it is there: single click used to open
+                      // the detail modal, which is exactly why double-click
+                      // never worked in this view. The modal mounted over the
+                      // row after the first click, so the second click landed
+                      // on the modal and the dblclick event never reached the
+                      // row at all -- the row could not be double-clicked
+                      // because the first click had already covered it up.
+                      //
+                      // That was fixed in LibraryFileRow and not here, so
+                      // "double click opens the file" was true in the card
+                      // view and silently false in the table. Details are
+                      // still one right-click away, which is where every other
+                      // per-row action in this app already lives.
+                      onClick={(e) => onRowClick?.(index, f, e)}
+                      onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenFile?.(f); }}
+                      onContextMenu={(e) => onContextMenu?.(e, f, index)}
                       className={
-                        "cursor-pointer border-b border-white/5 last:border-0 " +
+                        "cursor-pointer border-b border-line last:border-0 " +
                         (isSelected
                           ? "bg-brand-500/10"
                           : isCursor
-                            ? "bg-white/[0.04] ring-1 ring-inset ring-white/10"
+                            ? "bg-base-850 ring-1 ring-inset ring-line-strong"
                             : "table-row-hover")
                       }
                     >
@@ -122,10 +145,10 @@ export function LibraryTable({
                             onClick={(e) => { e.stopPropagation(); onToggle(index, { shiftKey: e.shiftKey }); }}
                             title={isSelected ? "Deselect" : "Select (shift-click for a range)"}
                             aria-pressed={isSelected}
-                            className="text-base-500 hover:text-brand-300"
+                            className="text-base-500 hover:text-brand-700"
                           >
                             {isSelected
-                              ? <CheckSquare size={15} className="text-brand-400" />
+                              ? <CheckSquare size={15} className="text-brand-600" />
                               : <Square size={15} />}
                           </button>
                         </td>
@@ -140,21 +163,30 @@ export function LibraryTable({
                         <p dir="auto" className="truncate text-xs text-base-500">
                           {f.subject_name
                             ? <span className="text-base-400">{f.subject_name} · </span>
-                            : <span className="text-amber-300/80">unfiled · </span>}
+                            : <span className="text-amber-700/80">unfiled · </span>}
                           {f.current_path || f.filename_current}
                         </p>
                         <SearchSnippet snippet={f.snippet} />
+                        {/* Date and size, which lose their columns on a phone.
+                            Type and Added do not reappear here: the extension
+                            is already visible at the end of the path above it,
+                            and import date is a desktop sorting aid rather than
+                            something read off a row. */}
+                        <div className="cell-subline">
+                          <DocumentDateInline date={f.document_date} source={f.document_date_source} />
+                          <span className="tabular-nums">{formatBytes(f.size_bytes)}</span>
+                        </div>
                       </td>
-                      <td className="px-3 py-2 text-xs">
+                      <td className="col-secondary px-3 py-2 text-xs">
                         <DocumentDateInline date={f.document_date} source={f.document_date_source} />
                       </td>
-                      <td className="px-3 py-2 text-right text-xs tabular-nums text-base-400">
+                      <td className="col-tertiary px-3 py-2 text-right text-xs tabular-nums text-base-400">
                         {formatBytes(f.size_bytes)}
                       </td>
-                      <td className="px-3 py-2 text-xs text-base-400">
+                      <td className="col-tertiary px-3 py-2 text-xs text-base-400">
                         {f.extension ? `.${String(f.extension).toLowerCase()}` : "—"}
                       </td>
-                      <td className="px-3 py-2 text-xs text-base-500">
+                      <td className="col-tertiary px-3 py-2 text-xs text-base-500">
                         {f.imported_at ? new Date(f.imported_at).toLocaleDateString() : "—"}
                       </td>
                     </tr>

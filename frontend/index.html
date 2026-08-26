@@ -3,6 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <!-- Installable-app metadata. Chromium ("Install app") and iOS Safari
+         ("Add to Home Screen") both read this, and both then run the app in
+         its own window with no URL bar. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#ffffff" />
+
+    <!-- iOS reads none of the manifest's icon or display fields; it needs its
+         own tags, and it needs a PNG (it renders no SVG and no transparency). -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Atlas" />
+    <!-- "default" (a light bar with dark glyphs) now that the app is light.
+         Not "black-translucent": translucent lets the page render underneath
+         the status bar, which needs safe-area insets throughout the layout to
+         avoid the clock sitting on top of the nav. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Document intelligence, organization, and management platform." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />

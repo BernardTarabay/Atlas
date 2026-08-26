@@ -143,15 +143,15 @@ export function InboxPage() {
             {accounts.map((acc) => (
               <div key={acc.id} className="glass-card animate-fade-in-up p-5">
                 <div className="mb-3 flex items-start justify-between">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-                    <Mail size={16} className="text-brand-300" />
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-line-strong bg-base-900">
+                    <Mail size={16} className="text-brand-700" />
                   </div>
                   <StatusBadge value={acc.status} />
                 </div>
                 <p className="truncate text-sm font-medium text-base-100">{acc.email_address}</p>
                 <p className="mt-1 text-xs text-base-400">{PROVIDER_LABEL[acc.provider] || acc.provider}</p>
                 {acc.status === "error" && acc.last_error && (
-                  <p className="mt-1 text-xs text-rose-300">{acc.last_error}</p>
+                  <p className="mt-1 text-xs text-rose-700">{acc.last_error}</p>
                 )}
                 <p className="mt-1 text-xs text-base-500">
                   {acc.last_synced_at ? `Last synced ${relativeTime(acc.last_synced_at)}` : "Not yet synced"}
@@ -177,7 +177,7 @@ export function InboxPage() {
             ))}
           </div>
 
-          <div className="mb-4 flex items-center gap-1.5 border-b border-white/5">
+          <div className="mb-4 flex items-center gap-1.5 border-b border-line">
             <button
               className={`px-3 py-2 text-sm font-medium transition-colors ${
                 view === "kept" ? "border-b-2 border-brand-400 text-base-50" : "text-base-400 hover:text-base-200"
@@ -212,14 +212,14 @@ export function InboxPage() {
             />
           ) : (
             <div className="glass-card overflow-hidden p-0">
-              <div className="divide-y divide-white/5">
+              <div className="divide-y divide-line">
                 {messages.map((msg) => (
                   <div key={msg.id} className="flex items-start gap-3 p-4">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-line-strong bg-base-900">
                       {view === "deleted" ? (
-                        <Trash2 size={16} className="text-rose-300" />
+                        <Trash2 size={16} className="text-rose-700" />
                       ) : (
-                        <Mail size={16} className="text-brand-300" />
+                        <Mail size={16} className="text-brand-700" />
                       )}
                     </div>
                     <div className="min-w-0 flex-1">

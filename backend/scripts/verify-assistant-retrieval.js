@@ -30,7 +30,6 @@
 const { Pool } = require("pg");
 const env = require("../src/config/env");
 const geminiChatService = require("../src/services/ai/geminiChatService");
-const { closeRedisConnection } = require("../src/config/redis");
 
 // Stubbed BEFORE the controller is required, so it captures the context that
 // would have gone to the model. No API key needed and no call is made: the
@@ -213,7 +212,7 @@ function paraphraseOf(description, wordCount = 8) {
     // is mid-close trips a libuv assertion that leaves the process reporting
     // 127 -- a script whose every check passed would still fail a CI chain.
     await p.end().catch(() => {});
-    await closeRedisConnection().catch(() => {});
+    
   }
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exitCode = failed ? 1 : 0;

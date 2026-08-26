@@ -8,7 +8,7 @@ export function ProtectedRoute() {
 
   if (status === "loading") {
     return (
-      <div className="flex h-screen items-center justify-center bg-base-950">
+      <div className="flex h-screen items-center justify-center bg-canvas">
         <PageSpinner />
       </div>
     );

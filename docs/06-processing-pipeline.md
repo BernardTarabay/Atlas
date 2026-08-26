@@ -126,7 +126,8 @@ classification history, never just "the algorithm said so once."
 - A processor throwing marks its `processing_jobs.status = 'failed'` (single-file jobs)
   or the specific `processing_job_items.status = 'failed'` (bulk jobs) with
   `error_message` populated — the job/item is never silently dropped.
-- BullMQ's built-in retry/backoff (Phase 7) is used for transient failures (e.g., a
+- The queue's retry/backoff (`queues/pgQueue.js`; 3 attempts, exponential from 5s --
+  the same ladder BullMQ provided before migration 040) is used for transient failures (e.g., a
   storage location briefly unreachable); it is not used to paper over deterministic
   failures like a corrupt file, which fail once, get recorded, and wait for human
   triage rather than retrying forever.

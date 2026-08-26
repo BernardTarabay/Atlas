@@ -19,7 +19,6 @@ const scanProcessor = require("../src/jobs/processors/scanProcessor");
 const renameProposalService = require("../src/services/renameProposalService");
 const renameProposalRepository = require("../src/repositories/renameProposalRepository");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const p = new Pool({ connectionString: env.databaseUrl });
 let passed = 0, failed = 0;
@@ -47,7 +46,7 @@ async function cleanup() {
     if (root) await fsp.rm(root, { recursive: true, force: true });
     console.log("\ncleaned up.");
   } catch (e) { console.log("cleanup warning:", e.message); }
-  await p.end(); await closeAllQueues(); await closeRedisConnection();
+  await p.end(); await closeAllQueues();
 }
 
 (async () => {

@@ -28,7 +28,6 @@ const storageLocationRepository = require("../src/repositories/storageLocationRe
 const { getStorageServiceFor } = require("../src/services/storage/storageService");
 const { sha256Stream } = require("../src/services/hashingService");
 const { closeAllQueues } = require("../src/queues");
-const { closeRedisConnection } = require("../src/config/redis");
 
 const args = process.argv.slice(2);
 const APPLY = args.includes("--apply");
@@ -122,5 +121,5 @@ const p = new Pool({ connectionString: env.databaseUrl });
   .finally(async () => {
     await p.end().catch(() => {});
     await closeAllQueues().catch(() => {});
-    await closeRedisConnection().catch(() => {});
+    
   });
