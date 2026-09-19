@@ -64,7 +64,10 @@ export function fileDetail(db: Db, id: number) {
   const text = f.content != null
     ? db.get<{ body: string }>("SELECT substr(body, 1, 4000) AS body FROM texts WHERE content = ? AND src = 'x'", f.content)?.body ?? null
     : null;
-  return { file: f, content: c, copies, text };
+  const ocrText = f.content != null
+    ? db.get<{ body: string }>("SELECT substr(body, 1, 4000) AS body FROM texts WHERE content = ? AND src = 'o'", f.content)?.body ?? null
+    : null;
+  return { file: f, content: c, copies, text, ocrText };
 }
 
 export function counts(db: Db) {

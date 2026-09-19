@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { dateFromName, parsePdfDate, parseExifDate } from "../src/analyze/dates.ts";
 import { safeSegment, joinName, isGenericStem } from "../src/plan/names.ts";
 import { plan, type PlanInput } from "../src/plan/rules.ts";
-import { detectDocType } from "../src/analyze/dtype.ts";
+import { detectDocType, DICT } from "../src/analyze/dtype.ts";
 import { usableTitle, looksLikeMojibake } from "../src/analyze/title.ts";
+import { normalize } from "../src/search/text.ts";
 
 const at = (s: string) => Date.parse(s + "Z");
 
@@ -83,10 +84,35 @@ test("rules: scans without a text layer, sheets, code, voice notes, unknowns", (
 });
 
 test("document type detection in three languages; one weak body word is not enough", () => {
-  assert.equal(detectDocType("FACTURE N° 2023-0417", "")?.type, "invoice");
-  assert.equal(detectDocType("فاتورة ضريبية", "")?.type, "invoice");
-  assert.equal(detectDocType("", "This agreement is made between the parties hereinafter referred to")?.type, "contract");
-  assert.equal(detectDocType("Holiday notes", "we saw a report on the news")?.type ?? null, null);
+  assert.equal(detectDocType("FACTURE N° 2023-0417", "", "")?.type, "invoice");
+  assert.equal(detectDocType("فاتورة ضريبية", "", "")?.type, "invoice");
+  assert.equal(detectDocType("", "", "This agreement is made between the parties hereinafter referred to")?.type, "contract");
+  assert.equal(detectDocType("Holiday notes", "", "we saw a report on the news")?.type ?? null, null);
+});
+
+test("a form asking for a date of birth is a registration form, not an identity document", () => {
+  // The OCR benchmark filed 163 school registration forms under "Identity documents"
+  // because "date of birth" was an identity keyword. Only real ID papers are.
+  const head = "Registration Form";
+  const body = "Student name: ____  Date of birth: ____  Class: ____";
+  assert.equal(detectDocType(head, body, body)?.type, "registration");
+  assert.equal(detectDocType("طلب تسجيل", "", "تاريخ الولادة")?.type, "registration");
+  assert.equal(detectDocType("Demande d’inscription", "", "date de naissance")?.type, "registration");
+  assert.equal(detectDocType("Passport", "", "Passport No. X1234567, date of birth 1990")?.type, "identity");
+  assert.equal(detectDocType("Carte d’identite", "", "")?.type, "identity");
+  // A form that says "bring a copy of your identity card" is still a form:
+  // equal scores are broken by what the document announces first.
+  const mention = "Registration Form. Please bring a copy of your identity card when registering.";
+  assert.equal(detectDocType("Registration Form", mention, mention)?.type, "registration");
+});
+
+test("every keyword survives normalization, so it can actually be matched", () => {
+  // A keyword is compared against normalized text, so it must BE normalized text.
+  // "carte d identite" is not: real French writes "carte d’identite", which
+  // normalization turns into "carte identite" - the keyword could never match.
+  for (const { type, kw } of DICT) {
+    assert.equal(normalize(kw), kw, `${type} keyword "${kw}" is not in normalized form`);
+  }
 });
 
 test("title vetting rejects template defaults and mojibake", () => {

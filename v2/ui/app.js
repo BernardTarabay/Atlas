@@ -81,6 +81,8 @@ async function showFile(id) {
     c.pages ? ["Pages", c.pages] : null,
     c.meta?.camera ? ["Camera", esc(c.meta.camera)] : null,
     c.quality && c.quality !== "ok" ? ["Text", `<span class="warn">${esc(c.quality.replace(/_/g, " "))}</span>${c.ocr === 1 ? " — waiting for OCR" : ""}`] : null,
+    c.ocr === 2 && c.meta?.ocr ? ["OCR", `${esc(c.meta.ocr.engine)} · ${c.meta.ocr.chars} characters · ${c.meta.ocr.ms} ms`] : null,
+    c.ocr === 3 ? ["OCR", `<span class="err">failed: ${esc(c.meta?.ocrError || "")}</span>`] : null,
     ["Status", esc(STATE[f.state] || f.state) + (f.err ? ` <span class="err">${esc(f.err)}</span>` : "")],
     c.sha ? ["SHA-256", `<span class="small muted">${esc(c.sha.toLowerCase())}</span>`] : null,
   ].filter(Boolean);
@@ -90,6 +92,7 @@ async function showFile(id) {
     <h1 dir="auto">${esc(name)}</h1>
     <div class="row" style="margin-bottom:12px"><a href="${src}" target="_blank" rel="noopener"><button>Open</button></a><a href="${src}?download"><button class="ghost">Download</button></a></div>
     ${preview ? `<div class="panel">${preview}</div>` : ""}
+    ${d.ocrText ? `<div class="panel"><h2>Text read by OCR</h2><pre class="text" dir="auto">${esc(d.ocrText)}</pre></div>` : ""}
     <div class="panel"><dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl></div>${copies}`;
 }
 

@@ -20,11 +20,18 @@ import { scanRoot, type ScanStats } from "../scan/scanner.ts";
 import { planBatch } from "../plan/planner.ts";
 import { ANALYZER_VERSION } from "../analyze/analyze.ts";
 import { extOf } from "../analyze/sniff.ts";
+import { OcrService, type OcrResult } from "../ocr/ocr.ts";
+import { assessText } from "../analyze/quality.ts";
+import { detectDocType, openingLines } from "../analyze/dtype.ts";
+import { headingFrom } from "../analyze/title.ts";
+import { indexText } from "../search/text.ts";
 
 interface Failure { job: Job; code: string; message: string }
+interface OcrOutcome { cid: number; result?: OcrResult; error?: string }
 
 export interface Counters {
   hashed: number; analyzed: number; duplicates: number; bytes: number; errors: number; planned: number;
+  ocrDone: number; ocrFailed: number; ocrPages: number; msOcr: number;
   /** Main-thread milliseconds per activity: the engine's own profile. */
   msDispatch: number; msDecide: number; msFlush: number; msPlan: number;
 }
@@ -48,8 +55,12 @@ export class Engine {
   private scanning: number | null = null;
   private lastWork = Date.now();
   readonly counters: Counters = {
-    hashed: 0, analyzed: 0, duplicates: 0, bytes: 0, errors: 0, planned: 0, msDispatch: 0, msDecide: 0, msFlush: 0, msPlan: 0,
+    hashed: 0, analyzed: 0, duplicates: 0, bytes: 0, errors: 0, planned: 0,
+    ocrDone: 0, ocrFailed: 0, ocrPages: 0, msOcr: 0, msDispatch: 0, msDecide: 0, msFlush: 0, msPlan: 0,
   };
+  ocr: OcrService | null = null;
+  private ocrInflight = new Set<number>();
+  private ocrOut: OcrOutcome[] = [];
   readonly startedAt = Date.now();
   onBusyChange: (busy: boolean) => void = () => {};
   private busy = false;
@@ -71,8 +82,10 @@ export class Engine {
       (r) => { this.done.push(r); this.kick(); },
       (job, code, message) => { this.failed.push({ job, code, message }); this.kick(); },
     );
+    // OCR is optional: without an engine, contents simply stay "waiting for OCR".
+    if (config.ocrWorkers > 0 && OcrService.available()) this.ocr = new OcrService(config.ocrWorkers);
     this.tick();
-    log.info("engine started", { workers: config.analyzeWorkers, roots: this.roots.size });
+    log.info("engine started", { workers: config.analyzeWorkers, ocrWorkers: this.ocr ? config.ocrWorkers : 0, roots: this.roots.size });
   }
 
   async stop() {
@@ -80,6 +93,8 @@ export class Engine {
     if (this.timer) clearTimeout(this.timer);
     await this.pool?.stop();
     this.flush(); // results that finished before the pool stopped are not lost
+    this.flushOcr();
+    this.ocr?.close();
     log.info("engine stopped");
   }
 
@@ -131,6 +146,8 @@ export class Engine {
           worked = true;
         }
       }
+      if (this.ocrOut.length) { this.flushOcr(); worked = true; }
+      worked = this.dispatchOcr() || worked;
       // Planning is batched: one big batch every 250 ms beats a small one per finished file.
       if (idlePool || now - this.lastPlan > 250) {
         this.lastPlan = now;
@@ -143,7 +160,7 @@ export class Engine {
     } catch (e) {
       log.error("engine tick failed", { error: (e as Error).stack });
     }
-    const active = worked || this.pool.busy > 0 || this.scanning != null;
+    const active = worked || this.pool.busy > 0 || (this.ocr?.busy ?? 0) > 0 || this.scanning != null;
     if (active) this.lastWork = Date.now();
     this.setBusy(active || Date.now() - this.lastWork < 60_000);
     // More work likely waiting: go again right away. Otherwise the pool's callbacks wake us;
@@ -238,6 +255,85 @@ export class Engine {
   private releaseSha(jobId: number) {
     const hex = this.jobSha.get(jobId);
     if (hex) { this.extracting.delete(hex); this.jobSha.delete(jobId); }
+  }
+
+  /**
+   * OCR runs per unique CONTENT, never per copy. Contents marked PENDING are picked
+   * through the small partial index contents_ocr, with any one readable file as the
+   * source. In-flight OCR lives only in memory: after a crash the row is still
+   * PENDING and simply runs again.
+   */
+  private dispatchOcr(): boolean {
+    const ocr = this.ocr;
+    if (!ocr || ocr.idle === 0) return false;
+    const rows = this.db.all<{ cid: number; kind: string; root: number; path: string }>(
+      `SELECT c.id AS cid, c.kind, f.root, f.path FROM contents c
+       JOIN files f ON f.id = (SELECT id FROM files WHERE content = c.id AND state IN (${S.IDENT}, ${S.DONE}) LIMIT 1)
+       WHERE c.ocr = ${OCR.PENDING} LIMIT ?`, ocr.idle + this.ocrInflight.size);
+    let sent = false;
+    for (const r of rows) {
+      if (ocr.idle === 0) break;
+      if (this.ocrInflight.has(r.cid)) continue;
+      const root = this.roots.get(r.root);
+      if (!root) continue;
+      this.ocrInflight.add(r.cid);
+      const abs = path.join(root, ...r.path.split("/"));
+      ocr.recognize(abs, r.kind === "pdf" ? "pdf" : "image")
+        .then((result) => this.ocrOut.push({ cid: r.cid, result }))
+        .catch((e: Error) => this.ocrOut.push({ cid: r.cid, error: e.message.slice(0, 300) }))
+        .finally(() => this.kick());
+      sent = true;
+    }
+    return sent;
+  }
+
+  /** Record OCR results: text, index, document type, language; then re-plan the content's files. */
+  private flushOcr() {
+    const out = this.ocrOut;
+    this.ocrOut = [];
+    if (!out.length) return;
+    const db = this.db;
+    db.tx(() => {
+      for (const o of out) {
+        this.ocrInflight.delete(o.cid);
+        const c = db.get<{ title: string | null; dtype: string | null; lang: string | null; meta: string | null; quality: string | null; kind: string }>(
+          "SELECT title, dtype, lang, meta, quality, kind FROM contents WHERE id = ?", o.cid);
+        if (!c) continue;
+        const meta = c.meta ? (JSON.parse(c.meta) as Record<string, unknown>) : {};
+        if (!o.result) {
+          this.counters.ocrFailed++;
+          meta.ocrError = o.error;
+          db.run(`UPDATE contents SET ocr = ${OCR.FAILED}, meta = ? WHERE id = ?`, JSON.stringify(meta), o.cid);
+          continue;
+        }
+        const r = o.result;
+        this.counters.ocrDone++;
+        this.counters.ocrPages += r.pages;
+        this.counters.msOcr += r.ms;
+        const text = r.text.slice(0, config.maxTextChars);
+        const quality = assessText(text);
+        if (text) db.run("INSERT INTO texts(content, src, body) VALUES (?, 'o', ?) ON CONFLICT(content, src) DO UPDATE SET body = excluded.body", o.cid, text);
+        // The index holds everything readable about the content: any text layer, plus OCR
+        // unless the OCR came back as noise.
+        const extracted = c.quality === "ok" ? db.get<{ body: string }>("SELECT body FROM texts WHERE content = ? AND src = 'x'", o.cid)?.body ?? "" : "";
+        const heading = (meta.heading as string | undefined) ?? (quality === "ok" ? headingFrom(text) ?? undefined : undefined);
+        const useful = quality === "ok" || quality === "too_short";
+        const body = indexText([c.title ?? "", heading ?? "", extracted, useful ? text : ""].join("\n"));
+        db.run("DELETE FROM fts_text WHERE rowid = ?", o.cid);
+        if (body.trim()) db.run("INSERT INTO fts_text(rowid, body) VALUES (?, ?)", o.cid, body);
+        let dtype = c.dtype;
+        if (!dtype && quality === "ok" && c.kind !== "sheet") {
+          const dt = detectDocType(`${heading ?? ""}\n${openingLines(text)}`, text.slice(0, 600), text);
+          if (dt) { dtype = dt.type; meta.dtypeMatched = dt.matched.slice(0, 6); }
+        }
+        if (heading) meta.heading = heading;
+        meta.ocr = { engine: r.engine, lang: r.lang, pages: r.pages, chars: text.length, quality, ms: r.ms };
+        db.run(`UPDATE contents SET ocr = ${OCR.DONE}, dtype = ?, lang = coalesce(lang, ?), meta = ? WHERE id = ?`,
+          dtype, r.lang, JSON.stringify(meta), o.cid);
+        // What the file is may have changed (a photo turned out to be an invoice): re-plan its copies.
+        db.run(`UPDATE files SET state = ${S.IDENT} WHERE content = ? AND state = ${S.DONE}`, o.cid);
+      }
+    });
   }
 
   /** Write every finished result in one transaction. */

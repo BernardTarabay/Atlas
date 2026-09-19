@@ -1,16 +1,18 @@
 # Atlas V2
 
 A local engine that scans your folders, reads every file once, deduplicates by
-SHA-256, extracts text and metadata, and organizes a virtual library you can
-browse and search from this machine or your phone. Nothing is moved, renamed or
-deleted: V2 runs in **preview mode**. Design record: [docs/14](../docs/14-v2-audit.md),
-[15](../docs/15-v2-decisions.md), [16](../docs/16-v2-revisions-and-research.md).
+SHA-256, extracts text and metadata, reads scans and photos with local OCR, and
+organizes a virtual library you can browse and search from this machine or your
+phone. Nothing is moved, renamed or deleted: V2 runs in **preview mode**. Design
+record: [docs/14](../docs/14-v2-audit.md), [15](../docs/15-v2-decisions.md),
+[16](../docs/16-v2-revisions-and-research.md), [17](../docs/17-ocr.md).
 
 ```
 AtlasService.exe (Windows service: boot start, restart, keep-awake, job object)
   └─ node src/main.ts ── one process
        scanner ── bin/atlas-walk.exe (bulk directory reads: size, times, attributes, file IDs)
        engine  ── per-file state in SQLite; bounded worker threads read+hash+analyze each file once
+       ocr     ── bin/atlas-winrt.exe (Windows OCR + PDF rendering), per unique content
        planner ── deterministic rules → one library path per unique content
        http    ── 127.0.0.1:7717: UI + API (remote access via `tailscale serve`)
 ```
@@ -69,12 +71,14 @@ row below `DONE` is simply picked up again. Everything is idempotent.
 ## Tests and benchmarks
 
 ```bash
-npm test                          # unit + integration (pipeline, HTTP security)
+npm test                          # unit + integration (pipeline, OCR, HTTP security)
 npm run typecheck
 npm run bench:gen -- --files 5000 # synthetic corpus in ~/AtlasBench (outside the repo)
 npm run bench                     # scan → hash → analyze → plan, with a main-thread profile
-node bench/crash.ts               # 7 hard kills, then proves the result equals a clean run
-node bench/scan.ts "C:\Some\Big\Folder"
+npm run bench:crash               # 7 hard kills, then proves the result equals a clean run
+npm run bench:scan -- "C:\Some\Big\Folder"
+npm run bench:ocr:corpus          # render the ground-truth OCR set with Edge (~7 min)
+npm run bench:ocr                 # OCR engines vs ground truth, in 3 languages
 ```
 
 Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB):
@@ -87,12 +91,28 @@ Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB)
 | engine startup | ~56 ms |
 | crash recovery | 11/11 invariants after 7 hard kills; resumes < 1 s after restart |
 | search (EN/AR/FR) | 9–18 ms |
+| OCR (Windows OCR, 4 in parallel) | ~20 images/s; 97–99% word recall on Latin, 66–97% on Arabic ([docs/17](../docs/17-ocr.md)) |
+| PDF text layers | Arabic recall 94%, French/English 100% |
 
 The synthetic corpus measures the machinery. Representative numbers (real PDFs,
 photos, scans, OCR) come from the real corpus in the next milestone.
 
+## OCR
+
+Scans, photographs of documents and image-only PDFs are read locally by Windows
+OCR through `bin/atlas-winrt.exe`; PDF pages are rendered by Windows too, so there
+is nothing to install and nothing GPL to ship. The engine was chosen by measurement
+against a rendered ground-truth set in English, Arabic and French — see
+[docs/17-ocr.md](../docs/17-ocr.md) for the numbers and the decisions that came out
+of them.
+
+OCR runs per unique content on its own bounded pool, so it never starves reading
+and hashing, and its state lives on the content row: a crash leaves it PENDING and
+it runs again. `ATLAS_OCR_WORKERS=0` turns it off; without the helper, contents
+simply stay "waiting for OCR".
+
 ## Not built yet
 
-OCR (Tesseract vs Windows OCR benchmark), thumbnails, local semantic search,
-mirror mode (links), journaled apply, the AI gateway, the control plane
-(updates, heartbeat, logs).
+Thumbnails, local semantic search, mirror mode (links), journaled apply, the AI
+gateway, the control plane (updates, heartbeat, logs), and re-analysis on demand
+(today a better extractor or dictionary only applies to files that are read again).

@@ -26,7 +26,8 @@ export interface Plan { folder: string; name: string; rule: string }
 const TYPE_SINGULAR: Record<DocType, string> = {
   invoice: "Invoice", receipt: "Receipt", contract: "Contract", statement: "Bank statement", payslip: "Payslip",
   letter: "Letter", cv: "CV", certificate: "Certificate", report: "Report", minutes: "Minutes", medical: "Medical",
-  tax: "Tax", identity: "Identity document", quote: "Quote", order: "Order", insurance: "Insurance",
+  tax: "Tax", identity: "Identity document", registration: "Registration form", quote: "Quote", order: "Order",
+  insurance: "Insurance",
 };
 
 const SCREENSHOT = /^(screenshot|screen shot|capture d['’]?\s?[ée]cran|scr[_-]|screenshot_)/i;
@@ -47,6 +48,13 @@ export function plan(f: PlanInput): Plan {
   const best = meta ?? nameD ?? { t: fsT, wall: false, hasTime: false };
   const d = dateParts(best.t, best.wall);
   const keep = joinName(stem, ext);
+
+  // A photo of a document IS that document: an invoice photographed on a phone belongs with
+  // the invoices. Only when OCR read it well enough to recognize a type; screenshots stay screenshots.
+  if (kind === "image" && f.dtype && !SCREENSHOT.test(name)) {
+    const typ = f.dtype as DocType;
+    return { folder: `Documents/${DOC_TYPE_LABEL[typ]}/${d.year}`, name: isGenericStem(stem) ? joinName(`${d.day} ${TYPE_SINGULAR[typ]}`, ext) : keep, rule: `doc-${typ}-photo` };
+  }
 
   if (kind === "image" || kind === "video") {
     const shot = meta?.wall ? meta : nameD?.hasTime ? nameD : null; // a real capture time
@@ -74,7 +82,7 @@ export function plan(f: PlanInput): Plan {
   if (kind === "pdf" || kind === "doc" || kind === "sheet" || kind === "slides" || kind === "text") {
     if (kind === "text" && CODE_EXT.has(ext.toLowerCase())) return { folder: `Other/Code and data`, name: keep, rule: "code" };
     // The filename a person chose is strong evidence of type too ("Facture EDF mars.pdf").
-    const typ = (f.dtype as DocType | null) ?? detectDocType(stem.replace(/[_-]+/g, " "), "")?.type ?? null;
+    const typ = (f.dtype as DocType | null) ?? detectDocType(stem.replace(/[_-]+/g, " "), "", "")?.type ?? null;
     const title = f.title && !f.titleShared ? f.title : null;
     const docName = () => {
       if (!isGenericStem(stem)) return keep;

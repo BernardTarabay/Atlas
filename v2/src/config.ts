@@ -29,6 +29,8 @@ export const config = {
   maxParseBytes: num(env.ATLAS_MAX_PARSE_MB, 256) * 1024 * 1024,
   /** Text kept per content for display/snippets; the index sees the same text. */
   maxTextChars: num(env.ATLAS_MAX_TEXT_CHARS, 1_000_000),
+  /** Concurrent OCR engines (Windows OCR helpers). 0 disables OCR. */
+  ocrWorkers: num(env.ATLAS_OCR_WORKERS, 2),
   /** A worker job that runs longer than this is killed (hung parser) and the file is retried. */
   jobTimeoutMs: num(env.ATLAS_JOB_TIMEOUT_S, 180) * 1000,
   maxTries: 3,

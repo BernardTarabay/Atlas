@@ -65,10 +65,11 @@ export function search(db: Db, q: string, opts: { kind?: string; limit?: number 
   return { hits, ms: Math.round(performance.now() - t0) };
 }
 
-/** The first line of the original text whose normalized form contains a query term. */
+/** The first line of the original text (text layer first, then OCR) whose normalized form contains a query term. */
 function snippet(db: Db, contentId: number, terms: string[]): string | null {
-  const row = db.get<{ body: string }>("SELECT substr(body, 1, 50000) AS body FROM texts WHERE content = ? AND src = 'x'", contentId);
-  if (!row) return null;
+  const row = db.get<{ body: string }>(
+    "SELECT group_concat(substr(body, 1, 50000), char(10)) AS body FROM (SELECT body FROM texts WHERE content = ? ORDER BY src DESC)", contentId);
+  if (!row?.body) return null;
   for (const line of row.body.split(/\r?\n/)) {
     if (line.length < 3) continue;
     const words = new Set(normalize(line).split(" ").map(stem));
