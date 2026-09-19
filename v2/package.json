@@ -1,0 +1,26 @@
+{
+  "name": "atlas",
+  "version": "2.0.0-dev",
+  "private": true,
+  "type": "module",
+  "description": "Atlas V2: a local, fast, recoverable file organization engine",
+  "engines": {
+    "node": ">=24.2"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "build:native": "node --disable-warning=ExperimentalWarning scripts/build-native.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "bench:gen": "node --disable-warning=ExperimentalWarning bench/gen.ts",
+    "bench": "node --disable-warning=ExperimentalWarning bench/run.ts"
+  },
+  "dependencies": {
+    "exifr": "7.1.3",
+    "pdfjs-dist": "4.10.38"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Atlas",
+  "short_name": "Atlas",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111418",
+  "theme_color": "#2f6fdb",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
