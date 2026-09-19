@@ -19,7 +19,7 @@ async function handle({ fileId, languages = undefined, force = false }) {
 
   // Returned rather than thrown even when OCR did not succeed.
   //
-  // Throwing would hand the job to BullMQ's retry ladder, which is the wrong
+  // Throwing would hand the job to the queue's retry ladder, which is the wrong
   // response to every failure this stage actually has: a missing engine, a
   // missing language pack, and a PDF that cannot be rasterised are all fixed
   // by installing something, not by trying again in five seconds. ocrService

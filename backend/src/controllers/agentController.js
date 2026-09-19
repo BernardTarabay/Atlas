@@ -11,7 +11,9 @@ const { parsePagination } = require("../utils/pagination");
 
 async function list(req, res) {
   const { limit, offset } = parsePagination(req.query);
-  const agents = await filesystemAgentRepository.list({ limit, offset });
+  // listWithStatus, not list: the stored `status` column goes stale the moment
+  // an agent stops beating and nothing corrects it. See the repository.
+  const agents = await filesystemAgentRepository.listWithStatus({ limit, offset });
   // api_key_hash must never leave the server, even to an admin.
   res.json(agents.map(({ api_key_hash, ...rest }) => rest));
 }

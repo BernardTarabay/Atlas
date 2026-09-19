@@ -4,10 +4,11 @@
 // WHY IT RUNS THE REAL QUEUE INSTEAD OF CALLING PROCESSORS DIRECTLY
 //
 // Calling each processor in a loop would give tidier numbers and would be a
-// lie: in production every stage hands off through BullMQ, and each handoff
-// costs a processing_jobs INSERT plus a Redis round-trip. At four fan-out
-// jobs per file that overhead is a real part of the answer to "how long will
-// the client's drive take", so the pilot pays it too.
+// lie: in production every stage hands off through the queue, and each handoff
+// costs a processing_jobs INSERT plus the claim query the worker runs against
+// it (SELECT ... FOR UPDATE SKIP LOCKED). At four fan-out jobs per file that
+// overhead is a real part of the answer to "how long will the client's drive
+// take", so the pilot pays it too.
 //
 // It spawns its OWN worker with AI classification forced off. Two reasons:
 // the live worker would race this one for jobs and make the timings
@@ -75,8 +76,7 @@ async function teardown() {
     // Two passes on purpose. Scoping by storage_location_id alone misses
     // every job enqueued without one -- generate_names is enqueued with an
     // empty options object, so its rows have a NULL location and survived
-    // the first cleanup, sitting "queued" forever in the Jobs dock with no
-    // BullMQ job behind them.
+    // the first cleanup, sitting "queued" forever in the Jobs dock.
     await q(`DELETE FROM processing_jobs WHERE storage_location_id=$1`, [loc.id]);
     await q(`DELETE FROM processing_jobs WHERE payload->>'fileId' IN (SELECT id::text FROM files WHERE storage_location_id=$1)`, [loc.id]);
     await q(`DELETE FROM filesystem_scans        WHERE storage_location_id=$1`, [loc.id]);
@@ -105,7 +105,7 @@ async function activeWorkersElsewhere() {
   // Each worker holds a shared advisory lock for as long as it lives
   // (pgQueue.registerWorker), so counting holders in pg_locks sees the live
   // worker process even though it is not a child of this one -- the same
-  // question BullMQ's getWorkers() answered against its Redis registry.
+  // question the old BullMQ queue answered from its own worker registry.
   return pgQueue.countActiveWorkers();
 }
 

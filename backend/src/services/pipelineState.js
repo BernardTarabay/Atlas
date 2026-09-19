@@ -120,7 +120,7 @@ function canTransition(from, to) {
  *
  * An illegal transition is logged and IGNORED rather than thrown. This is
  * called from job processors, and the alternative -- throwing -- would fail
- * the job, which BullMQ then retries, which attempts the same illegal
+ * the job, which the queue then retries, which attempts the same illegal
  * transition again. A state machine that can crash the pipeline it exists to
  * describe is worse than one that occasionally declines a move; the log line
  * is what makes the decline visible.

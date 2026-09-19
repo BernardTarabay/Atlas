@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
-  LayoutDashboard, FileText, FolderTree, LifeBuoy, Images, HardDrive, Inbox, ScrollText, Users, Boxes, Menu, X, MoreHorizontal,
-  LogOut, User as UserIcon, ChevronDown, MonitorSmartphone, Stamp,
+  LayoutDashboard, FileText, FolderTree, FileWarning, Images, HardDrive, Inbox, ScrollText, Users, Boxes, Menu, X, MoreHorizontal,
+  LogOut, User as UserIcon, ChevronDown, MonitorSmartphone,
   GripVertical, Pin, PinOff, RotateCcw,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { Portal } from "./Portal";
 import { usePolling } from "../hooks/useApiData";
 import { api } from "../services/apiClient";
 import { NAV_LAYOUT_KEY, resolveNav, toStored, pinAt, unpin, reorder } from "../lib/navLayout";
@@ -16,7 +17,7 @@ import { NAV_LAYOUT_KEY, resolveNav, toStored, pinAt, unpin, reorder } from "../
  * The brief said to evaluate rather than assume, so: the sidebar was 256
  * fixed pixels of chrome, permanently, for eleven links. Every page in this
  * app is a wide table or a two-pane browser -- Files, Subjects, Duplicates,
- * Triage -- and on a 1366px laptop those 256px were roughly a fifth of the
+ * Failed -- and on a 1366px laptop those 256px were roughly a fifth of the
  * horizontal space, spent on a list the user reads once and then navigates by
  * muscle memory. The Subjects page in particular puts a tree beside a file
  * list beside a detail panel, and it was the cramped one.
@@ -48,15 +49,12 @@ import { NAV_LAYOUT_KEY, resolveNav, toStored, pinAt, unpin, reorder } from "../
 const PRIMARY = [
   // The Library leads because it is what this application is for. Everything
   // else here is either a narrower lens on the same documents (Files, Types)
-  // or a queue of work about them (Triage, Duplicates).
+  // or a queue of work about them (Failed, Duplicates).
   { to: "/", label: "Library", icon: FolderTree, end: true, defaultPrimary: true },
   { to: "/files", label: "Files", icon: FileText, defaultPrimary: true },
-  // Beside the Library because they are a pair, not a hierarchy: these are the
-  // two independent classification axes (docs/03-taxonomy.md §3.4), and
-  // putting the second one behind "More" while the first is primary is how
-  // half a feature quietly stops existing.
-  { to: "/document-types", label: "Types", icon: Stamp, defaultPrimary: true },
-  { to: "/triage", label: "Triage", icon: LifeBuoy, badgeKey: "triage", defaultPrimary: true },
+  // The API behind this is still /triage; see the header of FailedPage.jsx
+  // for why the rename stops at the UI.
+  { to: "/failed", label: "Failed", icon: FileWarning, badgeKey: "failed", defaultPrimary: true },
   { to: "/photos", label: "Photos", icon: Images, badgeKey: "photos", defaultPrimary: true },
 ];
 
@@ -118,12 +116,12 @@ export function TopNav() {
       Promise.all([
         api.get("/triage/summary").catch(() => null),
         api.get("/photos/summary").catch(() => null),
-      ]).then(([triage, photos]) => ({ triage, photos })),
+      ]).then(([failed, photos]) => ({ failed, photos })),
     BADGE_POLL_MS
   );
 
   const badges = {
-    triage: badgeData?.triage?.total || 0,
+    failed: badgeData?.failed?.total || 0,
     // Only the ones actually waiting on a person -- a count that included
     // every already-read photo would sit permanently at four figures and mean
     // nothing.
@@ -236,14 +234,41 @@ export function TopNav() {
   const customised = pinned !== null;
 
   return (
-    <header className="sticky top-0 z-40 shrink-0 border-b border-line bg-base-900/70 backdrop-blur-xl">
-      <div className="mx-auto flex h-14 w-full max-w-[1600px] items-center gap-2 px-4 sm:px-6">
+    // A PILL, NOT A BAR.
+    //
+    // `.floating-bar` is the surface the Library's selection toolbar wears
+    // (index.css) -- same radius, same brand hairline, same overlay shadow,
+    // same translucent fill over a blur. It is one class in one place
+    // precisely so these cannot drift apart: "the exact same as" is a
+    // promise that only a shared definition can keep.
+    //
+    // `w-auto` and no `max-w-[1600px]`: a floating pill is sized by what is
+    // in it. The old bar spanned the viewport because it had a bottom border
+    // to draw; this one has nothing to span. It is capped at the viewport
+    // less its margins so a wide arrangement of pinned items scrolls inside
+    // the pill rather than pushing it off-centre.
+    //
+    // COMPACT ON A PHONE, UNCHANGED ON A DESKTOP: still 48px below sm and
+    // 56px above it. Eight pixels is roughly an eighth of a table row, and on
+    // the screen whose entire job is showing a file inventory, chrome should
+    // give height back to the list wherever it can without shrinking a touch
+    // target.
+    <header className="floating-bar pointer-events-auto max-w-[calc(100vw-1.5rem)]">
+      <div className="flex h-12 items-center gap-2 px-2 sm:h-14 sm:px-3">
         {/* Brand */}
-        <NavLink to="/" className="flex shrink-0 items-center gap-2.5" aria-label="Atlas home">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-brand-400 to-brand-700 shadow-glow">
-            <Boxes size={16} className="text-white" aria-hidden="true" />
+        {/* ONE saturated shape in this bar, not two.
+            The brand tile and the account avatar were both brand-400->700
+            gradients, sitting a few pixels apart with almost nothing between
+            them on a 375px screen -- which is what made the header read as
+            heavy. The avatar is gone below md (the drawer owns the account
+            now), so this is the only accent left and it can afford to be
+            quieter: no glow shadow, and the wordmark shows at every width
+            because there is finally room for it. */}
+        <NavLink to="/" className="flex shrink-0 items-center gap-2" aria-label="Atlas home">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-700 sm:h-8 sm:w-8 sm:rounded-xl sm:shadow-glow">
+            <Boxes size={15} className="text-white" aria-hidden="true" />
           </div>
-          <span className="hidden text-sm font-semibold text-base-50 sm:block">Atlas</span>
+          <span className="text-sm font-semibold text-base-50">Atlas</span>
         </NavLink>
 
         {/* Primary destinations. Hidden below md, where the drawer takes over. */}
@@ -402,10 +427,18 @@ export function TopNav() {
           )}
         </nav>
 
-        <div className="flex-1 md:hidden" />
+        {/* Below md the pill holds only the brand and the drawer trigger, and
+            a bare `flex-1` between them collapses to nothing in a
+            shrink-wrapped pill -- leaving the two touching. A minimum keeps
+            the pill a pill rather than two buttons in a box. */}
+        <div className="w-10 flex-1 md:hidden" />
 
-        {/* Account */}
-        <div className="relative shrink-0">
+        {/* Account -- DESKTOP ONLY.
+            Below md the drawer carries the identity and Sign out, so keeping
+            this here would be a second route to the same two things, drawn as
+            a popover shaped for a pointer, costing a second gradient avatar in
+            the bar. One way to reach the account per form factor. */}
+        <div className="relative hidden shrink-0 md:block">
           <button
             type="button"
             onClick={() => setAccountOpen((v) => !v)}
@@ -447,17 +480,28 @@ export function TopNav() {
           onClick={() => setDrawerOpen(true)}
           aria-label="Open navigation menu"
           aria-controls="app-nav-drawer"
-          className="rounded-xl p-2 text-base-300 hover:bg-base-850 hover:text-base-100 md:hidden"
+          // 44x44. `p-2` around an 18px icon is a 34px target, which is under
+          // every platform's minimum and is felt as "I have to aim at it" long
+          // before anyone can say why.
+          className="-mr-1 flex h-11 w-11 items-center justify-center rounded-xl text-base-300 hover:bg-base-850 hover:text-base-100 md:hidden"
         >
-          <Menu size={18} aria-hidden="true" />
+          <Menu size={20} aria-hidden="true" />
         </button>
       </div>
 
       {/* Mobile drawer.
           Rendered only when open rather than translated off-screen: an element
           that is not in the tree cannot be tabbed into, which an off-screen
-          one still can. Same reasoning the old sidebar arrived at. */}
+          one still can. Same reasoning the old sidebar arrived at.
+
+          THROUGH A PORTAL, and that part is load-bearing. This markup sits
+          inside <header>, which carries `backdrop-blur-xl` -- and
+          backdrop-filter creates a containing block, so `fixed inset-y-0` was
+          resolving against a 56px bar rather than the viewport. The drawer
+          opened at the height of the header and clipped, which on a phone is
+          indistinguishable from the button being dead. See components/Portal. */}
       {drawerOpen && (
+        <Portal>
         <div className="md:hidden">
           <div
             className="fixed inset-0 z-40 bg-scrim/60 backdrop-blur-sm"
@@ -493,8 +537,38 @@ export function TopNav() {
                 <Badge count={item.badgeKey ? badges[item.badgeKey] : 0} />
               </NavLink>
             ))}
+
+            {/* THE ACCOUNT, AND THE WAY OUT.
+                This drawer listed destinations and nothing else, while the
+                account menu -- the only place Sign out existed -- was in a
+                container marked `hidden md:flex`. So on a phone there was
+                literally no way to sign out of the application. Not hidden
+                behind a gesture; absent.
+                It goes at the BOTTOM, after `mt-auto` pushes it there, because
+                signing out is the least frequent thing anyone opens this
+                drawer to do and should never sit under a thumb reaching for
+                Files. */}
+            <div className="mt-auto border-t border-line pt-2">
+              <div className="flex items-center gap-2.5 px-2 py-2">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-400 to-brand-700 text-xs font-semibold text-white">
+                  {(user?.full_name || user?.email || "?").slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-medium text-base-100">{user?.full_name || user?.email}</p>
+                  <p className="truncate text-[10px] text-base-400">{user?.roles?.join(", ")}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setDrawerOpen(false); logout(); }}
+                className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-rose-700 hover:bg-rose-500/10"
+              >
+                <LogOut size={16} aria-hidden="true" /> Sign out
+              </button>
+            </div>
           </nav>
         </div>
+        </Portal>
       )}
     </header>
   );

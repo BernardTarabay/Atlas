@@ -109,7 +109,7 @@ function actionsFor(row) {
   // What resolves these files is a DECISION, not another pass: put it in a
   // folder, or get rid of it. So those are what the queue offers. The retry
   // endpoint still exists for the genuinely transient case (a stage that died
-  // on a Redis blip), and the Jobs page is where that belongs -- it is a
+  // on a transient fault), and the Jobs page is where that belongs -- it is a
   // property of the failed job, not of the document.
   const actions = ["inspect", "move", "delete"];
   if (!gone) {

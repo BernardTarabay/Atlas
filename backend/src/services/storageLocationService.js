@@ -23,6 +23,7 @@ const filesystemScanRepository = require("../repositories/filesystemScanReposito
 const { enqueueJob } = require("../queues");
 const { ValidationError } = require("../validators/validationError");
 const { requireOwner, NotOwnedError } = require("../repositories/ownership");
+const pathOverlap = require("../utils/pathOverlap");
 const { JobType, StorageType, StorageAccessMode } = require("../models/enums");
 
 class NotFoundError extends Error {
@@ -112,6 +113,64 @@ function normalizeRootPath(rootPath) {
 }
 
 /**
+ * Refuse a folder that NESTS with one this user already has registered.
+ *
+ * WHAT THIS CATCHES THAT THE EQUALITY CHECK DOES NOT
+ *
+ * `findByRootPath` catches the same folder added twice. Nesting is the case it
+ * misses, and it is the more damaging one, because nothing about it looks
+ * wrong from the UI: two locations with different names and different paths,
+ * both scanning happily, both indexing the same bytes under two location ids.
+ * Every file beneath the inner folder then exists twice, with two independent
+ * pipelines, two AI bills, and a duplicate group pairing each file with itself.
+ *
+ * TWO DELIBERATE NON-REJECTIONS
+ *
+ * The SAME path is passed through rather than refused. `remove()` only
+ * deactivates, so re-registering a folder is a supported and important flow --
+ * it is what lets an already-ingested tree keep its file identities instead of
+ * being re-ingested as duplicates. That case belongs to the reactivation
+ * branch below, so this check steps aside for it and lets the more specific
+ * handling win.
+ *
+ * Overlapping MIRROR_ROOT is also allowed. Indexing the organized tree is a
+ * reasonable thing to want, and the real hazard there is WATCHING it -- a write
+ * queues a scan which causes the next write. That is handled where it belongs,
+ * in jobs/storageWatcher.js, which withholds the watch and leaves the periodic
+ * sweep to cover the folder. Refusing registration outright would take away a
+ * legitimate capability to solve a problem that is already solved elsewhere.
+ *
+ * Scoped to ACTIVE locations only: an inactive one is neither watched nor
+ * scanned, so nothing beneath it is being double-indexed today.
+ */
+async function assertDoesNotOverlapExisting(rootPath, actorUserId) {
+  const active = await storageLocationRepository.listActive(actorUserId);
+
+  for (const location of active) {
+    const relation = pathOverlap.relationship(location.root_path, rootPath);
+    // null      -- unrelated, fine.
+    // "same"    -- the reactivation flow's business, not this check's.
+    if (!relation || relation === "same") continue;
+
+    // Phrased from the NEW folder's point of view, because that is the one the
+    // user just chose and the one they have to change. Naming the other
+    // location and its path means the message is actionable without going and
+    // looking it up.
+    const detail =
+      relation === "inside"
+        ? `it is inside "${location.name}" (${location.root_path}), which is already registered`
+        : `it contains "${location.name}" (${location.root_path}), which is already registered`;
+
+    throw new ValidationError(
+      `That folder cannot be registered because ${detail}. ` +
+      "Two registered folders that overlap index the same files twice -- once under each " +
+      "location -- which doubles processing, doubles AI cost, and reports every file as a " +
+      "duplicate of itself. Register the outer folder only, or remove the other location first."
+    );
+  }
+}
+
+/**
  * Register a Storage Location -- or re-activate the one already registered
  * for this folder BY THIS USER.
  *
@@ -165,6 +224,23 @@ async function create(
     const serverDevice = await deviceRepository.ensureServerDevice(actorUserId);
     resolvedDeviceId = serverDevice.id;
   }
+
+  // OVERLAP, NOT JUST EQUALITY.
+  //
+  // findByRootPath below catches the same folder registered twice. It does not
+  // catch a folder registered INSIDE one that is already registered, and that
+  // is the case that actually caused damage here.
+  //
+  // Two failures come out of an overlap, and they are separate. Both locations
+  // index the same bytes under two location ids, so every file beneath the
+  // inner folder exists twice with two independent pipelines, two sets of AI
+  // costs, and a duplicate group joining them to themselves. And if either
+  // folder is one this application writes into -- the mirror -- watching it
+  // turns each write into a scan and each scan into the next write.
+  //
+  // Checked before the equality case so the more specific message wins, and
+  // scoped to the caller's own locations, matching every other read here.
+  await assertDoesNotOverlapExisting(rootPath, actorUserId);
 
   const existing = await storageLocationRepository.findByRootPath(rootPath, actorUserId);
   if (existing) {

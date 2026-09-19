@@ -16,6 +16,12 @@ router.use(authenticate, requirePermission("document.view"));
 router.get("/", asyncHandler(controller.list));
 // Before "/:id/..." so the literal segment is never read as a subject id.
 router.get("/recent", asyncHandler(controller.recentDestinations));
+// Literal segments, before "/:id/..." -- or "unfiled" is read as a subject id.
+router.get("/unfiled/summary", asyncHandler(controller.unfiledSummary));
+// Creating folders IS a structural change to the taxonomy, so it sits behind
+// the same permission as creating one by hand. That the author is the
+// assistant does not lower the bar.
+router.post("/unfiled/organize", requirePermission("subject.manage"), asyncHandler(controller.organizeUnfiled));
 router.get("/:id/documents", asyncHandler(controller.documentsForSubject));
 // The total for the list above, so a pager can say "of 62" rather than only
 // "page 3". Separate request for the same reason GET /files/count is separate

@@ -65,7 +65,7 @@ async function cleanup() {
   await p.end(); await closeAllQueues();
 }
 
-/** A processing_jobs row in a chosen state, without going through Redis. */
+/** A processing_jobs row in a chosen state, without going through the queue. */
 async function fakeJob(fileId, { jobType, status, finishedMinutesAgo = null, error = null, payload = null }) {
   const { rows } = await p.query(
     `INSERT INTO processing_jobs (job_type, status, payload, error_message, finished_at)
@@ -140,7 +140,7 @@ async function fakeJob(fileId, { jobType, status, finishedMinutesAgo = null, err
     jobType: "classify", status: "failed", finishedMinutesAgo: 60, error: "Gemini request timed out",
   });
 
-  // Inside BullMQ's retry ladder: still failed in the table, but about to be
+  // Inside the retry ladder: still failed in the table, but about to be
   // attempted again. Listing it would be a false alarm.
   await setHash("job-failed-just-now.pdf");
   await fileContentRepository.upsert(idOf("job-failed-just-now.pdf"),

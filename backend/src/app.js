@@ -9,6 +9,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const pgQueue = require("./queues/pgQueue");
 const fileRecovery = require("./services/fileRecovery");
+const pipelineHealth = require("./services/pipelineHealth");
 const db = require("./config/database");
 const env = require("./config/env");
 const { authLimiter, apiLimiter } = require("./middleware/rateLimiters");
@@ -18,7 +19,6 @@ const userRoutes = require("./routes/userRoutes");
 const roleRoutes = require("./routes/roleRoutes");
 const storageLocationRoutes = require("./routes/storageLocationRoutes");
 const fileRoutes = require("./routes/fileRoutes");
-const documentRoutes = require("./routes/documentRoutes");
 const documentTypeRoutes = require("./routes/documentTypeRoutes");
 const subjectRoutes = require("./routes/subjectRoutes");
 const duplicateGroupRoutes = require("./routes/duplicateGroupRoutes");
@@ -147,11 +147,44 @@ app.use(
   })
 );
 
-// Explicit limit rather than body-parser's silent 100kb default, so the
-// ceiling is a decision on the record. The largest legitimate body here is an
-// assistant chat turn carrying page context (bounded in aiChatController);
-// nothing in this API uploads bytes.
-app.use(express.json({ limit: "1mb" }));
+// BODY SIZE: 1MB EVERYWHERE, WITH EXACTLY ONE EXCEPTION.
+//
+// The old comment here read "nothing in this API uploads bytes", and it was
+// true when it was written and has been false ever since the desktop agent
+// gained `read_file`. The agent reads a file, base64-encodes it, and POSTs it
+// as `result.contentBase64` to /api/agents/operations/:id/result --
+// services/storage/agentStorageService.js decodes it straight back into a
+// Buffer. Bytes have been travelling through this JSON parser the whole time.
+//
+// The consequence was a ceiling nobody had chosen. Base64 inflates by 4/3, so
+// a 1MB body cap rejects any file over roughly 750KB with a 413 -- while the
+// agent's own guard advertises 64MB and never gets to fire. Two limits, two
+// orders of magnitude apart, and the stricter one was accidental.
+//
+// WHY THE LARGE LIMIT IS SCOPED TO ONE ROUTE RATHER THAN RAISED GLOBALLY
+//
+// Raising this line to a media-sized limit is the obvious fix and it is the
+// wrong shape. `express.json` here runs for EVERY request, so a global 280mb
+// would let any caller -- including an unauthenticated one hitting
+// /api/auth/login -- make this process buffer 280MB of JSON before a single
+// line of route code runs. That converts a bug about file transfers into a
+// denial-of-service ceiling for the whole API.
+//
+// So the general limit stays where it is, and the one endpoint that genuinely
+// carries bytes gets its own parser, mounted AFTER its authentication check
+// (routes/agentRoutes.js). An anonymous caller still cannot buffer more than
+// 1MB anywhere.
+//
+// This middleware therefore has to STEP ASIDE for that path rather than
+// merely be smaller than it: it runs first, so without the skip it would 413
+// the large body before the route-scoped parser ever saw it.
+const AGENT_RESULT_BODY_PATH = /^\/api\/agents\/operations\/[^/]+\/result\/?$/;
+
+const generalJson = express.json({ limit: "1mb" });
+
+app.use((req, res, next) =>
+  AGENT_RESULT_BODY_PATH.test(req.path) ? next() : generalJson(req, res, next)
+);
 
 // HEALTH, INCLUDING THE QUEUE.
 //
@@ -176,6 +209,7 @@ app.get("/api/health", async (req, res) => {
 
   let queue = null;
   let files = null;
+  let ratios = null;
   const warnings = [];
   if (dbConnected) {
     try {
@@ -210,6 +244,24 @@ app.get("/api/health", async (req, res) => {
     } catch (err) {
       warnings.push(`Could not read file recovery health: ${err.message}`);
     }
+
+    // IS THE PIPELINE DOING THE RIGHT WORK, not merely doing work.
+    //
+    // Everything above this point measures depth or rate, and answers "has the
+    // system stopped". None of it can see a system that is extremely busy
+    // achieving nothing -- which is precisely what happened for thirty-seven
+    // hours while this endpoint answered "ok": a scan loop re-queued the same
+    // 1,426 files 1,379 times each, and the queue stayed near-empty the whole
+    // time because it drained as fast as it filled.
+    //
+    // services/pipelineHealth.js adds the ratios that catch that. See its
+    // header for why a ratio is the only shape of signal that can.
+    try {
+      ratios = await pipelineHealth.ratios();
+      warnings.push(...ratios.warnings);
+    } catch (err) {
+      warnings.push(`Could not read pipeline ratios: ${err.message}`);
+    }
   } else {
     warnings.push("Database unavailable; the queue cannot be reached either.");
   }
@@ -226,6 +278,12 @@ app.get("/api/health", async (req, res) => {
     // should trend to zero on its own, the second should not.
     files: files ? { awaitingRecovery: files.retryable, failedTerminal: files.terminal,
                      oldestAwaitingSeconds: files.oldestRetryableSeconds } : null,
+    // Work done against work that should be needed. `worstFile` is the one
+    // that matters: a single stage re-run far more often than any retry path
+    // allows is a loop, whatever the queue depth says.
+    pipeline: ratios ? { jobs24h: ratios.jobs24h, jobsPerFile: ratios.jobsPerFile,
+                         worstFile: ratios.worstFile, worstLocation: ratios.worstLocation,
+                         operationalBytesPerFile: ratios.operationalBytesPerFile } : null,
     warnings,
   });
 });
@@ -236,7 +294,6 @@ app.use("/api/users", apiLimiter, userRoutes);
 app.use("/api/roles", apiLimiter, roleRoutes);
 app.use("/api/storage-locations", apiLimiter, storageLocationRoutes);
 app.use("/api/files", apiLimiter, fileRoutes);
-app.use("/api/documents", apiLimiter, documentRoutes);
 app.use("/api/document-types", apiLimiter, documentTypeRoutes);
 app.use("/api/subjects", apiLimiter, subjectRoutes);
 app.use("/api/duplicate-groups", apiLimiter, duplicateGroupRoutes);

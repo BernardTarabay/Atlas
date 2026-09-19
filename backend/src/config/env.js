@@ -74,6 +74,100 @@ const env = {
     retentionDays: Math.max(1, parseInt(process.env.TRASH_RETENTION_DAYS || "30", 10) || 30),
   },
 
+  /**
+   * How long the record of WORK is kept, as opposed to the work's results.
+   *
+   * `processing_jobs` and `audit_logs` are the only two tables that grow with
+   * how many times something happened rather than with how many documents
+   * exist, and nothing deleted from either -- 5.2 GB of a 5.4 GB database on
+   * this installation, behind a 48 MB library. See migration 045.
+   *
+   * These are windows in which a question is still answerable, not tuning
+   * knobs. Completed jobs answer "what did the pipeline do this week", which
+   * nobody asks about last month. Failures answer "why did this break", which
+   * people genuinely do ask about weeks later, so they are kept ten times
+   * longer and are three orders of magnitude rarer anyway.
+   *
+   * Telemetry is per-file mechanical noise ("this file was hashed") on an
+   * explicit allowlist. The audit RECORD -- sign-ins, downloads, renames,
+   * deletions -- has no retention here and is never removed by this sweep.
+   */
+  retention: {
+    completedJobDays: Math.max(1, parseInt(process.env.RETENTION_COMPLETED_JOB_DAYS || "7", 10) || 7),
+    failedJobDays: Math.max(1, parseInt(process.env.RETENTION_FAILED_JOB_DAYS || "30", 10) || 30),
+    telemetryDays: Math.max(1, parseInt(process.env.RETENTION_TELEMETRY_DAYS || "30", 10) || 30),
+  },
+
+  /**
+   * Filing the unfiled pile automatically, and inventing the folders it needs.
+   *
+   * ON BY DEFAULT, deliberately. The feature had a button and nothing else,
+   * which meant a client who did not know to press it got an archive where a
+   * large share of documents sat in Unfiled forever -- the folder each needed
+   * did not exist, and the classifier cannot create one. A capability nobody
+   * discovers is not a feature.
+   *
+   * It is also the only scheduled thing here that SPENDS MONEY per run, so
+   * every number below is a limit rather than a tuning knob. See
+   * jobs/organizeUnfiledScheduler.js for what each one is protecting against.
+   */
+  organizeUnfiled: {
+    enabled: process.env.ORGANIZE_UNFILED_AUTO !== "false",
+    // Below this, leave it alone: a small residue is the planner correctly
+    // declining to guess, not a backlog.
+    threshold: Math.max(1, parseInt(process.env.ORGANIZE_UNFILED_THRESHOLD || "50", 10) || 50),
+    intervalMinutes: Math.max(5, parseInt(process.env.ORGANIZE_UNFILED_INTERVAL_MINUTES || "60", 10) || 60),
+    // ~600 files per run at the planner's batch size.
+    batchesPerRun: Math.max(1, parseInt(process.env.ORGANIZE_UNFILED_BATCHES_PER_RUN || "5", 10) || 5),
+    // The ceiling that does not depend on the pile ever emptying: 8 runs x 5
+    // batches x 120 files is ~4,800 files a day, so even a very large import
+    // is organized within days rather than in one unbounded overnight bill.
+    maxRunsPerDay: Math.max(1, parseInt(process.env.ORGANIZE_UNFILED_MAX_RUNS_PER_DAY || "8", 10) || 8),
+  },
+
+  /**
+   * Who is allowed to create an account.
+   *
+   * WHY THIS EXISTS
+   *
+   * `POST /api/auth/register` was unauthenticated and open, and the role it
+   * assigns ("User") carries `storage.manage` and `scan.run`. Combined with a
+   * folder picker that defaults to unconfined, anyone who could reach the port
+   * could: register an account, enumerate the server's entire filesystem,
+   * register C:\Users\<someone> as their own storage location, scan it, and
+   * then read every document in it -- as its legitimate owner.
+   *
+   * The ownership model did not stop this and could not. `ownership.js` is
+   * exemplary at preventing account A from reading account B's ROWS; the
+   * attacker never touches anyone else's rows. They create their own, over the
+   * same bytes on disk. Ownership was modelled on the database record; the
+   * asset is the filesystem.
+   *
+   * WHY CLOSING REGISTRATION RATHER THAN NARROWING THE ROLE
+   *
+   * The obvious fix -- strip `storage.manage` from the default role -- is wrong
+   * here and would have broken this install. The only account on it holds
+   * exactly that role, so narrowing the role removes the owner's ability to
+   * manage their own storage locations. The permission is not the bug. Handing
+   * it to unauthenticated strangers is.
+   *
+   *   first-run  registration works while there are ZERO accounts, and is
+   *              refused afterwards. The first request bootstraps the owner;
+   *              nothing else gets in. This is the honest default for a
+   *              self-hosted archive of one person's documents.
+   *   open       the old behaviour. Anyone who can reach the API can register.
+   *   closed     no registration at all, ever, including the first.
+   *
+   * To add a second person deliberately: set ALLOW_REGISTRATION=open, register
+   * them, set it back. Clunky on purpose -- adding an account to a private
+   * document archive should be an act, not an availability.
+   */
+  registration: {
+    mode: ["first-run", "open", "closed"].includes(process.env.ALLOW_REGISTRATION)
+      ? process.env.ALLOW_REGISTRATION
+      : "first-run",
+  },
+
   jwt: {
     accessSecret: secret("JWT_ACCESS_SECRET"),
     refreshSecret: secret("JWT_REFRESH_SECRET"),

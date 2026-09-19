@@ -94,8 +94,20 @@ class BackendClient {
   reportResult(operationId, { success, result, errorMessage }) {
     return this._request("POST", `/api/agents/operations/${operationId}/result`, {
       body: { success, result, errorMessage },
-      // Generous: a read_file result carries the file's bytes base64-encoded.
-      timeoutMs: 120000,
+      // A read_file result carries the file's bytes base64-encoded, so this
+      // timeout is really "how long may a whole file take to upload".
+      //
+      // 120s was generous against the ~750KB the backend actually accepted and
+      // is far too tight now the ceiling is 200MB. Over Tailscale -- which is
+      // the normal case, not the exceptional one -- a link doing a real-world
+      // 2 MB/s needs about 100s for a 200MB file BEFORE base64's 4/3 inflation,
+      // so the old value would have aborted a perfectly healthy transfer
+      // partway and reported it as a timeout rather than as a slow network.
+      //
+      // 15 minutes covers 200MB down to roughly 300 KB/s. It is deliberately
+      // not unbounded: a genuinely dead connection still has to be noticed, and
+      // the operation re-issued, rather than hanging this agent forever.
+      timeoutMs: parseInt(process.env.AGENT_RESULT_TIMEOUT_MS || "900000", 10),
     });
   }
 }

@@ -26,13 +26,15 @@
 // row, exercises the repository invariant, and deletes it. It writes no files
 // to disk and enqueues no jobs, so it does not need the worker stopped -- but
 // it does write to the database, like the other verify-* scripts.
+//
+// A fourth section checked that the Types browse page's per-type counts agreed
+// with the file list they linked to. That page is gone and so is its endpoint;
+// the axis itself, which is what the three defects above were actually about,
+// is still here and still checked.
 const { Pool } = require("pg");
 const env = require("../src/config/env");
 const taxonomyMatcher = require("../src/services/taxonomyMatcher");
 const classificationResultRepository = require("../src/repositories/classificationResultRepository");
-const documentTypeService = require("../src/services/documentTypeService");
-const fileRepository = require("../src/repositories/fileRepository");
-const { parseFileFilters } = require("../src/repositories/fileFilters");
 const { ConfidenceLevel, ClassificationMethod } = require("../src/models/enums");
 
 const p = new Pool({ connectionString: env.databaseUrl });
@@ -239,55 +241,11 @@ async function carryForwardChecks() {
   check("clearing the type leaves the subject alone", afterClear.subject === subjectId);
 }
 
-/**
- * The browse surface's numbers. The page is only as good as the agreement
- * between the count beside a type and the list clicking it opens -- a type
- * that says 12 and then shows 3 is worse than no number at all.
- */
-async function browseCountChecks() {
-  console.log("\n3. The browse counts agree with the list they link to");
-
-  const owner = (await p.query("SELECT id FROM users ORDER BY created_at LIMIT 1")).rows[0];
-  if (!owner) {
-    console.log("   SKIP  no user in this database to scope counts to");
-    return;
-  }
-
-  const result = await documentTypeService.list({}, owner.id);
-  check("browse returns every seeded type, not just the populated ones", result.documentTypes.length === 13,
-    `${result.documentTypes.length} types`);
-  check("untyped files are counted, not hidden", typeof result.untypedCount === "number",
-    `${result.untypedCount} untyped`);
-
-  // Each type's advertised count must equal what the file list actually
-  // returns for that type -- the same predicate builder, exercised twice.
-  // countMatching is what GET /files/count runs, i.e. the number the list
-  // itself would report. If these two ever disagree, one of the two query
-  // paths has grown its own private idea of what the filter means.
-  const mismatches = [];
-  for (const type of result.documentTypes) {
-    const filters = parseFileFilters({ documentTypeId: type.id }, owner.id);
-    const listed = await fileRepository.countMatching({ filters });
-    if (listed !== type.fileCount) {
-      mismatches.push(`${type.code}: badge ${type.fileCount} vs list ${listed}`);
-    }
-  }
-  check("no type advertises a count its own filter disagrees with", mismatches.length === 0,
-    mismatches.length ? mismatches.join(" | ") : "all agree");
-
-  // A filter that matches nothing must zero the counts, not leave them stale.
-  const impossible = await documentTypeService.list({ dateFrom: "1900-01-01", dateTo: "1900-01-02" }, owner.id);
-  const total = impossible.documentTypes.reduce((s, t) => s + t.fileCount, 0);
-  check("counts honour the page filters", total === 0 && impossible.untypedCount === 0,
-    `typed ${total}, untyped ${impossible.untypedCount} in an empty date window`);
-}
-
 (async () => {
   console.log("Verifying the document-type axis\n" + "=".repeat(38));
   try {
     await realCorpusChecks();
     await carryForwardChecks();
-    await browseCountChecks();
   } catch (e) {
     failed += 1;
     console.log(`\n   ERROR ${e.stack}`);

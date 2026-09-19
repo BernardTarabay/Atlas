@@ -3,10 +3,46 @@ const { createBaseRepository } = require("./baseRepository");
 
 const base = createBaseRepository("filesystem_agents");
 
-async function findByStorageLocation(storageLocationId) {
+/**
+ * How long after its last heartbeat an agent is still called online.
+ *
+ * The same 120 seconds deviceRepository uses, and the same reasoning: the
+ * agent heartbeats on a fixed interval, so this only has to be comfortably
+ * longer than that interval plus one missed beat.
+ */
+const ONLINE_GRACE_SECONDS = 120;
+
+/**
+ * Every agent, with a LIVE-DERIVED status rather than the stored one.
+ *
+ * `filesystem_agents.status` is only ever as fresh as the last write, and the
+ * only writer that sets it to 'online' is markHeartbeat. Nothing set it back.
+ * There WAS a markStaleOffline() written for that job, carrying a comment
+ * explaining why it mattered -- and it had no caller anywhere in the codebase,
+ * so an agent whose machine was shut down reported itself online forever, and
+ * GET /api/agents told an administrator that a dead agent was answering.
+ *
+ * Deriving it here is what deviceRepository.listForOwnerWithStatus already
+ * does, for the identical reason its own comment gives: "offline" needs no
+ * background sweeper to be true. A sweeper is a second thing that has to be
+ * running for a status to be correct, and this table already knows the answer.
+ *
+ * `revoked_at` wins over everything: a revoked agent that happens to still be
+ * beating is not online, it is finished.
+ */
+async function listWithStatus({ limit = 50, offset = 0 } = {}) {
   const { rows } = await db.query(
-    "SELECT * FROM filesystem_agents WHERE storage_location_id = $1",
-    [storageLocationId]
+    `SELECT a.*,
+            CASE
+              WHEN a.revoked_at IS NOT NULL THEN 'revoked'
+              WHEN a.last_seen_at IS NULL   THEN 'never_connected'
+              WHEN a.last_seen_at > now() - ($3 || ' seconds')::interval THEN 'online'
+              ELSE 'offline'
+            END AS status
+       FROM filesystem_agents a
+      ORDER BY a.created_at DESC
+      LIMIT $1 OFFSET $2`,
+    [limit, offset, ONLINE_GRACE_SECONDS]
   );
   return rows;
 }
@@ -70,10 +106,6 @@ async function markHeartbeat(id) {
   return rows[0] || null;
 }
 
-async function markOffline(id) {
-  await db.query("UPDATE filesystem_agents SET status = 'offline' WHERE id = $1", [id]);
-}
-
 async function revoke(id) {
   const { rows } = await db.query(
     `UPDATE filesystem_agents SET revoked_at = now(), status = 'offline'
@@ -83,28 +115,13 @@ async function revoke(id) {
   return rows[0] || null;
 }
 
-/** Agents whose heartbeat has lapsed are marked offline so the UI and
- * AgentStorageService can fail fast instead of enqueuing work nobody will
- * ever claim. */
-async function markStaleOffline(staleAfterSeconds = 120) {
-  const { rows } = await db.query(
-    `UPDATE filesystem_agents SET status = 'offline'
-     WHERE status = 'online'
-       AND (last_seen_at IS NULL OR last_seen_at < now() - make_interval(secs => $1))
-     RETURNING id`,
-    [staleAfterSeconds]
-  );
-  return rows;
-}
-
 module.exports = {
   ...base,
-  findByStorageLocation,
+  ONLINE_GRACE_SECONDS,
+  listWithStatus,
   findActiveForStorageLocation,
   create,
   updateEnrollment,
   markHeartbeat,
-  markOffline,
   revoke,
-  markStaleOffline,
 };

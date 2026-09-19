@@ -127,19 +127,35 @@ Notes that are easy to get wrong:
   search, and running it again only to count the rows would double the cost of every
   keystroke.
 
-## 9.6 Documents (`/api/documents`)
-
-| Method | Path | Permission | Notes |
-|---|---|---|---|
-| GET | `/` | `document.view` | Query: `q`, `subjectId`, `limit`, `offset` |
-| GET | `/:id` | `document.view` | Full view incl. current version, primary subject |
-| PATCH | `/:id` | `classification.modify` | Display name / document type only — never touches the physical file |
-
-### Document Types (`/api/document-types`)
+## 9.6 Document Types (`/api/document-types`)
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
 | GET | `/` | `document.view` | Read-only lookup list, used to populate document-type pickers |
+
+### `/api/documents` was removed
+
+There was a `documents` resource here — `GET /`, `GET /:id`, `PATCH /:id` over a
+`documents` table, with a `/documents` page in front of it. It is gone, and the
+reason is worth recording so it is not rebuilt by accident.
+
+The "logical Document" model (`documents`, `document_versions`,
+`document_subjects`, `tags`, `document_tags`) was designed in `docs/01` and never
+wired to the pipeline. Nothing in the codebase could create a `documents` row:
+there was a `create` in its repository with no caller, and the tables held zero
+rows on the live installation. `fileOrganizeService` and `subjectService` both
+already carried comments saying the tables "are not used". The page that read
+the API had no navigation entry and no link anywhere — it was reachable only by
+typing the URL, and it showed an empty list to whoever did.
+
+**`files` + `classification_results` are the live model.** A file's subject and
+document type are the latest classification result for that file; that is what
+every listing, filter and count in this document is built on.
+
+The tables are still in the schema. Dropping them is a destructive migration
+against a production database for no functional gain, and migrations are
+history. If the logical-Document model is ever genuinely wanted, it needs a
+design pass, not a resurrection of this code.
 
 ## 9.7 Subjects (`/api/subjects`)
 
@@ -194,10 +210,17 @@ creates or changes one.
 | GET | `/` | authenticated | Query: `status`, `jobType`, `limit`, `offset` |
 | GET | `/:id` | authenticated | Includes `processing_job_items` summary for bulk jobs |
 
-## 9.10a Triage (`/api/triage`)
+## 9.10a Triage (`/api/triage`) — the **Failed** page
 
 Everything the pipeline could not confidently handle, in one queue, with the reason
-attached. Not a new table — it is a derived view over facts already recorded in
+attached.
+
+The screen this backs is called **Failed** in the UI, at `/failed`. The API kept
+the `triage` name deliberately: the same domain also contains an unrelated *email*
+triage classifier (`services/ai/emailTriageClassifier.js`), and renaming a route,
+a repository, a reason vocabulary and two migrations' worth of columns to match a
+UI label would be a rewrite rather than a rename. `/triage` in the UI redirects to
+`/failed` for anyone holding the old address. Not a new table — it is a derived view over facts already recorded in
 `files`, `file_content` and `processing_jobs`, which were previously only reachable
 as counts on three unrelated pages.
 

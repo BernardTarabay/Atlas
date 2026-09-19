@@ -47,7 +47,7 @@ const CANDIDATE_PATHS = [
  * Languages to recognise, in Tesseract's `+`-joined form.
  *
  * Defaults to French, Arabic and English because that is what this archive
- * actually contains -- the note in NEXT-SESSION.md is emphatic that anything
+ * actually contains -- docs/13 §13.3 is emphatic that anything
  * touching text here has to survive both French and Arabic. Tesseract needs
  * the matching traineddata installed for each; a missing one is reported by
  * the binary and surfaced verbatim rather than silently dropped, since

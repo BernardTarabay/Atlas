@@ -1,11 +1,13 @@
 import {
-  Sparkles, CheckSquare, Square, MoreVertical,
+  Sparkles, MoreVertical,
   Loader2, AlertTriangle, Archive, Cloud, Lock,
 } from "lucide-react";
 import { DocumentDateInline, LocationLabel } from "./DocumentDate";
 import { SearchSnippet, MatchReason } from "./SearchSnippet";
 import { fileTypeOf } from "../lib/fileType";
+import { HighlightedText } from "./HighlightedText";
 import { formatBytes } from "../utils/format";
+import { setFileDragData } from "../lib/fileDrag";
 
 /**
  * One file in the Library's file panel.
@@ -87,8 +89,8 @@ function StateChips({ file }) {
 
 export function LibraryFileRow({
   index, style,
-  documents, selectedFileIds, cursor, canMove, canModify,
-  onSelectRow, onToggleSelect, onOpen, onContextMenu,
+  documents, selectedFileIds, cursor, canModify,
+  onSelectRow, onOpen, onContextMenu, isMulti, query, activeMatchIndex,
 }) {
   const d = documents[index];
   if (!d) return null;
@@ -109,13 +111,28 @@ export function LibraryFileRow({
             // The marquee's contract: anything carrying data-select-id inside
             // the list container can be rubber-banded (lib/useMarqueeSelection).
             data-select-id={d.id}
-            // Draggable straight onto a folder in the tree to reclassify.
-            // The custom MIME type keeps this from being interpreted
-            // as a text drop by anything else on the page.
-            draggable={canModify}
+            /* Draggable onto a folder in the tree to reclassify, and onto
+               the assistant to ask about it. See lib/fileDrag for why the
+               drag carries two payloads at once.
+
+               ALWAYS draggable, where it used to be `draggable={canModify}`.
+               That gate was right when the only thing a drag could do was
+               move the file; attaching to the assistant is a read, and it is
+               the wrong reason to withhold a gesture from someone who may
+               look at a file but not file it. The move targets still refuse:
+               LibraryPage passes `onDropFile` only with the permission, and
+               the server checks again regardless. */
+            draggable
             onDragStart={(e) => {
-              e.dataTransfer.setData("text/dms-file-id", d.id);
-              e.dataTransfer.effectAllowed = "move";
+              // A drag that starts on a row inside the selection carries the
+              // WHOLE selection -- otherwise ticking forty files and dragging
+              // them into the assistant silently attaches one, which looks
+              // like the drop failed. A drag on a row outside the selection
+              // carries just that row, and does not disturb what is ticked.
+              const carry = isSelected
+                ? documents.filter((f) => selectedFileIds.has(f.id))
+                : [d];
+              setFileDragData(e, carry.length ? carry : [d]);
             }}
             className={
               "group/row relative flex items-start gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors " +
@@ -131,14 +148,14 @@ export function LibraryFileRow({
                 // the Files table, and different enough that the two views did
                 // not read as the same application. The border stays neutral
                 // so only ONE thing changes when you pick a row.
-                ? "border-line row-selected"
+                ? (isMulti ? "border-line row-selected-multi" : "border-line row-selected")
                 : isCursor
                   // The keyboard cursor is a ring, not a fill: it says
                   // "you are here", which is a different statement from
                   // "this is selected", and conflating them makes j/k
                   // feel like it is ticking things.
                   ? "border-line-strong bg-surface ring-1 ring-inset ring-brand-200"
-                  : "border-line bg-surface hover:border-line-strong hover:bg-row-hover")
+                  : "border-row-divider bg-surface hover:border-line-strong hover:bg-row-hover")
             }
             // SINGLE CLICK SELECTS. DOUBLE CLICK OPENS.
             //
@@ -154,21 +171,15 @@ export function LibraryFileRow({
             // selected is how a context menu deletes the wrong file.
             onContextMenu={(e) => onContextMenu?.(e, d, index)}
           >
-            {canMove && (
-              <button
-                className="mt-0.5 shrink-0 p-0.5 text-base-600 transition-colors hover:text-brand-700"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleSelect(index, { shiftKey: e.shiftKey });
-                }}
-                title={isSelected ? "Deselect" : "Select (shift-click for a range)"}
-                aria-pressed={isSelected}
-              >
-                {isSelected
-                  ? <CheckSquare size={15} className="text-brand-600" />
-                  : <Square size={15} />}
-              </button>
-            )}
+            {/* NO CHECKBOX.
+                A tick box per row is a control that spends 100% of its width
+                on every row to be useful on almost none of them, and it made
+                "selected" say two things at once -- a ticked box AND a marked
+                row -- which is one more than the state needs. The rule down
+                the left edge carries it alone now.
+                Nothing became unreachable: click selects, ctrl-click adds,
+                shift-click takes a range, right-drag rubber-bands, and
+                "Select all" is above the list. */}
 
             {/* WHAT IT IS. A tinted tile rather than a bare glyph: at row
                 height a filled shape is findable in peripheral vision, where a
@@ -182,7 +193,9 @@ export function LibraryFileRow({
 
             <div className="min-w-0 flex-1">
               {/* WHAT IT IS CALLED. The one dominant element in the row. */}
-              <p className="truncate font-medium text-base-100">{primary}</p>
+              <p className="truncate font-medium text-base-100">
+                <HighlightedText text={primary} query={query} active={index === activeMatchIndex} />
+              </p>
 
               {/* WHERE IT CAME FROM. Quieter, and monospaced when it is a path
                   so directory structure lines up down the list. */}
@@ -197,7 +210,7 @@ export function LibraryFileRow({
                   {d.ai_short_title && (
                     <Sparkles size={10} className="shrink-0 text-brand-600" aria-hidden="true" />
                   )}
-                  {secondary}
+                  <HighlightedText text={secondary} query={query} active={index === activeMatchIndex} />
                 </p>
               )}
 

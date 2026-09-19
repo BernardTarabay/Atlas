@@ -1,5 +1,5 @@
 import { Outlet, useNavigate } from "react-router-dom";
-import { TopNav } from "./TopNav";
+import { FloatingHeader } from "./FloatingHeader";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { useIdleLogout } from "../hooks/useIdleLogout";
@@ -44,9 +44,24 @@ export function Layout() {
         sidebar, and without the sidebar the tables can use the room.
       */}
       <div className="flex h-screen w-full flex-col overflow-hidden">
-        <TopNav />
-        <main className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 md:px-8 md:py-8">
-          <div className="mx-auto w-full max-w-[1600px]">
+        <FloatingHeader />
+        {/*
+          The chrome floats now, so `main` is the WHOLE viewport and pads
+          itself out from under it. `--app-chrome-h` is measured and published
+          by FloatingHeader; the fallback is only what applies for the one
+          frame before the first measurement, and is the desktop height so
+          that frame does not visibly jump.
+
+          The padding goes on the inner element rather than the scroll
+          container so the scrollbar still runs the full height of the window
+          -- padding the scroller itself would start its track below the pill
+          and leave a dead strip beside it.
+        */}
+        <main className="flex-1 overflow-y-auto px-4 pb-6 sm:px-6 md:px-8 md:pb-8">
+          <div
+            className="mx-auto w-full max-w-[1600px]"
+            style={{ paddingTop: "calc(var(--app-chrome-h, 7.5rem) + 0.75rem)" }}
+          >
             <Outlet />
           </div>
         </main>

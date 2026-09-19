@@ -8,7 +8,7 @@
 // other is a machine's reading of a picture. Collapsing them would let the
 // naming pipeline treat a 42%-confidence guess at a blurry receipt as if it
 // were an embedded text layer, and this codebase already learned that lesson
-// the hard way -- see textQuality.js and the note in NEXT-SESSION.md about
+// the hard way -- see textQuality.js and docs/13 §13.3 about
 // never letting the AI name a file from unreadable text.
 //
 // What OCR text IS used for: search, display in the Photos workspace, and as

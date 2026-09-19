@@ -106,7 +106,7 @@ const p = new Pool({ connectionString: env.databaseUrl });
   const storedBytes = rawBytes * (1 - dupeFraction);
 
   console.log("\nASSUMED, for the projection below");
-  console.log(`  ${pad("documents in the real archive", 30)} ${files.toLocaleString()}  ${arg("files") ? "(you gave this)" : "(from NEXT-SESSION.md)"}`);
+  console.log(`  ${pad("documents in the real archive", 30)} ${files.toLocaleString()}  ${arg("files") ? "(you gave this)" : "(from docs/13-operational-notes.md)"}`);
   console.log(`  ${pad("average document size", 30)} ${(avgBytes / 1024).toFixed(0)} KB  ${
     totalGb !== null ? "(derived from --total-gb)" : avgKb !== null ? "(you gave this)" : "(THIS MACHINE'S sample -- photos and video, likely too big)"}`);
   console.log(`  ${pad("duplicate fraction", 30)} ${(dupeFraction * 100).toFixed(0)}%  ${

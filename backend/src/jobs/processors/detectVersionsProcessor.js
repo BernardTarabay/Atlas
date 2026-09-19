@@ -14,9 +14,19 @@
 // judgement in this codebase does -- an audit_logs entry carrying the
 // evidence -- so the finding is durable, reviewable and reversible without
 // inventing a schema change or silently restructuring anyone's documents.
-// Promoting a suggestion into a real document_versions row is a deliberate
-// human action (documentVersionRepository.createCurrentVersion), and is left
-// to the UI/API rather than done here.
+//
+// PROMOTING A SUGGESTION IS NOT IMPLEMENTED, and this comment used to say
+// otherwise -- it named documentVersionRepository.createCurrentVersion as the
+// deliberate human action that turns a suggestion into a document_versions
+// row, "left to the UI/API". There was no such UI and no such API: that
+// repository had no caller anywhere in the codebase, `document_versions` has
+// never held a row, and the whole `documents` model it belonged to was never
+// populated by this pipeline (see subjectService and fileOrganizeService, both
+// of which already say so). The repository has been removed rather than left
+// as an unreachable implementation of a path nothing takes.
+//
+// So what this processor produces is the finding, in the audit log, and that
+// is the end of the story today. Acting on one is a person reading it.
 //
 // Why filename alone is never enough: docs/01 §1.2 warns that a
 // filename-pattern-only rule "will silently merge unrelated documents that

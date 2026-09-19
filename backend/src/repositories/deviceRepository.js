@@ -93,23 +93,6 @@ async function rename(id, ownerUserId, name) {
   return rows[0] || null;
 }
 
-/** Called from the agent heartbeat. No owner argument: the agent's token
- *  already proves which device it is, and it cannot name another. */
-async function touchSeen(deviceId, { agentVersion = null, hostname = null, platform = null } = {}) {
-  const { rows } = await db.query(
-    `UPDATE devices SET
-       last_seen_at  = now(),
-       status        = 'online',
-       agent_version = COALESCE($2, agent_version),
-       hostname      = COALESCE($3, hostname),
-       platform      = COALESCE($4, platform),
-       updated_at    = now()
-     WHERE id = $1 RETURNING *`,
-    [deviceId, agentVersion, hostname, platform]
-  );
-  return rows[0] || null;
-}
-
 async function setStatus(id, ownerUserId, status) {
   requireOwner(ownerUserId, "devices.setStatus");
   const { rows } = await db.query(
@@ -137,5 +120,5 @@ async function isOnline(deviceId) {
 module.exports = {
   ...base, ...owned,
   ONLINE_GRACE_SECONDS,
-  listForOwnerWithStatus, create, ensureServerDevice, rename, touchSeen, setStatus, isOnline,
+  listForOwnerWithStatus, create, ensureServerDevice, rename, setStatus, isOnline,
 };

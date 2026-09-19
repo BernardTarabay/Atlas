@@ -49,7 +49,7 @@ function ancestorChain(subjects, subject) {
 function Crumb({ children, onClick, current, icon: Icon }) {
   if (current) {
     return (
-      <span className="flex min-w-0 items-center gap-1.5 font-semibold text-base-50" aria-current="page">
+      <span className="flex min-h-9 min-w-0 items-center gap-1.5 font-semibold text-base-50 sm:min-h-0" aria-current="page">
         {Icon && <Icon size={15} className="shrink-0 text-brand-600" aria-hidden="true" />}
         <span className="truncate">{children}</span>
       </span>
@@ -58,7 +58,12 @@ function Crumb({ children, onClick, current, icon: Icon }) {
   return (
     <button
       onClick={onClick}
-      className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-base-500 transition-colors hover:bg-base-850 hover:text-base-100"
+      // These crumbs ARE the way back out of a folder, and on a phone they are
+      // the ONLY way -- there is no tree pane to click a parent in. At
+      // px-1 py-0.5 they were roughly 24px tall, which is a link you aim at
+      // rather than a control you tap. Sized for a finger below sm and left
+      // exactly as they were above it.
+      className="flex min-h-9 min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-base-500 transition-colors hover:bg-base-850 hover:text-base-100 sm:min-h-0 sm:px-1 sm:py-0.5"
     >
       {Icon && <Icon size={15} className="shrink-0" aria-hidden="true" />}
       <span className="truncate">{children}</span>

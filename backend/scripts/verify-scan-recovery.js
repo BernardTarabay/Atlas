@@ -7,14 +7,21 @@
 // it is invisible to search. Before the fix, every later scan looked at that
 // file, saw its size and mtime were unchanged, and skipped it forever.
 //
-// Four cases, because a recovery that over-fires is its own bug -- re-queueing
-// everything on every scan would multiply the backlog an import is already
-// stuck behind.
+// Five cases, because a recovery that OVER-fires is its own bug, and a worse
+// one. Under-firing leaves a file unsearchable until the next scan; over-firing
+// re-queues the same files on every scan forever, and that is not hypothetical
+// -- it produced 7.8 million job rows and a 4.6 GB queue table on a 7,260-file
+// library while every health signal read "ok".
 //
-//   1. healthy      fully processed          -> must NOT be re-queued
-//   2. lost         no hash, no job in flight -> MUST be re-queued
-//   3. in flight    no hash, job queued       -> must NOT be re-queued
-//   4. half done    hashed but no content     -> MUST be re-queued
+//   1. healthy      fully processed              -> must NOT be re-queued
+//   2. lost         'discovered', no job queued  -> MUST be re-queued
+//   3. in flight    'discovered', job queued     -> must NOT be re-queued
+//   4. half done    hashed, extraction never ran -> MUST be re-queued
+//   5. photo        FINISHED with no content row -> must NOT be re-queued
+//
+// Case 5 is the regression test for the incident above. "Has no extracted-text
+// row" is a permanent property of an image, not a sign of lost work, and a
+// recovery pass that cannot tell those apart never stops running.
 //
 //   node scripts/verify-scan-recovery.js
 
@@ -69,7 +76,22 @@ const jobsFor = async (fileId, statuses = ["queued", "running"]) =>
 
 (async () => {
   root = await fsp.mkdtemp(path.join(os.tmpdir(), "dms-recovery-"));
-  const NAMES = ["healthy.txt", "lost.txt", "inflight.txt", "halfdone.txt"];
+  // photo.txt is not a typo. It stands in for the case that broke this system:
+  // a file the pipeline legitimately finishes WITHOUT ever writing a
+  // file_content row. In production that is every image -- hashProcessor routes
+  // them to needs_user with "A photo, have a look and file it", and a
+  // photograph has no text layer to extract, ever.
+  //
+  // The recovery query used to select on "has no file_content row", which is a
+  // permanent property of such a file rather than a statement about progress.
+  // So every scan rediscovered every image and re-queued it from hashing:
+  // 1,426 images x 1,370 scans = 1.94 million hash jobs and a 4.6 GB queue
+  // table behind a 48 MB library, with every health signal reading "ok"
+  // because the queue drained as fast as it filled.
+  //
+  // Kept as .txt so the fixture needs no real image bytes; what is being
+  // asserted is the STATE, which is set explicitly below.
+  const NAMES = ["healthy.txt", "lost.txt", "inflight.txt", "halfdone.txt", "photo.txt"];
   for (const n of NAMES) {
     // Long enough that extraction has something to do; .txt has no extractor,
     // so the content row is written with an empty body -- which is exactly
@@ -93,7 +115,7 @@ const jobsFor = async (fileId, statuses = ["queued", "running"]) =>
   for (const row of (await p.query("SELECT * FROM files WHERE storage_location_id=$1", [locId])).rows) {
     files[row.filename_current] = row;
   }
-  check("all four files discovered", Object.keys(files).length === 4, Object.keys(files).join(", "));
+  check("all five files discovered", Object.keys(files).length === NAMES.length, Object.keys(files).join(", "));
 
   // Run the real processors so these files are genuinely complete.
   for (const n of NAMES) {
@@ -105,26 +127,79 @@ const jobsFor = async (fileId, statuses = ["queued", "running"]) =>
   await p.query(`UPDATE processing_jobs SET status='completed'
                   WHERE storage_location_id=$1 AND status IN ('queued','running')`, [locId]);
 
-  // --- now break things in four different ways ----------------------------
+  // FINISH THE PIPELINE THAT THIS FIXTURE ONLY RUNS HALF OF.
+  //
+  // Only two processors transition pipeline_state: hashProcessor (for images,
+  // media and known content) and generateNamesProcessor (for everything else,
+  // at the very end). extract_text, extract_metadata and classify deliberately
+  // do not touch it. So a real .txt document sits at 'discovered' for its
+  // ENTIRE journey and only becomes 'completed' at the last stage.
+  //
+  // Running just hash + extract_text above therefore leaves these files
+  // genuinely mid-pipeline, and once their jobs are marked completed they are
+  // indistinguishable from a file whose chain broke -- which is exactly what
+  // the recovery pass is supposed to catch. The old fixture called that
+  // "healthy" because a hash and a content row existed, and that is the
+  // artifact-based reasoning this whole change removes.
+  //
+  // So the fixture says what it means: these files are finished.
+  await p.query(
+    `UPDATE files SET pipeline_state='completed' WHERE storage_location_id=$1`,
+    [locId]);
+
+  // --- now break things in several different ways -------------------------
+  //
+  // WHAT "LOST WORK" MEANS, AND WHY THE SIMULATION CHANGED
+  //
+  // These cases used to be simulated by removing ARTIFACTS -- nulling a hash,
+  // deleting a file_content row -- because the recovery query selected on
+  // whether those artifacts existed. That query now selects on pipeline_state,
+  // so the artifacts are no longer what makes a file stranded and the fixture
+  // has to say what it actually means.
+  //
+  // This is a strictly more faithful simulation, not a weaker one. In
+  // production a file that finished extraction ALWAYS has a content row --
+  // extractTextProcessor writes a 'skipped' row rather than leaving one absent,
+  // precisely so a finished file cannot look unprocessed (see
+  // fileContentRepository). A file with no row therefore never reached that
+  // stage, which means its state is discovered/processing/failed_* -- and each
+  // of those is covered, here or by services/fileRecovery.js. The old fixture
+  // constructed a state ("extraction succeeded, then its row vanished") that
+  // the application has no way to produce.
   log("\nsimulating lost work:");
 
-  // 2. lost: hash and content gone, nothing queued (a crash mid-import).
-  await p.query("UPDATE files SET sha256_hash=NULL WHERE id=$1", [files["lost.txt"].id]);
+  // 2. lost: a crash mid-import. Nothing ran, nothing is queued.
+  await p.query(
+    "UPDATE files SET sha256_hash=NULL, pipeline_state='discovered' WHERE id=$1",
+    [files["lost.txt"].id]);
   await p.query("DELETE FROM file_content WHERE file_id=$1", [files["lost.txt"].id]);
-  log("   lost.txt      hash + content removed, no job queued");
+  log("   lost.txt      reset to 'discovered', no job queued");
 
-  // 3. in flight: same damage, but a job IS waiting for it.
-  await p.query("UPDATE files SET sha256_hash=NULL WHERE id=$1", [files["inflight.txt"].id]);
+  // 3. in flight: the same damage, but a job IS waiting for it. Must not be
+  //    re-queued -- it is behind in a backlog, not stranded.
+  await p.query(
+    "UPDATE files SET sha256_hash=NULL, pipeline_state='discovered' WHERE id=$1",
+    [files["inflight.txt"].id]);
   await p.query("DELETE FROM file_content WHERE file_id=$1", [files["inflight.txt"].id]);
   await p.query(
     `INSERT INTO processing_jobs (job_type, status, storage_location_id, payload)
      VALUES ('hash','queued',$1,$2)`,
     [locId, JSON.stringify({ fileId: files["inflight.txt"].id })]);
-  log("   inflight.txt  hash + content removed, hash job left queued");
+  log("   inflight.txt  reset to 'discovered', hash job left queued");
 
-  // 4. half done: hashed, but extraction never landed.
+  // 4. half done: hashing landed, extraction never did. Genuinely stranded,
+  //    and the state is what says so.
   await p.query("DELETE FROM file_content WHERE file_id=$1", [files["halfdone.txt"].id]);
-  log("   halfdone.txt  content removed, hash intact");
+  await p.query("UPDATE files SET pipeline_state='discovered' WHERE id=$1", [files["halfdone.txt"].id]);
+  log("   halfdone.txt  content removed, reset to 'discovered', hash intact");
+
+  // 5. THE REGRESSION CASE. A file the pipeline has finished with that will
+  //    never have a content row -- the shape of every image in the archive.
+  //    Nothing here is broken and nothing must be re-queued. Under the old
+  //    predicate this file was re-queued on every scan, forever.
+  await p.query("DELETE FROM file_content WHERE file_id=$1", [files["photo.txt"].id]);
+  await p.query("UPDATE files SET pipeline_state='needs_user' WHERE id=$1", [files["photo.txt"].id]);
+  log("   photo.txt     content removed, state 'needs_user' -- FINISHED, not stranded");
   log("   healthy.txt   untouched");
 
   // --- second scan: the one that has to heal ------------------------------
@@ -144,10 +219,28 @@ const jobsFor = async (fileId, statuses = ["queued", "running"]) =>
   check("halfdone.txt was re-queued", requeued("halfdone.txt"), `${before["halfdone.txt"]} -> ${after["halfdone.txt"]}`);
   check("healthy.txt was NOT re-queued", !requeued("healthy.txt"), `${before["healthy.txt"]} -> ${after["healthy.txt"]}`);
   check("inflight.txt was NOT re-queued", !requeued("inflight.txt"), `${before["inflight.txt"]} -> ${after["inflight.txt"]}`);
+  // The one that cost 1.94 million jobs. A finished file with no content row
+  // is finished, and a scan must walk past it every single time.
+  check("photo.txt was NOT re-queued", !requeued("photo.txt"), `${before["photo.txt"]} -> ${after["photo.txt"]}`);
+
+  // Re-running the scan a further three times must recover nothing new. One
+  // quiet scan proves the predicate; repeated quiet scans prove there is no
+  // loop, which is the property that actually failed in production.
+  let loopRecovered = 0;
+  for (let i = 0; i < 3; i += 1) {
+    loopRecovered += (await scanProcessor.handle({ storageLocationId: locId })).recovered;
+  }
+  check("three further scans recover nothing", loopRecovered === 0, `recovered=${loopRecovered}`);
 
   // --- the recovery must actually repair the file, not just enqueue --------
   await hashProcessor.handle({ fileId: files["lost.txt"].id });
   await extractTextProcessor.handle({ fileId: files["lost.txt"].id });
+  // Same reasoning as the setup block: neither of those stages transitions
+  // state, so standing in for the rest of the chain is the fixture's job.
+  // Without this the repaired file is still 'discovered' with no live job --
+  // correctly stranded again -- and the quiet-scan check below would fail for
+  // a reason that has nothing to do with what it is testing.
+  await p.query("UPDATE files SET pipeline_state='completed' WHERE id=$1", [files["lost.txt"].id]);
   const repaired = await fileRepository.findById(files["lost.txt"].id);
   const content = (await p.query("SELECT 1 FROM file_content WHERE file_id=$1", [files["lost.txt"].id])).rowCount;
   check("lost.txt has a hash again", Boolean(repaired.sha256_hash), repaired.sha256_hash?.slice(0, 16));

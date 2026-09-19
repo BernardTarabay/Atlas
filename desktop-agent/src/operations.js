@@ -22,7 +22,35 @@ const path = require("path");
 // AgentStorageService.readStream), which is fine for documents and wrong
 // for media; failing loudly at the boundary beats an OOM on the user's
 // laptop.
-const MAX_READ_BYTES = 64 * 1024 * 1024;
+//
+// THIS NUMBER IS HALF OF A PAIR. The other half is AGENT_RESULT_BODY_LIMIT in
+// backend/src/routes/agentRoutes.js, and they must move together: base64
+// inflates by 4/3, so the backend parser has to accept ~1.34x whatever is
+// allowed here or the transfer dies with a 413 that reads like a server fault.
+//
+// For most of this agent's life the pair was silently inconsistent in the
+// worse direction. This constant said 64MB while the backend's GLOBAL 1MB JSON
+// limit -- written when nothing in that API carried bytes -- rejected anything
+// over roughly 750KB. The advertised ceiling was 85x the real one, and the real
+// one was an accident.
+//
+// WHAT THIS CEILING IS ACTUALLY FOR, AND WHY IT IS NOT LARGER
+//
+// It bounds peak memory, not file size in principle. Shipping one file holds,
+// simultaneously: the raw buffer, its base64 string (+1.34x), and the
+// JSON-serialised body (another near-copy) -- so a 200MB file transiently needs
+// roughly 600-800MB on a laptop that is also running everything else its owner
+// has open, and the same again on the server decoding it. There is also no
+// resume: this is one POST, and a drop at 95% resends everything.
+//
+// 200MB is therefore a considered stopgap rather than a target. Past this,
+// raising the constant stops being the fix -- see the chunked-transfer note in
+// README.md's known gaps, which is the design that makes memory flat in file
+// size and a dropped connection cost one chunk instead of the whole transfer.
+const MAX_READ_BYTES = parseInt(
+  process.env.AGENT_MAX_READ_BYTES || String(200 * 1024 * 1024),
+  10
+);
 
 class PathEscapeError extends Error {}
 

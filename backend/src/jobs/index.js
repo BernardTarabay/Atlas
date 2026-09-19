@@ -22,6 +22,8 @@ const syncMirrorProcessor = require("./processors/syncMirrorProcessor");
 const ocrProcessor = require("./processors/ocrProcessor");
 const describeProcessor = require("./processors/describeProcessor");
 const purgeTrashProcessor = require("./processors/purgeTrashProcessor");
+const organizeUnfiledProcessor = require("./processors/organizeUnfiledProcessor");
+const purgeOperationalProcessor = require("./processors/purgeOperationalProcessor");
 
 // `bulk_move` IS implemented now (processors/bulkMoveProcessor.js).
 //
@@ -50,6 +52,8 @@ const PROCESSORS = {
   [JobType.OCR]: ocrProcessor,
   [JobType.DESCRIBE]: describeProcessor,
   [JobType.PURGE_TRASH]: purgeTrashProcessor,
+  [JobType.ORGANIZE_UNFILED]: organizeUnfiledProcessor,
+  [JobType.PURGE_OPERATIONAL]: purgeOperationalProcessor,
   [JobType.GENERATE_NAMES]: generateNamesProcessor,
   [JobType.BULK_RENAME]: bulkRenameProcessor,
   [JobType.BULK_DELETE]: bulkDeleteProcessor,

@@ -222,6 +222,40 @@ async function fetchPreviewBlobUrl(path) {
   return { url: URL.createObjectURL(blob), contentType: res.headers.get("Content-Type") || blob.type };
 }
 
+/**
+ * The file's bytes as a Blob, for code that needs to HAND THE FILE SOMEWHERE
+ * rather than show it or save it.
+ *
+ * Neither existing helper fits: downloadFile() triggers a save and returns
+ * nothing, and previewBlobUrl() hands back an object URL, which is the right
+ * shape for an <img src> and the wrong one for the Web Share API -- that wants
+ * a real File object so the receiving app gets a name and a mime type.
+ *
+ * Same auth-and-refresh path as the other two, deliberately: a share that
+ * 401s halfway through a session is exactly the kind of thing that only shows
+ * up in someone else's hands.
+ */
+async function fetchBlob(path) {
+  const headers = {};
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  let res = await fetch(`${API_BASE}${path}`, { headers });
+  if (res.status === 401 && refreshToken) {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      res = await fetch(`${API_BASE}${path}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    }
+  }
+  if (!res.ok) {
+    let message = `Could not read the file (${res.status})`;
+    try { message = (await res.json())?.error || message; } catch { /* not JSON */ }
+    throw new ApiError(message, res.status);
+  }
+
+  const blob = await res.blob();
+  return { blob, contentType: res.headers.get("Content-Type") || blob.type };
+}
+
 // `uploadForm` and `downloadUrl` used to live here and are gone.
 //
 // uploadForm was the client half of the byte-upload routes, which were
@@ -239,6 +273,7 @@ export const api = {
   del: (path) => request(path, { method: "DELETE" }),
   download: downloadFile,
   previewBlobUrl: fetchPreviewBlobUrl,
+  fetchBlob,
 };
 
 export { setTokens, getAccessToken, setUnauthorizedHandler, ApiError, API_BASE };

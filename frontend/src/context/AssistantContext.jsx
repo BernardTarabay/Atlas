@@ -57,9 +57,76 @@ export function AssistantProvider({ children }) {
   const [ask, setAsk] = useState({ text: null, n: 0 });
   const askAssistant = useCallback((text) => setAsk((a) => ({ text, n: a.n + 1 })), []);
 
+  /* -------------------------------------------------------------------- *
+   * ATTACHMENTS: the files the user has explicitly put in front of the
+   * assistant, by dragging them onto it or picking "Ask Gemini about this".
+   *
+   * WHY THESE LIVE HERE AND NOT IN THE PANEL
+   *
+   * The panel is where they are shown, but it is not where they arrive. A
+   * file is dragged from the Library or the Files table, and a context-menu
+   * item on any page can add one -- so the state has to be reachable from
+   * outside the panel, which is exactly what this provider is for.
+   *
+   * WHY THEY ARE NOT THE SAME THING AS `context.files`
+   *
+   * `context.files` is what a page HAPPENS to be showing: it changes when you
+   * scroll, page, or navigate, and it is cleared on unmount. An attachment is
+   * a deliberate act. Conflating them would mean a file you attached
+   * disappeared the moment you clicked to a different folder to look at
+   * something -- and the answer that came back would silently be about a
+   * different set of documents than the one on screen when you asked. They
+   * travel to the server as separate fields for the same reason.
+   * -------------------------------------------------------------------- */
+
+  /** More than this and the prompt is being stuffed rather than given context. */
+  const MAX_ATTACHMENTS = 25;
+  const [attachments, setAttachments] = useState([]);
+
+  const attachFiles = useCallback((files) => {
+    const incoming = (Array.isArray(files) ? files : [files]).filter((f) => f && f.id);
+    if (!incoming.length) return { added: 0, duplicates: 0, overflow: 0 };
+    let added = 0;
+    let duplicates = 0;
+    let overflow = 0;
+    setAttachments((current) => {
+      const seen = new Set(current.map((f) => f.id));
+      const next = [...current];
+      for (const f of incoming) {
+        if (seen.has(f.id)) { duplicates += 1; continue; }
+        if (next.length >= MAX_ATTACHMENTS) { overflow += 1; continue; }
+        seen.add(f.id);
+        next.push({ id: f.id, name: f.name || f.id, path: f.path || null });
+        added += 1;
+      }
+      return added ? next : current;
+    });
+    // Returned rather than announced from in here: the caller knows whether a
+    // duplicate is worth a toast (a drop, yes) or noise (restoring a session).
+    return { added, duplicates, overflow };
+  }, []);
+
+  const detachFile = useCallback((id) => {
+    setAttachments((current) => current.filter((f) => f.id !== id));
+  }, []);
+
+  const clearAttachments = useCallback(() => setAttachments([]), []);
+
+  /**
+   * "Open the assistant." A counter rather than a boolean, so asking twice in
+   * a row registers twice -- the same reason `reveal` and `ask` carry one.
+   * The panel still OWNS whether it is open; this is a request, not a setter.
+   */
+  const [openRequest, setOpenRequest] = useState(0);
+  const openAssistant = useCallback(() => setOpenRequest((n) => n + 1), []);
+
   const value = useMemo(
-    () => ({ context, setContext, changeToken, notifyChanged, reveal, revealSubject, ask, askAssistant }),
-    [context, changeToken, notifyChanged, reveal, revealSubject, ask, askAssistant]
+    () => ({
+      context, setContext, changeToken, notifyChanged, reveal, revealSubject, ask, askAssistant,
+      attachments, attachFiles, detachFile, clearAttachments, openRequest, openAssistant,
+    }),
+    [context, changeToken, notifyChanged, reveal, revealSubject, ask, askAssistant,
+     attachments, attachFiles, detachFile, clearAttachments, openRequest, openAssistant]
   );
 
   return <AssistantContext.Provider value={value}>{children}</AssistantContext.Provider>;
@@ -140,4 +207,20 @@ export function useAssistantAsk(onAsk) {
     if (ask.n === 0 || !ask.text) return;
     handler.current?.(ask.text);
   }, [ask]);
+}
+
+/**
+ * Receive "open the assistant" requests. Separate from useAssistantAsk because
+ * attaching a file should raise the panel WITHOUT putting words in the user's
+ * message box -- the whole point of an attachment is that the question is
+ * still theirs to write.
+ */
+export function useAssistantOpen(onOpen) {
+  const { openRequest } = useAssistant();
+  const handler = useRef(onOpen);
+  handler.current = onOpen;
+  useEffect(() => {
+    if (openRequest === 0) return;
+    handler.current?.();
+  }, [openRequest]);
 }

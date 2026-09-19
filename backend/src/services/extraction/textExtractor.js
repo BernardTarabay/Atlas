@@ -58,7 +58,7 @@ const NUL = "\u0000";
 /**
  * Decode bytes to a string, in the order that is right for THIS corpus.
  *
- * The archive is French and Arabic (see NEXT-SESSION.md). Arabic text is
+ * The archive is French and Arabic (docs/13 §13.1). Arabic text is
  * essentially always UTF-8; French text produced by older Windows tooling is
  * often CP1252. So: an explicit BOM wins, then UTF-8 is tried and VERIFIED,
  * and only a failed verification falls back to CP1252.

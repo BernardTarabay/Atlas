@@ -10,10 +10,11 @@ REM There is no Redis/Memurai any more: migration 040 moved the job queue into
 REM the processing_jobs table, which is why Postgres is now the only service
 REM this depends on.
 REM
-REM Launched at logon by scripts\install-autostart.ps1. Run it by hand to
-REM start everything without rebooting.
+REM Launched at logon by scripts\install-autostart.ps1, and again every few
+REM minutes by the same task as a watchdog. Run it by hand to start everything
+REM without rebooting.
 REM
-REM   start-atlas.bat                  start, refusing if anything is already up
+REM   start-atlas.bat                  start whatever is missing, refusing duplicates
 REM   set SKIP_PREFLIGHT=1 ^& start-atlas.bat   start anyway (two of everything)
 
 cd /d "%~dp0.."
@@ -33,12 +34,7 @@ set LOGDIR=%~dp0..\logs
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 
 REM ---------------------------------------------------------------------
-REM REFUSE TO START A SECOND COPY.
-REM
-REM restart-atlas.bat has always guarded the reverse direction (it refuses to
-REM start production while a dev server is up). This is the missing half, and
-REM the half that runs unattended: this script is the scheduled task's action,
-REM so it is the one nobody is watching when it goes wrong.
+REM REFUSE TO START A SECOND COPY -- BUT ONLY OF WHAT IS ACTUALLY RUNNING.
 REM
 REM Starting a second copy is not merely redundant, it actively breaks things:
 REM   - two API processes race for port 5000. The winner is arbitrary, and the
@@ -55,32 +51,63 @@ REM catching. And restart-atlas.bat kills Atlas and then calls THIS script a
 REM couple of seconds later; a port that is still in TIME_WAIT would make that
 REM restart fail intermittently, turning a guard into a flake.
 REM
-REM The checks are ordered dev-first because the two refusals want different
-REM advice, and "a dev server is running" is the more specific diagnosis.
+REM WHAT CHANGED, AND WHY IT IS NOT INLINE ANY MORE
+REM
+REM This guard used to be two PowerShell one-liners here in the .bat, and it
+REM held Atlas DOWN for two days (2026-08-29 to 08-31). Five abandoned
+REM `node --watch src/server.js` watchers were left behind by a dev session.
+REM The dev check only knew the word 'nodemon', so it did not recognise them;
+REM the "is Atlas running?" check then matched server.js in their command
+REM lines and declared Atlas healthy. The watchdog logged
+REM "refused: Atlas is already running" 1,049 times while the worker was dead
+REM and nothing was consuming the job queue.
+REM
+REM The decision now lives in preflight-atlas.ps1, which has a test suite
+REM (test-preflight-atlas.ps1) covering that exact state, because a guard this
+REM load-bearing should not be verifiable only by breaking production.
+REM
+REM Two rules came out of it and are worth keeping in mind here:
+REM   - a watcher with no child process is a HUSK, not a running server.
+REM     `node --watch` outlives its child on purpose.
+REM   - the API and the worker are asked about SEPARATELY. OR-ing them meant a
+REM     surviving API masked a dead worker forever, which is the half-down
+REM     state that hurts most: the UI answers, and nothing gets processed.
 REM ---------------------------------------------------------------------
-if "%SKIP_PREFLIGHT%"=="1" goto startatlas
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$dev = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -like '*nodemon*' }; if ($dev) { exit 1 } else { exit 0 }"
+if "%SKIP_PREFLIGHT%"=="1" goto startboth
+
+set PREFLIGHT=%~dp0preflight-atlas.ps1
+if not exist "%PREFLIGHT%" goto nopreflight
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PREFLIGHT%"
+
+REM Descending order, because cmd's `if errorlevel N` means "N or greater".
+REM Written the other way round, `if errorlevel 1` would swallow every case.
+if errorlevel 4 goto alreadyrunning
+if errorlevel 3 goto startworkeronly
+if errorlevel 2 goto startapionly
 if errorlevel 1 goto devrunning
-
-REM Forward AND backslash variants: this script launches "src\server.js" and
-REM the npm scripts launch "src/server.js". Matching one spelling only would
-REM let the other slip through -- the same trap restart-atlas.bat documents.
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$up = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and ($_.CommandLine -match 'src[\\/]server\.js' -or $_.CommandLine -match 'workers[\\/]runner\.js') }; if ($up) { exit 1 } else { exit 0 }"
-if errorlevel 1 goto alreadyrunning
-
-goto startatlas
+goto startboth
 
 REM goto rather than a parenthesised if-block. Multi-line blocks in cmd are
 REM parsed as one command, so an escaped parenthesis inside an echo can end the
 REM block early -- which is what swallowed restart-atlas.bat's exit code once
 REM already, making its refusal invisible to anything checking it.
 
+:nopreflight
+echo.
+echo   Cannot find preflight-atlas.ps1 next to this script.
+echo.
+echo   Refusing to start rather than starting blind: without the guard this
+echo   script would add a second API and a second worker every few minutes,
+echo   which is far worse than the outage that would cause.
+echo.
+call :logline "refused: preflight-atlas.ps1 is missing"
+exit /b 1
+
 :devrunning
 echo.
-echo   A development server is already running -- npm run dev / nodemon.
+echo   A development server is already running -- nodemon or node --watch.
 echo.
 echo   Not starting Atlas in production mode on top of it. Two APIs would
 echo   race for port 5000, and two workers would double the Gemini request
@@ -89,44 +116,86 @@ echo.
 echo   To stop the dev server and run production instead:
 echo     restart-atlas.bat force
 echo.
-call :logrefusal "refused: a dev server (nodemon) is already running"
-exit /b 1
+call :logline "refused: a live dev server is already running"
+exit /b 2
 
 :alreadyrunning
 echo.
-echo   Atlas is already running.
+echo   Atlas is already running -- API and worker both up.
 echo.
 echo   Open http://localhost:5000 -- it is already there. To apply code
 echo   changes, use restart-atlas.bat, which stops the running processes
 echo   first.
 echo.
-call :logrefusal "refused: Atlas is already running"
-exit /b 1
+call :logline "refused: Atlas is already running"
+REM EXIT 0, NOT 1, AND THE DIFFERENCE IS THE WHOLE POINT OF THIS BLOCK.
+REM
+REM This is the branch the watchdog takes almost every time it fires: Atlas is
+REM up, so there is nothing to do. It used to exit 1, and Task Scheduler
+REM faithfully recorded "Last Run Result: 0x1" forever -- on a healthy machine.
+REM
+REM That is worse than no signal. The first thing anybody opens Task Scheduler
+REM to look at is that column, and it read as a failure in exactly the state we
+REM want, which taught whoever looked to ignore it. A genuine failure then had
+REM nowhere to show up.
+REM
+REM So the codes now describe the STATE OF ATLAS, not the outcome of this
+REM script's attempt to change it:
+REM
+REM   0  Atlas is up -- started just now, or already was
+REM   1  Atlas is NOT up and this script could not fix it (guard missing)
+REM   2  Atlas is NOT up on purpose: a dev server owns the port
+REM
+REM "Last Run Result: The operation completed successfully" now means Atlas is
+REM running, which is the question the column is being asked.
+exit /b 0
 
 REM A refusal at logon has no console to print to. Recording it means the
 REM answer to "why is Atlas not up?" is one file away instead of invisible --
 REM which is the entire failure mode this guard exists to prevent, so leaving
 REM the guard itself silent would just move the problem.
-:logrefusal
+REM
+REM Successful starts are recorded too, and were not before. A log containing
+REM nothing but refusals cannot answer "when did it last actually start?",
+REM which was the first question asked during the outage above and the one
+REM the file could not answer.
+:logline
 echo [%DATE% %TIME%] %~1 >> "%LOGDIR%\atlas-start.log"
 goto :eof
 
-:startatlas
-
-REM Rotated on each start so they cannot grow without bound: the previous run
-REM is kept as .1 and anything older is overwritten.
+REM Log rotation happens per-process, and only for the process being started.
+REM Rotating both when starting one would throw away the live log of the half
+REM that is running perfectly well.
 REM
-REM Deliberately AFTER the guard. Rotating first meant a refused start rotated
-REM away the logs of the instance that was still running perfectly well --
-REM destroying the diagnostics of the healthy process to record the failure of
-REM one that never began.
+REM Deliberately AFTER the guard, too. Rotating first meant a refused start
+REM rotated away the logs of the instance that was still running -- destroying
+REM the diagnostics of the healthy process to record the failure of one that
+REM never began.
+
+:startboth
 if exist "%LOGDIR%\atlas-api.log"    move /y "%LOGDIR%\atlas-api.log"    "%LOGDIR%\atlas-api.1.log"    >nul
 if exist "%LOGDIR%\atlas-worker.log" move /y "%LOGDIR%\atlas-worker.log" "%LOGDIR%\atlas-worker.1.log" >nul
-
 REM Both are started detached and windowless -- the person using this should
 REM never see a console, and closing one must not take the app down.
 start "" /b /min cmd /c "cd backend && node src\server.js >> "%LOGDIR%\atlas-api.log" 2>&1"
 start "" /b /min cmd /c "cd backend && node src\workers\runner.js >> "%LOGDIR%\atlas-worker.log" 2>&1"
-
+call :logline "started: API and worker"
 echo Atlas starting. Open http://localhost:5000
 echo Logs: %LOGDIR%\atlas-api.log and %LOGDIR%\atlas-worker.log
+exit /b 0
+
+:startapionly
+if exist "%LOGDIR%\atlas-api.log" move /y "%LOGDIR%\atlas-api.log" "%LOGDIR%\atlas-api.1.log" >nul
+start "" /b /min cmd /c "cd backend && node src\server.js >> "%LOGDIR%\atlas-api.log" 2>&1"
+call :logline "started: API only -- the worker was already running"
+echo API starting (the worker was already running). Open http://localhost:5000
+echo Log: %LOGDIR%\atlas-api.log
+exit /b 0
+
+:startworkeronly
+if exist "%LOGDIR%\atlas-worker.log" move /y "%LOGDIR%\atlas-worker.log" "%LOGDIR%\atlas-worker.1.log" >nul
+start "" /b /min cmd /c "cd backend && node src\workers\runner.js >> "%LOGDIR%\atlas-worker.log" 2>&1"
+call :logline "started: worker only -- the API was already running"
+echo Worker starting (the API was already running).
+echo Log: %LOGDIR%\atlas-worker.log
+exit /b 0

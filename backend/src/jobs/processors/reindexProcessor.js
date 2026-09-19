@@ -9,7 +9,7 @@
 // help: nothing on disk changed, so scan would correctly find nothing new
 // and re-analyse nothing.
 //
-// It generalizes the one-off `src/db/Reclassify.js` script, which only
+// It generalizes a one-off re-classification script (since removed), which only
 // re-enqueued `classify`. The stages are opt-in via the payload so a
 // re-extraction (expensive -- reads and parses every file) can be requested
 // separately from a re-classification (cheap by comparison).

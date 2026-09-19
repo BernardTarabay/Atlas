@@ -1,12 +1,38 @@
-import { useRef, useEffect, useState } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
 import {
   Send, FolderInput, Plus, Pencil, Trash2, Check, X, Loader2,
   Bot, User, Sparkles, Mic, MicOff, GitCompare, CheckCheck, ListX, Copy, Search, MapPin,
+  Maximize2, Minimize2, Paperclip, FileText, AlertTriangle,
 } from "lucide-react";
 import { api } from "../services/apiClient";
-import { useAssistant, useAssistantAsk } from "../context/AssistantContext";
+import { useAssistant, useAssistantAsk, useAssistantOpen } from "../context/AssistantContext";
 import { useToast } from "../context/ToastContext";
 import { SearchSnippet } from "./SearchSnippet";
+import { isFileDrag, readDraggedFiles } from "../lib/fileDrag";
+
+/**
+ * COMPACT OR EXPANDED, remembered per browser.
+ *
+ * The compact panel is 380px wide and about 560 tall, which is right for
+ * "move this into Legal" and wrong for everything the assistant grew since:
+ * a search result list, a comparison verdict, a reply in two paragraphs, and
+ * now a row of attached documents. Three of those were being read four words
+ * to a line.
+ *
+ * Two states rather than a free drag, deliberately. A resizable chat is a
+ * fourth thing to get wrong on a phone, and the useful jump here is between
+ * "a widget in the corner" and "a working surface" -- not between 380 and
+ * 420 pixels. `min()` against the viewport keeps the expanded state honest on
+ * a laptop, where 1100px of chat would otherwise cover the page it is about.
+ */
+const EXPANDED_KEY = "atlas.assistant.expanded";
+
+const readExpanded = () => {
+  try { return localStorage.getItem(EXPANDED_KEY) === "1"; } catch { return false; }
+};
+const writeExpanded = (on) => {
+  try { localStorage.setItem(EXPANDED_KEY, on ? "1" : "0"); } catch { /* not remembered */ }
+};
 
 // Mirrors READ_ONLY_ACTIONS in backend/src/services/ai/geminiChatService.js:
 // these only read, so they run on arrival instead of waiting for Apply.
@@ -62,15 +88,75 @@ export function AssistantPanel() {
   // Context comes from whichever page is mounted rather than from props:
   // this component lives in the app shell so it is available everywhere,
   // and each page publishes what is on screen (see AssistantContext).
-  const { context, notifyChanged, revealSubject } = useAssistant();
+  const { context, notifyChanged, revealSubject, attachments, attachFiles, detachFile, clearAttachments } = useAssistant();
   const { push: onNotify } = useToast();
   const visibleFiles = context.files || [];
 
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(readExpanded);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [listening, setListening] = useState(false);
+  // Depth-counted, not a boolean: `dragleave` fires when the pointer crosses
+  // into a CHILD of the drop zone, so a boolean flickers the highlight off
+  // every time the cursor passes over a message bubble inside it.
+  const dragDepth = useRef(0);
+  const [dragOver, setDragOver] = useState(false);
+  // Attachment ids the last send could not resolve. Marked rather than
+  // removed: silently deleting a chip the user put there is how an interface
+  // teaches people not to trust it.
+  const [unavailable, setUnavailable] = useState(() => new Set());
+
+  const toggleExpanded = useCallback(() => {
+    setExpanded((was) => {
+      writeExpanded(!was);
+      return !was;
+    });
+  }, []);
+
+  // Something elsewhere in the app asked for the panel -- attaching a file
+  // from the context menu, for instance. It does not prefill the message box:
+  // see useAssistantOpen.
+  useAssistantOpen(() => setOpen(true));
+
+  /**
+   * A DROP IS NOT A REQUEST TO THE SERVER, and that is what makes this cheap.
+   *
+   * The dragged payload already carries the id and the name (lib/fileDrag), so
+   * attaching is pure client state -- no round trip, no spinner, no way for
+   * the drop itself to fail. What CAN fail is the server disagreeing about
+   * whether these are the caller's files to read, and that is answered on the
+   * next send, where the reply reports which attachments it actually used.
+   * Validating on drop instead would mean N requests for a gesture that is
+   * usually followed by a question anyway.
+   */
+  const dropFiles = useCallback(
+    (e) => {
+      const files = readDraggedFiles(e);
+      if (!files.length) return;
+      const { added, duplicates, overflow } = attachFiles(files);
+      setOpen(true);
+      if (added) {
+        onNotify?.(
+          added === 1 ? `Attached "${files[0].name}".` : `Attached ${added} files.`,
+          "success"
+        );
+      }
+      // Both are said out loud rather than silently absorbed: a drop that
+      // appears to do nothing is indistinguishable from a drop that missed.
+      if (duplicates) {
+        onNotify?.(
+          duplicates === 1 ? "That file is already attached." : `${duplicates} were already attached.`,
+          "info"
+        );
+      }
+      if (overflow) {
+        onNotify?.(`${overflow} not attached — the assistant holds 25 files at a time.`, "info");
+      }
+    },
+    [attachFiles, onNotify]
+  );
 
   const inputRef = useRef(null);
   /**
@@ -205,8 +291,39 @@ export function AssistantPanel() {
             filename: f.filename_current || f.display_name || f.filename,
             currentPath: f.current_path,
           })),
+          /* SEPARATE FROM `files`, all the way to the model.
+             `files` is what happens to be on screen; these are the documents
+             the user deliberately handed over. The server puts attachments
+             first and labels them as attached, so "summarise these" resolves
+             to the four things dragged in rather than to the hundred the
+             Library happens to be listing. Ids only -- the names travel for
+             this component's benefit, and the server looks up its own from
+             rows it has confirmed the caller owns. */
+          attachments: attachments.map((f) => ({ id: f.id })),
         },
       });
+
+      /* WHICH ATTACHMENTS THE SERVER ACTUALLY USED.
+         It silently drops any id the caller does not own -- correct, since a
+         stale or probing client should learn nothing. But silence is wrong
+         for the honest case: a file deleted in another tab would otherwise
+         sit in the chip row looking like context while the answer ignored it.
+         So the reply names what it used, and anything missing is marked. */
+      if (res.attachmentsUsed) {
+        const used = new Set(res.attachmentsUsed);
+        const dropped = attachments.filter((f) => !used.has(f.id));
+        if (dropped.length) {
+          setUnavailable(new Set(dropped.map((f) => f.id)));
+          onNotify?.(
+            dropped.length === 1
+              ? `"${dropped[0].name}" is no longer available and was left out.`
+              : `${dropped.length} attachments are no longer available and were left out.`,
+            "info"
+          );
+        } else {
+          setUnavailable((prev) => (prev.size ? new Set() : prev));
+        }
+      }
       const actions = (res.actions || []).map((a) => ({
         // Read-only actions have nothing to confirm -- they run on arrival
         // and the answer appears in the card. Making someone click Apply to
@@ -386,38 +503,148 @@ export function AssistantPanel() {
 
   return (
     <>
+      {/* THE LAUNCHER IS ALSO A DROP TARGET.
+          Requiring the panel to be open before a file can be dragged into it
+          would make the gesture two-handed: open the chat, go back, pick the
+          file up again. Dropping on the closed bubble attaches AND opens, in
+          one motion, which is what somebody who has just noticed a file they
+          want to ask about will actually do. */}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        title={open ? "Close chat" : "Ask Gemini"}
-        className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full text-white transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
+        title={open ? "Close chat" : "Ask Gemini \u2014 or drop files here"}
+        onDragOver={(e) => {
+          if (!isFileDrag(e)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          if (!isFileDrag(e)) return;
+          e.preventDefault();
+          setDragOver(false);
+          dropFiles(e);
+        }}
+        className={
+          "fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full text-white transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 " +
+          (dragOver && !open ? "scale-110 ring-4 ring-brand-400/50" : "hover:scale-105")
+        }
         style={{ background: "linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700))", boxShadow: "var(--shadow-glow)" }}
       >
-        {open ? <X size={22} /> : <Sparkles size={22} />}
+        {dragOver && !open ? <Paperclip size={22} /> : open ? <X size={22} /> : <Sparkles size={22} />}
+        {/* What is already attached, shown on the CLOSED launcher. Without it
+            a selection dropped here vanishes: the panel that would list it is
+            shut, and nothing anywhere says the assistant is holding anything. */}
+        {!open && attachments.length > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-base-950 px-1 text-[10px] font-semibold text-brand-700 ring-2 ring-brand-500">
+            {attachments.length}
+          </span>
+        )}
       </button>
 
       {open && (
         <div
-          className="glass-card animate-fade-in-up fixed bottom-24 right-6 z-40 flex w-[380px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden p-0 shadow-2xl"
-          style={{ height: "min(560px, 70vh)" }}
+          /* The two sizes. `min()` against the viewport in both dimensions, so
+             the expanded panel is a working surface on a desktop and simply
+             the screen minus its margins on a laptop -- rather than a fixed
+             1100x900 box hanging off the edge of both. */
+          className={
+            "glass-card animate-fade-in-up fixed bottom-24 right-6 z-40 flex max-w-[calc(100vw-3rem)] flex-col overflow-hidden p-0 shadow-2xl " +
+            (dragOver ? "ring-2 ring-brand-400/70" : "")
+          }
+          style={
+            expanded
+              ? { width: "min(1100px, calc(100vw - 3rem))", height: "min(900px, calc(100vh - 8rem))" }
+              : { width: "380px", height: "min(560px, 70vh)" }
+          }
+          /* THE WHOLE PANEL IS THE DROP ZONE, not a well inside it.
+             A dedicated strip would be a target to aim at while already
+             holding something; the panel is the thing on screen that means
+             "the assistant", so dropping anywhere on it should work. Depth
+             counted because dragleave fires on every child boundary crossed. */
+          onDragEnter={(e) => {
+            if (!isFileDrag(e)) return;
+            dragDepth.current += 1;
+            setDragOver(true);
+          }}
+          onDragOver={(e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            // "copy", not "move": attaching does not take the file out of the
+            // folder it is in, and a move cursor would promise that it does.
+            e.dataTransfer.dropEffect = "copy";
+          }}
+          onDragLeave={(e) => {
+            if (!isFileDrag(e)) return;
+            dragDepth.current = Math.max(0, dragDepth.current - 1);
+            if (dragDepth.current === 0) setDragOver(false);
+          }}
+          onDrop={(e) => {
+            if (!isFileDrag(e)) return;
+            e.preventDefault();
+            dragDepth.current = 0;
+            setDragOver(false);
+            dropFiles(e);
+          }}
         >
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
-            <div className="flex items-center gap-1.5">
-              <Sparkles size={13} className="text-brand-700" />
-              <h3 className="text-sm font-semibold text-base-50">Ask Gemini</h3>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <Sparkles size={13} className="shrink-0 text-brand-700" />
+              <h3 className="truncate text-sm font-semibold text-base-50">Ask Gemini</h3>
             </div>
-            <button onClick={() => setOpen(false)} className="rounded-lg p-1 text-base-400 hover:bg-base-900 hover:text-base-100">
-              <X size={15} />
-            </button>
+            <div className="flex shrink-0 items-center gap-0.5">
+              {/* Hidden below `sm`: there, the compact panel is already the
+                  full width of the screen, so there is nothing to expand into
+                  and this would be a control that visibly does nothing. */}
+              <button
+                type="button"
+                onClick={toggleExpanded}
+                aria-pressed={expanded}
+                title={expanded ? "Shrink the panel" : "Expand the panel"}
+                aria-label={expanded ? "Shrink the assistant panel" : "Expand the assistant panel"}
+                className="hidden rounded-lg p-1 text-base-400 hover:bg-base-900 hover:text-base-100 sm:block"
+              >
+                {expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+              </button>
+              <button
+                onClick={() => setOpen(false)}
+                aria-label="Close the assistant"
+                className="rounded-lg p-1 text-base-400 hover:bg-base-900 hover:text-base-100"
+              >
+                <X size={15} />
+              </button>
+            </div>
           </div>
+
+          {/* THE DROP HINT, OVER the conversation rather than replacing it.
+              Swapping the panel's contents mid-drag makes the thing you are
+              dragging onto change shape underneath you -- disorienting, and
+              with the pointer already down, unrecoverable. */}
+          {dragOver && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-brand-500/10 backdrop-blur-[1px]">
+              <div className="flex items-center gap-2 rounded-xl border border-dashed border-brand-400/70 bg-surface/95 px-4 py-2.5 text-sm font-medium text-brand-700">
+                <Paperclip size={15} /> Drop to give Gemini these documents
+              </div>
+            </div>
+          )}
 
           <div ref={scrollRef} className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-3">
             {messages.length === 0 && (
-              <p className="py-6 text-center text-xs text-base-400">
-                Tell it how you'd like things organized -- "move X into Y", "create a Legal category under
-                Administrative", "rename Scans to Archive". It'll propose the changes; nothing happens until you
-                click Apply.
-              </p>
+              <div className="space-y-3 py-6 text-center text-xs text-base-400">
+                <p>
+                  Tell it how you&rsquo;d like things organized &mdash; &ldquo;move X into Y&rdquo;, &ldquo;create a
+                  Legal category under Administrative&rdquo;, &ldquo;rename Scans to Archive&rdquo;. It&rsquo;ll
+                  propose the changes; nothing happens until you click Apply.
+                </p>
+                {/* Where the drag gesture is taught. A drop target nobody knows
+                    about is not a feature, and this is the one screen where
+                    there is room to say so without being in the way. */}
+                <p className="flex items-center justify-center gap-1.5 text-base-500">
+                  <Paperclip size={12} aria-hidden="true" />
+                  Drag files here from the Library or Files to ask about them.
+                </p>
+              </div>
             )}
             {messages.map((m, mi) => (
               <div key={mi} className={`flex gap-2 ${m.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -472,6 +699,74 @@ export function AssistantPanel() {
               </div>
             )}
           </div>
+
+          {/* THE ATTACHED DOCUMENTS.
+              Directly above the message box, because they are part of the
+              message: this is what "these" will mean when the user writes
+              "compare these two". Kept out of the scrolling conversation on
+              purpose -- attachments persist across turns, and a row that
+              scrolled away with the history would leave the user writing
+              "these" with no idea what it still refers to. */}
+          {attachments.length > 0 && (
+            <div className="border-t border-line px-3 pt-2">
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="text-[11px] font-medium text-base-500">
+                  {attachments.length} attached
+                </span>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={() => { clearAttachments(); setUnavailable(new Set()); }}
+                  className="text-[11px] text-base-500 hover:text-base-200"
+                >
+                  Clear all
+                </button>
+              </div>
+              {/* Capped and scrollable rather than growing: twenty-five chips
+                  would otherwise push the message box off the bottom of the
+                  compact panel, which is the one control that must never be
+                  unreachable. */}
+              <div className="flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pb-2">
+                {attachments.map((f) => {
+                  const gone = unavailable.has(f.id);
+                  return (
+                    <span
+                      key={f.id}
+                      title={gone ? `${f.name} \u2014 no longer available` : (f.path || f.name)}
+                      className={
+                        "flex max-w-[15rem] items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] " +
+                        (gone
+                          ? "border-amber-400/50 bg-amber-500/10 text-amber-700"
+                          : "border-line-strong bg-inset text-base-200")
+                      }
+                    >
+                      {gone
+                        ? <AlertTriangle size={11} className="shrink-0" aria-hidden="true" />
+                        : <FileText size={11} className="shrink-0 text-base-500" aria-hidden="true" />}
+                      {/* dir="auto" for the same reason the message bubbles
+                          carry it: much of this archive is named in Arabic and
+                          Hebrew, and a right-to-left name rendered
+                          left-to-right is not recognisable as itself. */}
+                      <span dir="auto" className="min-w-0 flex-1 truncate">{f.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => { detachFile(f.id); setUnavailable((prev) => {
+                          if (!prev.has(f.id)) return prev;
+                          const next = new Set(prev);
+                          next.delete(f.id);
+                          return next;
+                        }); }}
+                        aria-label={`Remove ${f.name} from the attachments`}
+                        className="shrink-0 rounded p-0.5 text-base-500 hover:bg-base-850 hover:text-base-100"
+                      >
+                        <X size={10} />
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="flex items-center gap-1.5 border-t border-line px-3 py-3">
             {SpeechRecognitionCtor && (

@@ -114,14 +114,26 @@ async function attention(ownerUserId) {
           WHERE ${LIVE} AND f.status = 'active' AND f.owner_user_id = $1
             AND NOT EXISTS (SELECT 1 FROM classification_results cr
                              WHERE cr.file_id = f.id AND cr.classified_subject_id IS NOT NULL)) AS unfiled,
-       -- Discovered but going nowhere: no hash or no content row, and no job
-       -- queued to change that. The self-healing scan repairs these, so a
-       -- non-zero number here means "the next scan has work to do", not
-       -- "these are lost".
+       -- Discovered but going nowhere: the pipeline still owes this file
+       -- something, and no job is queued to deliver it. The self-healing scan
+       -- repairs these, so a non-zero number here means "the next scan has
+       -- work to do", not "these are lost".
+       --
+       -- SCOPED BY STATE, not by missing artifacts. This asked "no hash or no
+       -- file_content row", which counted every photograph in the archive as
+       -- permanently stalled -- an image never gets a content row and never
+       -- will, because there is no text in it to extract. The dashboard
+       -- therefore showed 1,426 stalled files on an installation where nothing
+       -- was wrong with any of them, and the same predicate in the scan's
+       -- recovery pass re-queued all 1,426 on every single scan.
+       --
+       -- Kept identical to fileRepository.countBacklogByLocation and
+       -- triageRepository on purpose: "stalled" must be the same number on the
+       -- dashboard, the Storage Locations page and the triage queue, or two of
+       -- the three look like a bug.
        (SELECT count(*)::int FROM files f
           WHERE f.status = 'active' AND f.owner_user_id = $1
-            AND (f.sha256_hash IS NULL
-                 OR NOT EXISTS (SELECT 1 FROM file_content fc WHERE fc.file_id = f.id))
+            AND f.pipeline_state IN ('discovered', 'processing', 'failed_retryable')
             AND NOT EXISTS (SELECT 1 FROM processing_jobs pj
                              WHERE pj.status IN ('queued','running')
                                AND pj.payload->>'fileId' = f.id::text))                         AS stalled,

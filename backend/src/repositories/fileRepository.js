@@ -136,14 +136,6 @@ async function updateStatus(id, status) {
   return rows[0] || null;
 }
 
-async function updateProcessingStatus(id, processingStatus) {
-  const { rows } = await db.query(
-    "UPDATE files SET processing_status = $2 WHERE id = $1 RETURNING *",
-    [id, processingStatus]
-  );
-  return rows[0] || null;
-}
-
 async function updatePath(id, { currentPath, filenameCurrent }, client = null) {
   const exec = client || db;
   const { rows } = await exec.query(
@@ -572,19 +564,52 @@ async function listStaleActive(storageLocationId, since) {
 }
 
 /**
- * Files this location has already DISCOVERED but never finished processing:
- * a row exists, but there is no hash, or no extracted-content row to go with
- * it.
+ * Files this location discovered but that no stage has ever moved forward.
  *
  * WHY THIS EXISTS
  *
- * Job handoff runs through Redis, and Redis can lose work in ways the
- * database never sees -- a power cut mid-import, a Memurai restart, an
- * operator killing the worker. The file row is already committed at that
- * point, so the next scan sees a file it recognizes whose size and mtime
- * have not changed, marks it scanned, and moves on. Nothing ever retries it.
- * The file then sits in the list forever: no hash, no text, unsearchable,
- * permanently "pending", and completely silent about it.
+ * A file row is committed before its first job is enqueued, and those are two
+ * statements. A crash between them leaves a file nothing will ever pick up:
+ * the next scan sees a file it recognizes whose size and mtime have not
+ * changed, marks it scanned, and moves on. Without this pass the file sits in
+ * the list forever -- no hash, no text, unsearchable, and completely silent
+ * about it.
+ *
+ * WHY THE PREDICATE IS A STATE AND NOT A MISSING ARTIFACT
+ *
+ * This used to ask `sha256_hash IS NULL OR there is no file_content row`, and
+ * that was the single most expensive bug in the system.
+ *
+ * A `file_content` row is written by text extraction. A PNG never gets one --
+ * not because anything failed, but because there is no text in a photograph to
+ * extract. hashProcessor routes images to markNeedsUser("A photo -- have a
+ * look and file it"), which is the pipeline correctly finishing. The predicate
+ * asked about a PERMANENT PROPERTY OF THE DOCUMENT rather than about PROGRESS,
+ * so every scan rediscovered every image and re-queued it from the top.
+ *
+ * Measured on this installation before the fix: 1,426 images, 1,370 scans,
+ * 1,944,085 hash jobs -- and each of those fans out to metadata, duplicate
+ * detection and describe, for 7,834,332 job rows and 4.6 GB of queue table
+ * behind a 48 MB library. The pipeline was busy, the queue drained as fast as
+ * it filled, and every health signal read "ok" throughout, because they all
+ * measure depth and none measured whether the work was worth doing.
+ *
+ * services/pipelineState.js was written to end exactly this class of bug and
+ * says so in its own header -- "the predicate was about a permanent property
+ * of the document (a photograph has no text layer) rather than about
+ * progress". The state machine was correct all along; those 1,426 files were
+ * sitting in `needs_user` the entire time. This query was simply never moved
+ * onto it. It is now: `discovered` means no stage has run, which is the only
+ * thing this pass is for.
+ *
+ * WHY NOT ALSO `failed_retryable`
+ *
+ * Because services/fileRecovery.js already owns that state, and does it better
+ * than this could: it re-runs the SPECIFIC stage that failed, against the same
+ * per-stage retry budget the processors count against. This pass restarts from
+ * hashing, so including failed files here would re-run stages that already
+ * succeeded and would give a file two independent sources of retries. One
+ * mechanism per state.
  *
  * Two exclusions keep this from creating work rather than recovering it:
  *
@@ -594,11 +619,12 @@ async function listStaleActive(storageLocationId, since) {
  *     long backlog is not stranded, and re-enqueueing it every rescan would
  *     multiply the backlog it is already stuck behind.
  *
- * Cloud placeholders are deliberately INCLUDED. hashProcessor skips them on
- * purpose and tells the user "it will be processed automatically once its
- * contents are available locally" -- a promise nothing kept until now. Their
- * re-check is cheap and correctly starts the pipeline once iCloud has
- * materialized the bytes.
+ * Cloud placeholders are still deliberately INCLUDED, and the state predicate
+ * preserves that rather than relying on it. hashProcessor returns early for a
+ * placeholder WITHOUT transitioning state -- so it stays `discovered`, and is
+ * re-checked here on every scan exactly as before. That keeps the promise the
+ * skip records: "it will be processed automatically once its contents are
+ * available locally".
  */
 async function listUnprocessed(storageLocationId, before) {
   const { rows } = await db.query(
@@ -607,8 +633,7 @@ async function listUnprocessed(storageLocationId, before) {
       WHERE f.storage_location_id = $1
         AND f.status = 'active'
         AND f.created_at < $2
-        AND (f.sha256_hash IS NULL
-             OR NOT EXISTS (SELECT 1 FROM file_content fc WHERE fc.file_id = f.id))
+        AND f.pipeline_state = 'discovered'
         AND NOT EXISTS (
               SELECT 1 FROM processing_jobs pj
                WHERE pj.status IN ('queued', 'running')
@@ -649,6 +674,19 @@ async function listUnprocessed(storageLocationId, before) {
  *     listUnprocessed), so a non-zero number here is "will heal", not
  *     "lost" -- but it should still be visible rather than invisible.
  *
+ * SCOPED BY PIPELINE STATE, for the same reason listUnprocessed is -- and it
+ * had the same bug. Asking "no hash or no file_content row" counted every
+ * photograph in the archive as backlog forever, because an image never gets a
+ * file_content row and never will. This page therefore reported 1,426 files
+ * permanently stalled on an installation where nothing was wrong with any of
+ * them. A number that is always non-zero and never actionable trains people to
+ * ignore the number.
+ *
+ * The three states below are the whole of "the pipeline still owes this file
+ * something": not started, running, or failed-and-will-be-retried. `needs_user`
+ * is deliberately absent -- the machine has finished and a person is the next
+ * step, which is a triage queue rather than a backlog.
+ *
  * One query for every location; the Storage Locations page renders a card
  * per location and must not issue a count per card.
  */
@@ -667,8 +705,7 @@ async function countBacklogByLocation(ownerUserId) {
        ) j ON true
       WHERE f.status = 'active'
         AND f.owner_user_id = $1
-        AND (f.sha256_hash IS NULL
-             OR NOT EXISTS (SELECT 1 FROM file_content fc WHERE fc.file_id = f.id))
+        AND f.pipeline_state IN ('discovered', 'processing', 'failed_retryable')
       GROUP BY f.storage_location_id`,
     [ownerUserId]
   );
@@ -1190,71 +1227,7 @@ async function countsBySubject({ filters = null } = {}) {
   return Object.fromEntries(rows.map((r) => [r.subject_id, r.count]));
 }
 
-/**
- * The same count, for the other classification axis.
- *
- * Kept deliberately parallel to countsBySubject -- same latest-row rule, same
- * active-only rule, same duplicate exclusion -- because the two numbers appear
- * in two browse surfaces that a user will compare. If "Invoice: 12" and
- * "Finance: 12" counted different things, one of them would be a lie and
- * neither page would say which.
- *
- * No rollup here: document types are flat by design (docs/03-taxonomy.md
- * §3.4). "Invoice" means Invoice.
- */
-async function countsByDocumentType({ filters = null } = {}) {
-  const { sql, params } = buildFilterSql(filters, 1);
-  const { rows } = await db.query(
-    `SELECT latest.classified_document_type_id AS document_type_id, COUNT(*)::int AS count
-     FROM files f
-     JOIN LATERAL (
-       SELECT classified_document_type_id FROM classification_results cr
-       WHERE cr.file_id = f.id ORDER BY cr.created_at DESC LIMIT 1
-     ) latest ON true
-     WHERE latest.classified_document_type_id IS NOT NULL AND f.status = 'active'
-       AND ${NOT_A_DUPLICATE_COPY}
-     ${sql}
-     GROUP BY latest.classified_document_type_id`,
-    params
-  );
-  return Object.fromEntries(rows.map((r) => [r.document_type_id, r.count]));
-}
 
-/**
- * How many of the owner's files carry no document type at all.
- *
- * This number is the point of the page, not a footnote. The axis is populated
- * by the AI tier, by a filename/extension signal, or by hand -- so on a real
- * corpus most files legitimately have no type yet, and a browse page that
- * silently omitted them would suggest the corpus is smaller than it is.
- */
-async function countUntyped({ filters = null } = {}) {
-  const { sql, params } = buildFilterSql(filters, 1);
-  const { rows } = await db.query(
-    `SELECT COUNT(*)::int AS count
-     FROM files f
-     LEFT JOIN LATERAL (
-       SELECT classified_document_type_id FROM classification_results cr
-       WHERE cr.file_id = f.id ORDER BY cr.created_at DESC LIMIT 1
-     ) latest ON true
-     WHERE latest.classified_document_type_id IS NULL AND f.status = 'active'
-       AND ${NOT_A_DUPLICATE_COPY}
-     ${sql}`,
-    params
-  );
-  return rows[0]?.count || 0;
-}
-
-/**
- * Several files by id, keeping only the caller's own.
- *
- * The bulk operations all need this. Doing it as one query rather than a loop
- * of findByIdForOwner is not only faster -- it makes "silently drop the ones
- * that are not yours" impossible to express by accident, because the caller
- * gets back a list it must compare against what it asked for. bulkService
- * does exactly that and reports the difference rather than pretending the
- * whole batch succeeded.
- */
 /**
  * Which of these ids survive the filter set -- as a Set, for candidates that
  * arrived from somewhere other than SQL.
@@ -1358,6 +1331,16 @@ async function countByLifecycle(status, ownerUserId) {
   return rows[0].count;
 }
 
+/**
+ * Several files by id, keeping only the caller's own.
+ *
+ * The bulk operations all need this. Doing it as one query rather than a loop
+ * of findByIdForOwner is not only faster -- it makes "silently drop the ones
+ * that are not yours" impossible to express by accident, because the caller
+ * gets back a list it must compare against what it asked for. bulkService
+ * does exactly that and reports the difference rather than pretending the
+ * whole batch succeeded.
+ */
 async function listByIdsForOwner(ids, ownerUserId) {
   requireOwner(ownerUserId, "listByIdsForOwner");
   if (!Array.isArray(ids) || ids.length === 0) return [];
@@ -1381,19 +1364,16 @@ module.exports = {
   listPhotos,
   countPhotos,
   countsBySubject,
-  countsByDocumentType,
   idsMatching,
   idsPassingFilters,
   idsCurrentlyInSubject,
   listByLifecycle,
   countByLifecycle,
   countInSubject,
-  countUntyped,
   findByLocationAndPath,
   findBySha256,
   create,
   updateStatus,
-  updateProcessingStatus,
   updatePath,
   markScanned,
   setDocumentDate,

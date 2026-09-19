@@ -208,7 +208,7 @@ function paraphraseOf(description, wordCount = 8) {
     console.log(`\n   ERROR ${e.stack}`);
   } finally {
     // Closed explicitly, and `process.exit` is NOT used to finish: requiring
-    // the service layer opens a shared Redis connection, and exiting while it
+    // the service layer opens a shared connection pool, and exiting while it
     // is mid-close trips a libuv assertion that leaves the process reporting
     // 127 -- a script whose every check passed would still fail a CI chain.
     await p.end().catch(() => {});

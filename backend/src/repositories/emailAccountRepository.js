@@ -38,10 +38,6 @@ async function updateTokens(id, { refreshTokenEncrypted, scopes }) {
   return rows[0] || null;
 }
 
-async function updateSyncCursor(id, syncCursor) {
-  await db.query("UPDATE email_accounts SET sync_cursor = $2 WHERE id = $1", [id, syncCursor]);
-}
-
 async function markSynced(id) {
   const { rows } = await db.query(
     "UPDATE email_accounts SET last_synced_at = now(), last_error = NULL, status = 'connected' WHERE id = $1 RETURNING *",
@@ -69,5 +65,5 @@ async function disconnect(id) {
 module.exports = {
   ...base,
   findByProviderAndAddress, listByUser, listConnected,
-  updateTokens, updateSyncCursor, markSynced, markError, disconnect,
+  updateTokens, markSynced, markError, disconnect,
 };

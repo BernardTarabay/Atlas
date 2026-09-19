@@ -2,8 +2,8 @@ import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Plus, Archive as ArchiveIcon, Trash2, RotateCcw,
-  FolderInput, Search, X, ListTree,
-  FolderOpen, CheckSquare, Square, Keyboard, Table2,
+  FolderInput, Search, X, ListTree, PanelLeftClose, PanelLeftOpen,
+  FolderOpen, CheckSquare, Square, Keyboard, Table2, ChevronUp, ChevronDown, Sparkles, Share2,
 } from "lucide-react";
 import { api } from "../services/apiClient";
 import { useApiData } from "../hooks/useApiData";
@@ -22,7 +22,7 @@ import { MoveFileModal } from "../components/MoveFileModal";
 // place now -- see StorageLocationsPage.
 import { FileFilters, EMPTY_FILTERS, filtersToParams, countActiveFilters } from "../components/FileFilters";
 import { usePublishAssistantContext, useAssistantChanges, useAssistantReveal } from "../context/AssistantContext";
-import { List, useDynamicRowHeight } from "react-window";
+import { List, useDynamicRowHeight, useListRef } from "react-window";
 import { LibraryFileRow } from "../components/LibraryFileRow";
 import { SubjectTreePane } from "../components/SubjectTreePane";
 import { LibraryOnboarding } from "../components/LibraryOnboarding";
@@ -36,6 +36,10 @@ import { FileContextMenu, useFileContextMenu } from "../components/FileContextMe
 import { openFileSmart } from "../lib/openFile";
 import { useToast } from "../context/ToastContext";
 import { useAuth } from "../context/AuthContext";
+import { hasMatch } from "../components/HighlightedText";
+import { MobileLibrary } from "../components/MobileLibrary";
+import { useFileActions } from "../lib/useFileActions";
+import { shareFiles } from "../lib/shareFile";
 
 /**
  * Files per page in the list view.
@@ -66,8 +70,94 @@ const TABLE_LIMIT = 100;
  * cannot drift apart now, and there is one obvious thing to change when the
  * chrome changes again.
  */
-const CHROME_HEIGHT = "19rem";
-const paneHeight = (extra = "0rem") => ({ maxHeight: `calc(100vh - ${CHROME_HEIGHT} + ${extra})` });
+/*
+ * It is no longer ONE number, because the header stopped being one height.
+ * The navigation floats now (components/FloatingHeader.jsx) with the verse
+ * ribbon above it, and that stack is 48px, 56px, or taller again when a long
+ * verse wraps. `--app-chrome-h` is what it actually measured; 15.5rem is
+ * everything below it that this page puts above these panes -- the search
+ * box, the overview strip, the filter bar and the pager -- which is the old
+ * 19rem less the 3.5rem the fixed-height bar used to occupy.
+ */
+const CHROME_HEIGHT = "(15.5rem + var(--app-chrome-h, 7.5rem))";
+
+/**
+ * How tall the two panes on this page are.
+ *
+ * ONE expression, used by BOTH, and that is the fix rather than a detail. The
+ * folder pane used to be `maxHeight: calc(100vh - CHROME)` while the file
+ * panel beside it was `height: calc(100vh - CHROME + 11rem)`. Same page, same
+ * row of the same grid, 176px apart -- so on a 900px screen the folder list
+ * had roughly nine rows of usable space while the panel next to it had
+ * fourteen, and the pane whose whole job is browsing a deep tree was the
+ * short one. Nobody chose that; the two numbers were written at different
+ * times and nothing made them agree.
+ *
+ * `height`, not `maxHeight`, for both: the tree inside is windowed and can
+ * only size itself against a parent that has a height to give it.
+ */
+const PANE_HEIGHT = `calc(100vh - ${CHROME_HEIGHT} + 11rem)`;
+
+/**
+ * THE FOLDER PANE'S WIDTH.
+ *
+ * It was `minmax(14rem, 17%)`: 224px on a laptop, which after the card's
+ * padding, a chevron, a folder glyph and a file count leaves a nested folder
+ * about forty characters, and every name at depth three truncated. 17% of the
+ * viewport is also the wrong rule -- a wider screen does not mean you want
+ * proportionally more folder, it means you can afford a bit more and want the
+ * rest for files.
+ *
+ * So it is a real number the user owns, dragged and remembered. The default is
+ * 20rem rather than a percentage; MIN is the narrowest at which a two-level
+ * name still reads, and MAX exists so the pane cannot be dragged over the
+ * files it is there to navigate.
+ */
+const TREE_WIDTH_KEY = "atlas.library.treeWidth";
+const TREE_COLLAPSED_KEY = "atlas.library.treeCollapsed";
+const TREE_WIDTH_DEFAULT = 320;
+const TREE_WIDTH_MIN = 200;
+const TREE_WIDTH_MAX = 640;
+/** The files area never goes below this, whatever the pane is dragged to. */
+const FILES_MIN_WIDTH = 420;
+/** Collapsed, the pane is a rail wide enough for one icon. */
+const TREE_RAIL_WIDTH = 36;
+/**
+ * The `gap-4` between the two columns, in pixels.
+ *
+ * Counted, because it is not free: the container holds pane + gap + files, so
+ * subtracting only FILES_MIN_WIDTH leaves the files area a gap's width SHORT
+ * of its own floor. Measured at 1024px it produced 414px of files against a
+ * stated minimum of 420 -- six pixels, and wrong for the reason that matters:
+ * a floor that is not the floor is a number nobody can rely on.
+ */
+const SPLIT_GAP = 16;
+
+const clampTreeWidth = (px, containerWidth = Infinity) => {
+  const room = containerWidth - FILES_MIN_WIDTH - SPLIT_GAP;
+  const ceiling = Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, room));
+  return Math.round(Math.min(ceiling, Math.max(TREE_WIDTH_MIN, px)));
+};
+
+/**
+ * Remembered per browser, and a broken read falls back to the default rather
+ * than propagating -- localStorage throws outright in private-mode Safari, and
+ * a page that fails to render because it could not recall a pane width is a
+ * worse outcome than a pane at its default width.
+ */
+function readStored(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+function writeStored(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch { /* the layout still works for this session; it just is not remembered */ }
+}
 
 /**
  * THE LIBRARY.
@@ -125,6 +215,13 @@ export function LibraryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get("subject") || null;
   const unfiledMode = searchParams.get("unfiled") === "1";
+  /* ARRIVING FROM ANOTHER VIEW, POINTED AT ONE FILE.
+   * Types (and anything else) can link to ?subject=<id>&file=<id>. Landing in
+   * the right folder is only half of "show me where this lives" -- the other
+   * half is not making someone find one row among two hundred, which is why
+   * the id travels too. Cleared once acted on so a later reload does not
+   * re-highlight a file the person has moved on from. */
+  const focusFileId = searchParams.get("file") || null;
   /**
    * Archive and Trash are destinations, not folders (migration 037), so they
    * live in the URL the same way the Unfiled pile does -- addressable, and
@@ -273,6 +370,45 @@ export function LibraryPage() {
     [subjects, selectedId]
   );
 
+  /* ---------------------------------------------------------------------
+   * MOBILE
+   *
+   * The phone gets a different interaction model over the same data, not the
+   * same components at a narrower width -- see components/MobileLibrary.jsx
+   * for why that distinction is the whole point. What it needs from here is
+   * three things the desktop layout expresses differently:
+   *
+   *   the folders to show     desktop renders a whole tree in a side pane;
+   *                           a phone shows the CHILDREN of where you are and
+   *                           you walk into them.
+   *   id-based selection      toggleFile takes a row INDEX, which suits a
+   *                           keyboard cursor and a shift-click range and is
+   *                           meaningless to a finger on a specific row.
+   *   folders in the same     so a selection can contain both and one action
+   *   selection              bar can act on it.
+   * ------------------------------------------------------------------- */
+  const mobileFolders = useMemo(() => {
+    const all = subjects || [];
+    if (searching || unfiledMode) return [];   // a result set is files, not a place
+    return all.filter((sub) => (sub.parent_id || null) === (selectedId || null));
+  }, [subjects, selectedId, searching, unfiledMode]);
+
+  const toggleFileById = useCallback((id) => {
+    setSelectedFileIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleFolderById = useCallback((id) => {
+    setSelectedSubjectIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
   // Subject create/rename/delete state.
   const [formTarget, setFormTarget] = useState(null); // { mode: 'create'|'edit', parentId?, subject? }
   const [binDropTarget, setBinDropTarget] = useState(null);
@@ -395,6 +531,173 @@ export function LibraryPage() {
 
   const detailPanelRef = useRef(null);
   const fileSearchRef = useRef(null);
+
+  /* ------------------------------------------------------------------ *
+   * THE FOLDER PANE'S WIDTH, AND WHY IT IS DRAGGED RATHER THAN CHOSEN.
+   *
+   * The complaint was that the folder container is too small, worst with many
+   * folders. There are three separate causes and this addresses all three:
+   * the pane is now as tall as the panel beside it (PANE_HEIGHT), it starts
+   * wider, and its width is the user's to set -- because how much folder you
+   * want is a function of how deep YOUR taxonomy is, which no default can
+   * know. Someone with three top-level folders wants the room for files;
+   * someone with `Clients / Acme / 2026 / Invoices` wants to read the names.
+   *
+   * A drag rather than a preference screen, because this is a direct
+   * manipulation of a thing you can see, and because the whole gesture is
+   * discoverable from a cursor change.
+   * ------------------------------------------------------------------ */
+  const splitRef = useRef(null);
+  /**
+   * TWO NUMBERS, NOT ONE, AND THE DISTINCTION IS LOAD-BEARING.
+   *
+   * `preferredTreeWidth` is what the USER asked for. It changes only when they
+   * drag the splitter, press an arrow key, or reset -- never because the
+   * window moved.
+   *
+   * `containerWidth` is how much room there is. The width actually rendered is
+   * the preference clamped to the room, computed at render time.
+   *
+   * The obvious single-state version is wrong in a way that only shows up
+   * later: clamping the stored value on every resize means narrowing the
+   * window permanently overwrites the preference, and widening it again does
+   * not bring the pane back -- a clamp is one-way. Someone who drags the pane
+   * to 500px, docks their laptop to a small second screen, and comes back the
+   * next day finds it at 200 with no memory that they ever chose otherwise.
+   * Deriving instead means the squeeze is temporary and the preference
+   * survives it, which is what "remembered" has to mean.
+   */
+  const [preferredTreeWidth, setPreferredTreeWidth] = useState(
+    () => readStored(TREE_WIDTH_KEY, TREE_WIDTH_DEFAULT)
+  );
+  const [containerWidth, setContainerWidth] = useState(Infinity);
+  const treeWidth = clampTreeWidth(preferredTreeWidth, containerWidth);
+  const [treeCollapsed, setTreeCollapsed] = useState(() => readStored(TREE_COLLAPSED_KEY, false) === true);
+  const [resizing, setResizing] = useState(false);
+
+  const commitTreeWidth = useCallback((px) => {
+    const container = splitRef.current?.getBoundingClientRect().width ?? Infinity;
+    const next = clampTreeWidth(px, container);
+    setPreferredTreeWidth(next);
+    writeStored(TREE_WIDTH_KEY, next);
+    return next;
+  }, []);
+
+  const toggleTreeCollapsed = useCallback(() => {
+    setTreeCollapsed((was) => {
+      writeStored(TREE_COLLAPSED_KEY, !was);
+      return !was;
+    });
+  }, []);
+
+  /**
+   * The drag itself, on the WINDOW rather than on the handle.
+   *
+   * Pointer capture on the handle would be the tidier-looking version and is
+   * the wrong one here: the pointer routinely leaves the 6px strip during a
+   * fast drag, and any listener attached to the handle stops receiving moves
+   * the moment it does -- the pane sticks and then jumps when you come back.
+   * Listening on the window for the duration means the drag follows the
+   * cursor anywhere, including outside the browser window.
+   *
+   * `user-select: none` on the body for the duration, because dragging across
+   * a list of folder names otherwise selects them, and the blue smear looks
+   * like the app has broken.
+   */
+  useEffect(() => {
+    if (!resizing) return undefined;
+    const onMove = (e) => {
+      const box = splitRef.current?.getBoundingClientRect();
+      if (!box) return;
+      commitTreeWidth(e.clientX - box.left);
+    };
+    const stop = () => setResizing(false);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    const previous = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      document.body.style.userSelect = previous;
+    };
+  }, [resizing, commitTreeWidth]);
+
+  /**
+   * How much room there is, measured rather than assumed.
+   *
+   * This exists so the files area keeps its floor: a width dragged out on a
+   * large monitor, or restored from another machine's localStorage, must not
+   * squeeze the file list into a column too narrow to read.
+   *
+   * A CALLBACK REF, NOT `useEffect` OVER A REF OBJECT.
+   *
+   * The obvious version -- `useEffect(() => { observe(splitRef.current) }, [])`
+   * -- was written first and silently did nothing. This grid renders inside
+   * the "loaded" branch, so on the mount that the effect runs on there is no
+   * element yet; `splitRef.current` is null, the effect returns early, and
+   * with an empty dependency array it never runs again. The observer was never
+   * attached, `containerWidth` stayed Infinity, and the clamp that keeps the
+   * files area above its floor never applied. Measured at a 1024px viewport it
+   * left the file list 414px wide against a stated minimum of 420 -- a floor
+   * that was not a floor, failing quietly in exactly the direction nobody
+   * checks.
+   *
+   * React calls a callback ref WHEN THE NODE ATTACHES, whenever that is, so
+   * the observer is set up at the moment there is something to observe.
+   */
+  const observerRef = useRef(null);
+  const measureSplit = useCallback(() => {
+    const el = splitRef.current;
+    if (el) setContainerWidth(el.getBoundingClientRect().width);
+  }, []);
+
+  const attachSplit = useCallback((el) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    splitRef.current = el;
+    if (!el) return;
+    // Measured synchronously here, so the first render after the element
+    // exists already has a real number rather than Infinity.
+    setContainerWidth(el.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width));
+    ro.observe(el);
+    observerRef.current = ro;
+  }, []);
+
+  /**
+   * BOTH SIGNALS, because they cover different things and neither is
+   * guaranteed.
+   *
+   * ResizeObserver catches what a window resize cannot: the collapsed rail
+   * replacing the pane, a scrollbar appearing, the page chrome changing height
+   * -- all of which resize this element while the window sits still.
+   *
+   * The window listener catches what ResizeObserver missed. That is not a
+   * hypothetical: in the embedded browser this was verified in, a
+   * ResizeObserver on this element never fired at all -- not even the initial
+   * callback the spec promises on `observe()` -- so the pane kept a width
+   * measured at the previous viewport and the files area silently stayed below
+   * its floor. Whether that is a quirk of one environment hardly matters: a
+   * layout that is correct only where one particular API works is a layout
+   * with a single point of failure, and the fallback is four lines.
+   *
+   * Both write the same measured value, so running both is idempotent.
+   */
+  useEffect(() => {
+    window.addEventListener("resize", measureSplit);
+    return () => {
+      window.removeEventListener("resize", measureSplit);
+      observerRef.current?.disconnect();
+    };
+  }, [measureSplit]);
+
+  // Collapsing changes this element's width without any event the listener
+  // above can see, so re-measure when it flips.
+  useEffect(() => { measureSplit(); }, [treeCollapsed, measureSplit]);
 
   useEffect(() => setFileOffset(0), [selectedId, unfiledMode]);
 
@@ -524,6 +827,78 @@ export function LibraryPage() {
   // the selection callbacks and tear down and re-add the window keydown
   // listener on each pass.
   const rows = useMemo(() => documents || [], [documents]);
+
+  /* FIND-IN-PAGE OVER THE RESULT SET.
+   *
+   * The server search is hybrid -- it matches filenames, the text inside
+   * documents, and each file's description BY MEANING. That is what makes it
+   * good, and also why a result set can contain rows with no visible
+   * connection to what was typed: "kid blowing out candles" legitimately
+   * returns a photo described as "a child at a party with a cake".
+   *
+   * So these two questions are different, and the page was only answering the
+   * first:
+   *
+   *   which files are RELEVANT?          the server decided; that is the list
+   *   which ones literally SAY this?     nobody was saying, and it is the one
+   *                                      you can act on with your eyes
+   *
+   * matchIndexes answers the second, over the rows already on screen. Marking
+   * them yellow and putting a next/previous control on them turns a result
+   * list into something you can walk, the way find-in-page does -- without
+   * re-filtering, so the semantic hits are still there when the literal ones
+   * run out.
+   */
+  const listRef = useListRef(null);
+  const [matchPos, setMatchPos] = useState(0);
+
+  const matchIndexes = useMemo(() => {
+    if (!searching) return [];
+    const out = [];
+    rows.forEach((d, i) => {
+      const name = d.ai_short_title || d.display_name || d.filename_current;
+      const other = d.ai_short_title ? (d.display_name || d.filename_current) : d.current_path;
+      if (hasMatch(name, debouncedDocQuery) || hasMatch(other, debouncedDocQuery)) out.push(i);
+    });
+    return out;
+  }, [rows, debouncedDocQuery, searching]);
+
+  // A new query is a new search: start from its first hit, not wherever the
+  // last one happened to leave the pointer.
+  useEffect(() => { setMatchPos(0); }, [debouncedDocQuery, fileOffset]);
+
+  useEffect(() => {
+    if (!focusFileId || !rows.length) return;
+    const index = rows.findIndex((r) => r.id === focusFileId);
+    if (index < 0) return;
+
+    setCursor(index);
+    setSelectedFileIds(new Set([focusFileId]));
+    listRef.current?.scrollToRow({ index, align: "center", behavior: "smooth" });
+
+    // Drop the parameter, keeping the folder. The highlight has done its job
+    // the moment it is seen; leaving it in the URL would make every later
+    // reload of this folder re-select a file for no reason anyone remembers.
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("file");
+        return next;
+      },
+      { replace: true }
+    );
+  }, [focusFileId, rows, setSearchParams]);
+
+  const goToMatch = useCallback((pos) => {
+    if (!matchIndexes.length) return;
+    // Wrap in both directions, like every find bar. Running off the end of a
+    // list of matches should return you to the top, not stop dead.
+    const next = ((pos % matchIndexes.length) + matchIndexes.length) % matchIndexes.length;
+    setMatchPos(next);
+    const rowIndex = matchIndexes[next];
+    setCursor(rowIndex);
+    listRef.current?.scrollToRow({ index: rowIndex, align: "center", behavior: "smooth" });
+  }, [matchIndexes, listRef]);
   useEffect(() => { rowsRef.current = rows; }, [rows]);
 
   const previewFile = useMemo(
@@ -630,6 +1005,13 @@ export function LibraryPage() {
         selectOnly(index, d);
       },
       onToggleSelect: (index, opts) => toggleFile(index, opts),
+      // More than one picked changes what the marked rows MEAN: this is a
+      // batch, and double-clicking will not open it. The rows say so in
+      // their own colour rather than leaving the count in a toolbar the
+      // eye is not on.
+      isMulti: selectedCount > 1,
+      query: searching ? debouncedDocQuery : "",
+      activeMatchIndex: matchIndexes.length ? matchIndexes[matchPos] : -1,
       onOpen: (d) => openFile(d),
       onContextMenu: (e, d, index) => {
         // A right-DRAG that just finished is a marquee selection, not a
@@ -646,7 +1028,7 @@ export function LibraryPage() {
       },
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rows, selectedFileIds, cursor, toggleFile]
+    [rows, selectedFileIds, selectedCount, cursor, toggleFile, searching, debouncedDocQuery, matchIndexes, matchPos]
   );
 
   /**
@@ -763,6 +1145,72 @@ export function LibraryPage() {
   useEffect(() => {
     setCursor((c) => (rows.length === 0 ? 0 : Math.min(c, rows.length - 1)));
   }, [rows.length]);
+
+  /* LET THE ASSISTANT BUILD THE FOLDERS THE ARCHIVE IS MISSING.
+   *
+   * The unfiled pile is not a backlog of work someone forgot to do -- it is
+   * every document the classifier looked at against the whole taxonomy and
+   * honestly reported that nothing fit. Re-running classification cannot move
+   * one of them, because the folder each needs does not exist and the
+   * classifier cannot create one.
+   *
+   * This runs ONE batch inline (~120 files, half a minute) rather than
+   * queueing the whole pile, deliberately: the first thing a person needs from
+   * a feature that edits their folder tree is to see what it does on a sample
+   * they can still take back. The full backlog is the same endpoint without
+   * `batch`, which returns a job.
+   */
+  const [organizing, setOrganizing] = useState(false);
+
+  async function organizeUnfiled() {
+    setOrganizing(true);
+    try {
+      const r = await api.post("/subjects/unfiled/organize", { batch: true });
+      const made = (r.createdFolders || []).length;
+      if (r.reason) {
+        push(r.reason, "info");
+      } else if (!r.filed) {
+        push("Nothing in this batch could be filed confidently. The rest stays unfiled.", "info");
+      } else {
+        push(
+          `Filed ${r.filed} file(s)` +
+            (made ? `, creating ${made} folder(s): ${r.createdFolders.map((f) => f.name).join(", ")}` : ""),
+          "success"
+        );
+      }
+      reloadSubjects();
+      reloadFiles();
+      reloadOverview();
+    } catch (err) {
+      push(err.message || "Could not organize the unfiled pile.", "error");
+    } finally {
+      setOrganizing(false);
+    }
+  }
+
+  /** Share the current selection. Same implementation as a single file's
+   *  Share -- lib/shareFile decides between the system share sheet and an
+   *  export, and says which it did. */
+  const shareSelection = useCallback(async () => {
+    const chosen = rows.filter((r) => selectedFileIds.has(r.id));
+    if (!chosen.length) return;
+    await shareFiles(chosen, { onNotice: push });
+  }, [rows, selectedFileIds, push]);
+
+  /* Every file action this page offers, from the one shared definition.
+   * Share and export live in lib/useFileActions so Library, Files and Types
+   * cannot drift apart; what is passed in here is only what is genuinely
+   * local -- what "open" means on this screen, and which modals its edit and
+   * move actions raise. */
+  const fileActions = useFileActions({
+    push,
+    onOpen: (d) => openFile(d),
+    onPreview: (d) => setPreviewFileId(d.id),
+    onDetails: (d) => setSelectedFileId(d.id),
+    onRename: hasPermission("document.rename") || hasPermission("classification.modify") ? (d) => setEditFileTarget(d) : null,
+    onMove: hasPermission("document.move") ? (d) => setMoveFileTarget(d) : null,
+    onDelete: hasPermission("document.delete") ? (d) => setRemoveFileTarget(d) : null,
+  });
 
   // Tell the assistant what is on screen so "move this file" resolves.
   usePublishAssistantContext({
@@ -1099,7 +1547,17 @@ export function LibraryPage() {
           onNavigate={(id) => (id ? openSubject(id) : openSubject(null))}
           onClearSearch={() => setDocQuery("")}
           actions={
-            !searching && !unfiledMode && selected && canManage && selected.level !== "subcategory" ? (
+            unfiledMode && canManage ? (
+              <button
+                className="btn-primary btn-sm"
+                onClick={organizeUnfiled}
+                disabled={organizing || !unfiledCount}
+                title="Let the assistant file these, creating folders where nothing suitable exists"
+              >
+                <Sparkles size={13} />
+                {organizing ? "Organizing…" : "Organize with AI"}
+              </button>
+            ) : !searching && !unfiledMode && selected && canManage && selected.level !== "subcategory" ? (
               <button
                 className="btn-secondary btn-sm"
                 onClick={() => setFormTarget({ mode: "create", parentId: selected.id })}
@@ -1122,13 +1580,18 @@ export function LibraryPage() {
             disappears without a single row moving, and it is closer to the
             pointer than the top of the panel ever was. */}
         {selectedCount > 0 && (
-          <div className="fixed bottom-4 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border border-brand-500/30 bg-surface/95 px-3 py-2 shadow-[var(--shadow-overlay)] backdrop-blur">
+          <div className="floating-bar fixed bottom-4 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 px-3 py-2">
             <span className="text-sm font-medium text-brand-700">
               {selectedCount.toLocaleString()} selected
             </span>
             {hasPermission("document.move") && (
               <button className="btn-primary btn-sm" onClick={() => setBulkFileOpen(true)}>
                 <FolderInput size={13} /> File {selectedCount.toLocaleString()}…
+              </button>
+            )}
+            {hasPermission("document.download") && (
+              <button className="btn-secondary btn-sm" onClick={shareSelection}>
+                <Share2 size={13} /> Share
               </button>
             )}
             {/* Putting a selection away. Dragging onto Archive or Trash works
@@ -1226,6 +1689,7 @@ export function LibraryPage() {
               style={{ minHeight: 320 }}
             >
               <List
+                listRef={listRef}
                 rowComponent={LibraryFileRow}
                 rowCount={documents.length}
                 rowHeight={fileRowHeight}
@@ -1235,6 +1699,39 @@ export function LibraryPage() {
                 overscanCount={6}
               />
             </div>
+            {/* NEXT / PREVIOUS LITERAL MATCH.
+                Only while searching, and only when something on this page
+                actually says what was typed -- a control that is always
+                present but usually does nothing teaches people to ignore it.
+                Fixed to the right edge rather than placed above the list for
+                the reason the selection bar is: appearing must not move the
+                rows it is pointing at. */}
+            {searching && matchIndexes.length > 0 && (
+              <div className="fixed right-4 top-1/2 z-40 flex -translate-y-1/2 flex-col items-center gap-1 rounded-xl border border-line bg-surface/95 p-1.5 shadow-[var(--shadow-overlay)] backdrop-blur">
+                <button
+                  className="rounded-lg p-1.5 text-base-500 transition-colors hover:bg-base-850 hover:text-base-100"
+                  onClick={() => goToMatch(matchPos - 1)}
+                  title="Previous match (shift+enter)"
+                  aria-label="Previous match"
+                >
+                  <ChevronUp size={16} />
+                </button>
+                <span className="tabular px-1 text-[11px] leading-tight text-base-400">
+                  {matchPos + 1}
+                  <span className="text-base-600">/</span>
+                  {matchIndexes.length}
+                </span>
+                <button
+                  className="rounded-lg p-1.5 text-base-500 transition-colors hover:bg-base-850 hover:text-base-100"
+                  onClick={() => goToMatch(matchPos + 1)}
+                  title="Next match (enter)"
+                  aria-label="Next match"
+                >
+                  <ChevronDown size={16} />
+                </button>
+              </div>
+            )}
+
             <div className="mt-2">
               <Pagination offset={fileOffset} limit={FILES_LIMIT} pageCount={documents?.length} onChange={setFileOffset} />
             </div>
@@ -1258,15 +1755,8 @@ export function LibraryPage() {
         file={fileMenu.menu?.file}
         at={fileMenu.menu?.at}
         onClose={fileMenu.close}
-        actions={{
-          onOpen: (d) => openFile(d),
-          onPreview: (d) => setPreviewFileId(d.id),
-          onDetails: (d) => setSelectedFileId(d.id),
-          onDownload: (d) => downloadFile(d.id, d.display_name || d.filename_current),
-          onRename: hasPermission("document.rename") || hasPermission("classification.modify") ? (d) => setEditFileTarget(d) : null,
-          onMove: hasPermission("document.move") ? (d) => setMoveFileTarget(d) : null,
-          onDelete: hasPermission("document.delete") ? (d) => setRemoveFileTarget(d) : null,
-        }}
+        nativeShare={fileActions.nativeShareAvailable}
+        actions={fileActions.actions}
       />
       <PageHeader
         title="Library"
@@ -1278,7 +1768,12 @@ export function LibraryPage() {
                 a read-only user could not reach the map or the table at all --
                 hiding the two views that are best at browsing from the people
                 most likely to only be browsing. */}
-            <div className="flex items-center gap-0.5 rounded-lg border border-line-strong bg-base-900 p-0.5">
+            {/* Desktop only. On a phone both views render the same touch list
+                (see the md:hidden block below), because a seven-column table
+                on a 375px screen is not a view, it is a horizontal scroll with
+                a table in it -- and offering a toggle that changes nothing is
+                worse than not offering one. */}
+            <div className="hidden items-center gap-0.5 rounded-lg border border-line-strong bg-base-900 p-0.5 md:flex">
               <button
                 className={view === "list" ? "btn-secondary btn-sm" : "btn-ghost btn-sm"}
                 onClick={() => changeView("list")}
@@ -1314,6 +1809,15 @@ export function LibraryPage() {
           placeholder="Search your documents — by name, contents, or what they're about…   (press /)"
           value={docQuery}
           onChange={(e) => setDocQuery(e.target.value)}
+          // Enter walks the matches without leaving the search box, which is
+          // the gesture this borrows from -- browser find, chat search, every
+          // editor. Shift reverses it. Doing nothing on Enter would be the
+          // one keystroke a person is certain to try here.
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || !matchIndexes.length) return;
+            e.preventDefault();
+            goToMatch(e.shiftKey ? matchPos - 1 : matchPos + 1);
+          }}
         />
         {docQuery && (
           <button
@@ -1393,7 +1897,7 @@ export function LibraryPage() {
             // Floating, for the same reason the list view's bar is -- see the
             // comment there. Both views must agree about whether picking a
             // file moves the page.
-            <div className="fixed bottom-4 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-xl border border-brand-500/30 bg-surface/95 px-3 py-2 shadow-[var(--shadow-overlay)] backdrop-blur">
+            <div className="floating-bar fixed bottom-4 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 px-3 py-2">
               <span className="text-sm font-medium text-brand-700">{selectedCount.toLocaleString()} selected</span>
               {hasPermission("document.move") && (
                 <button className="btn-primary btn-sm" onClick={() => setBulkFileOpen(true)}>
@@ -1440,16 +1944,77 @@ export function LibraryPage() {
             compact
           />
         )}
-        {/* 12 columns rather than 5, so the split can be 3/9 instead of 2/3.
-              The tree was taking 40% of the width and the file list -- the
-              thing the page exists for -- was living in the remaining 60%
-              alongside its own toolbar, which is what made the Library feel
-              cramped at every window size. A folder tree needs enough width
-              for a name and a count; a file inventory needs everything else.
-              25/75 is the ratio every file manager settles on for the same
-              reason. `gap-5` over `gap-4` gives the two panes visible air
-              between them rather than near-touching edges. */}
-          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+        {/* A MEASURED FLOOR FOR THE TREE, EVERYTHING ELSE TO THE FILES.
+              This was a 12-column grid, and the file list wanted more of it --
+              but taking the tree from 3/12 to 2/12 made folder names
+              unreadable, because a percentage has no idea how wide a word is.
+              At 1280px, 2/12 is ~200px minus padding, and the names truncated
+              to nothing.
+              So the tree is sized in rem instead: 14rem is enough for a real
+              folder name and its count, and it never gets less no matter how
+              narrow the window. Past ~82rem the 17% cap takes over so it does
+              not sprawl on a wide monitor. `minmax(0,1fr)` on the file column
+              is load-bearing -- without the 0 floor a long filename sets the
+              column's min-content width and pushes the grid wider than the
+              page. */}
+          {/* PHONE: one touch list, folders then files. The two-pane grid
+              below is a pointer layout -- a tree beside a table, hover-revealed
+              actions, double-click to open -- and none of that survives a
+              finger, which is why the mobile Library had no way to open a file
+              or select two of them. Same data, same handlers, different model. */}
+          <div className="md:hidden">
+            <MobileLibrary
+              folders={mobileFolders}
+              files={rows}
+              query={searching ? debouncedDocQuery : ""}
+              loading={loadingDocs}
+              emptyMessage={
+                searching ? `Nothing matches “${debouncedDocQuery}”.`
+                  : unfiledMode ? "Nothing is waiting to be filed."
+                    : "This folder is empty."
+              }
+              selectedFileIds={selectedFileIds}
+              selectedFolderIds={selectedSubjectIds}
+              onToggleFile={toggleFileById}
+              onToggleFolder={toggleFolderById}
+              onEnterFolder={(folder) => openSubject(folder.id)}
+              onOpenFile={(file) => openFile(file)}
+              onPreviewFile={(file) => setPreviewFileId(file.id)}
+              onClearSelection={() => { clearSelection(); setSelectedSubjectIds(new Set()); }}
+              onSelectAll={() => {
+                setSelectedFileIds(new Set(rows.map((r) => r.id)));
+                setSelectedSubjectIds(new Set(mobileFolders.map((f) => f.id)));
+              }}
+              onMove={(row, kind) => {
+                // One row swiped -> move just that one. No row -> the action
+                // bar, which acts on the whole selection.
+                if (row && kind === "file") setMoveFileTarget(row);
+                else setBulkFileOpen(true);
+              }}
+              onArchive={(row) => sendToBin(row ? [row.id] : [...selectedFileIds], "archive")}
+              onTrash={(row) => sendToBin(row ? [row.id] : [...selectedFileIds], "trash")}
+              onFileMenu={(file) => setSelectedFileId(file.id)}
+              // One row swiped shares that file; the action bar shares the
+              // whole selection. Same lib/shareFile either way.
+              onShare={(file) => (file ? shareFiles([file], { onNotice: push }) : shareSelection())}
+              canModify={hasPermission("document.move")}
+              canDelete={hasPermission("document.delete")}
+              header={
+                <LibraryBreadcrumb
+                  subjects={subjects}
+                  selected={selected}
+                  unfiledMode={unfiledMode}
+                  searching={searching}
+                  query={debouncedDocQuery}
+                  count={searching ? null : unfiledMode ? unfiledCount : scopeTotal}
+                  countLabel="file"
+                  onNavigate={(id) => (id ? openSubject(id) : openSubject(null))}
+                  onClearSearch={() => setDocQuery("")}
+                />
+              }
+            />
+          </div>
+
           {/* Two things fix the "click a subject at the bottom, then scroll
               back up to see its files" problem:
               1. The tree scrolls inside its own pane instead of growing the
@@ -1458,8 +2023,45 @@ export function LibraryPage() {
               2. `items-start` on the grid, so the detail panel below has
                  room to travel and `position: sticky` actually applies --
                  grid items stretch to equal height by default, which leaves
-                 sticky nothing to stick within. */}
-          <div className="glass-card flex flex-col lg:col-span-2" style={paneHeight()}>
+                 sticky nothing to stick within.
+
+              THE COLUMN WIDTH COMES FROM A CSS VARIABLE, not from an inline
+              `gridTemplateColumns`. Below `lg` this is a single stacked
+              column, and an inline template would have won at every width --
+              putting a 320px folder pane beside a 60px sliver of files on a
+              tablet. `.library-split` (index.css) applies the variable only
+              inside the `lg` media query, so the responsive behaviour stays
+              where the rest of the app keeps it. */}
+          <div
+            ref={attachSplit}
+            className="library-split hidden grid-cols-1 items-start gap-4 md:grid"
+            style={{ "--library-tree-w": treeCollapsed ? `${TREE_RAIL_WIDTH}px` : `${treeWidth}px` }}
+          >
+          {treeCollapsed ? (
+            /* COLLAPSED: a rail, not a hidden pane.
+               Removing the column entirely would give the files everything and
+               leave nothing to click to get the folders back -- so the way out
+               has to live where the pane was. One button, the full height of
+               the pane, so it is impossible to miss and impossible to hit by
+               accident on the way to something else. */
+            <button
+              type="button"
+              onClick={toggleTreeCollapsed}
+              title="Show folders"
+              aria-label="Show the folder pane"
+              aria-expanded={false}
+              className="glass-card flex w-full flex-col items-center gap-2 py-3 text-base-500 transition-colors hover:bg-base-850 hover:text-brand-700"
+              style={{ height: PANE_HEIGHT }}
+            >
+              <PanelLeftOpen size={16} aria-hidden="true" />
+              {/* Upright, so the rail can be narrow enough to be worth
+                  collapsing to. `writing-mode` rather than a rotation: a
+                  rotated element keeps its original box, so the column would
+                  still have to be as wide as the word is long. */}
+              <span className="text-[11px] font-medium [writing-mode:vertical-rl]">Folders</span>
+            </button>
+          ) : (
+          <div className="glass-card relative flex flex-col" style={{ height: PANE_HEIGHT }}>
             {/* Windowed: see components/SubjectTreePane.jsx. The folder search,
                 the open/closed state and the flattening all live in there,
                 because none of them can work per-row once rows unmount. */}
@@ -1555,7 +2157,67 @@ export function LibraryPage() {
                 </>
               }
             />
+
+            {/* THE SPLITTER.
+                Inside the card and overhanging its right edge rather than a
+                third grid column: a real column would need its own gap
+                arithmetic on both sides, and the strip would then be part of
+                the layout it is measuring. This is 9px of hit area centred on
+                the card's border, which is what makes it findable with a mouse
+                without being a visible bar in a design that has none.
+
+                Hidden below `lg`, where the grid stacks and there is no
+                horizontal split to move.
+
+                role="separator" with the aria-value* triple, and arrow keys,
+                because this IS a control -- a pane sized only by dragging is a
+                pane a keyboard user cannot size. Home resets to the default,
+                which is also what double-clicking does. */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize the folder pane"
+              aria-valuenow={treeWidth}
+              aria-valuemin={TREE_WIDTH_MIN}
+              aria-valuemax={TREE_WIDTH_MAX}
+              tabIndex={0}
+              onPointerDown={(e) => { e.preventDefault(); setResizing(true); }}
+              onDoubleClick={() => commitTreeWidth(TREE_WIDTH_DEFAULT)}
+              onKeyDown={(e) => {
+                const step = e.shiftKey ? 64 : 16;
+                // From the RENDERED width, not the stored preference: arrowing
+                // left from a pane the window is currently squeezing should
+                // move from what is on screen, not jump to a wider number the
+                // user cannot see.
+                if (e.key === "ArrowLeft") { e.preventDefault(); commitTreeWidth(treeWidth - step); }
+                else if (e.key === "ArrowRight") { e.preventDefault(); commitTreeWidth(treeWidth + step); }
+                else if (e.key === "Home") { e.preventDefault(); commitTreeWidth(TREE_WIDTH_DEFAULT); }
+              }}
+              title="Drag to resize · double-click to reset"
+              className={
+                "absolute -right-[5px] inset-y-0 z-10 hidden w-[9px] cursor-col-resize lg:block " +
+                "after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:-translate-x-1/2 after:rounded-full " +
+                "after:transition-colors hover:after:bg-brand-400/70 focus-visible:outline-none focus-visible:after:bg-brand-500 " +
+                (resizing ? "after:bg-brand-500" : "after:bg-transparent")
+              }
+            />
+
+            {/* Collapse. Bottom-left of the pane, away from the row actions
+                that appear on hover at the top-right of every folder -- a
+                control that hides the whole pane should not sit under the
+                cursor while someone is aiming at a folder's Rename. */}
+            <button
+              type="button"
+              onClick={toggleTreeCollapsed}
+              aria-expanded
+              aria-label="Hide the folder pane"
+              title="Hide the folder pane"
+              className="absolute bottom-2 left-2 hidden rounded-lg p-1.5 text-base-500 transition-colors hover:bg-base-850 hover:text-base-200 lg:block"
+            >
+              <PanelLeftClose size={14} aria-hidden="true" />
+            </button>
           </div>
+          )}
 
           {/* Sticky on wide screens so the files stay in view no matter how
               far down the tree the selection is. On narrow screens the
@@ -1566,8 +2228,8 @@ export function LibraryPage() {
               itself against a parent that has a height to give it. */}
           <div
             ref={detailPanelRef}
-            className="glass-card flex flex-col p-4 lg:sticky lg:top-2 lg:col-span-10"
-            style={{ height: `calc(100vh - ${CHROME_HEIGHT} + 11rem)` }}
+            className="glass-card flex flex-col p-4 lg:sticky lg:top-2"
+            style={{ height: PANE_HEIGHT }}
           >
             {lifecycleMode ? renderBinPanel() : renderFilePanel()}
           </div>
@@ -1750,7 +2412,7 @@ export function LibraryPage() {
         }
       />
 
-      {/* Filing the selection. The SAME component Photos and Triage use,
+      {/* Filing the selection. The SAME component Photos and Failed use,
           pointed at /files/move -- which reaches the same
           fileOrganizeService.moveManyToSubject they do. It already knows how
           to ask about duplicates once for a whole batch instead of once per

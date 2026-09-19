@@ -6,7 +6,7 @@
 //     -> auto-apply names it (read-only, so the original is untouched)
 //     -> mirror builds a shortcut under its subject folder
 //
-// Runs the processors directly rather than through Redis so it needs no
+// Runs the processors directly rather than through the queue so it needs no
 // worker; the watcher itself is real.
 const fs = require("fs");
 const fsp = require("fs/promises");

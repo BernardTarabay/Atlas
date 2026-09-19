@@ -46,8 +46,8 @@ async function cleanup() {
     log("cleanup warning:", e.message);
   }
   await pool.end();
-  // The scan enqueues real BullMQ jobs, which opens queue + Redis handles
-  // that would otherwise keep this process alive after it has finished.
+  // The scan enqueues real jobs, which opens queue handles that would
+  // otherwise keep this process alive after it has finished.
   await closeAllQueues();
  
 }

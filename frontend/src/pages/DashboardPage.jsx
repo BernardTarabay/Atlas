@@ -167,11 +167,11 @@ export function DashboardPage() {
             <section className="glass-card p-5 xl:col-span-2">
               <SectionHead icon={AlertTriangle} title="Needs your attention" />
               <div className="mt-3 space-y-1">
-                {/* These two now land on Triage rather than a page that
+                {/* These two now land on Failed rather than a page that
                     merely contains the affected files somewhere in it --
-                    Triage filters to exactly this set and offers the fix. */}
+                    Failed filters to exactly this set and offers the fix. */}
                 <AttentionRow
-                  icon={ScanLine} tone="warning" to="/triage?reason=needs_ocr"
+                  icon={ScanLine} tone="warning" to="/failed?reason=needs_ocr"
                   count={attention.needsOcr} label="need OCR"
                   detail="Scans and photos with no readable text"
                 />
@@ -181,7 +181,7 @@ export function DashboardPage() {
                   detail="No subject assigned yet"
                 />
                 <AttentionRow
-                  icon={AlertTriangle} tone="critical" to="/triage?reason=stalled"
+                  icon={AlertTriangle} tone="critical" to="/failed?reason=stalled"
                   count={attention.stalled} label="stalled"
                   detail="Discovered but nothing is processing them"
                 />

@@ -48,7 +48,7 @@ const HAS_ACTIVE_JOB = `
    LIMIT 1
 `;
 
-// BullMQ retries a failed job up to three times with exponential backoff
+// The queue retries a failed job up to three times with exponential backoff
 // (queues/index.js), and the processing_jobs row sits at 'failed' in between
 // attempts -- so a job that is about to succeed on attempt two looks
 // identical to one that has given up. The grace window is comfortably longer

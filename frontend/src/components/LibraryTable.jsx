@@ -4,6 +4,7 @@ import { Pagination } from "./Pagination";
 import { DocumentDateInline } from "./DocumentDate";
 import { SearchSnippet } from "./SearchSnippet";
 import { formatBytes } from "../utils/format";
+import { setFileDragData } from "../lib/fileDrag";
 
 /**
  * The Library's dense table view.
@@ -130,8 +131,18 @@ export function LibraryTable({
                       onClick={(e) => onRowClick?.(index, f, e)}
                       onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenFile?.(f); }}
                       onContextMenu={(e) => onContextMenu?.(e, f, index)}
+                      /* Draggable for the same reason the card rows are: this
+                         is the same inventory in a denser shape, and a gesture
+                         that works in one view and not the other is a gesture
+                         nobody trusts in either. Carries the selection when
+                         the dragged row is part of it. See lib/fileDrag. */
+                      draggable
+                      onDragStart={(e) => {
+                        const carry = isSelected ? rows.filter((r) => selectedFileIds.has(r.id)) : [f];
+                        setFileDragData(e, carry.length ? carry : [f]);
+                      }}
                       className={
-                        "cursor-pointer border-b border-line last:border-0 " +
+                        "cursor-pointer border-b border-row-divider last:border-0 " +
                         (isSelected
                           ? "bg-brand-500/10"
                           : isCursor

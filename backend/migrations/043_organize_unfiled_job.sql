@@ -1,0 +1,17 @@
+-- The job that empties the unfiled pile by building the folders it needs.
+--
+-- WHY IT IS A JOB AND NOT A REQUEST
+--
+-- Organizing is a planning call per batch of ~120 files, and each takes tens of
+-- seconds because the model is reading a few hundred titles and descriptions to
+-- work out what they have in common. Against the backlog this was written for
+-- -- 4,629 unfiled files, 64% of the archive -- that is roughly forty batches
+-- and a quarter of an hour. Nothing survives that in an HTTP request.
+--
+-- As a job_type it also inherits everything the rest of the pipeline already
+-- has: it shows up on the Processing Jobs page with progress, it is claimed and
+-- retried by the same queue, and it is audit-logged. A background loop bolted
+-- on beside the queue would have had none of that, and this is a job that
+-- CREATES FOLDERS in someone's taxonomy -- precisely the kind of work that
+-- should be visible while it runs rather than discovered afterwards.
+ALTER TYPE job_type ADD VALUE IF NOT EXISTS 'organize_unfiled';

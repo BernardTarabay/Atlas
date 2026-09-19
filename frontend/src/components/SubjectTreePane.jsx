@@ -135,7 +135,7 @@ function TreeRow({
           }
         }}
         data-select-id={node.id}
-        className={`group flex h-[38px] w-full items-center gap-1 rounded-lg pr-1.5 text-left text-sm transition-colors
+        className={`group relative flex h-[38px] w-full items-center gap-1 overflow-hidden rounded-lg pr-1 text-left text-sm transition-colors
           ${dropTarget ? "bg-brand-500/25 ring-1 ring-inset ring-brand-400/60" : ""}
           ${draggingSubjectId === node.id ? "opacity-40" : ""}
           ${canDragFolders ? "cursor-grab active:cursor-grabbing" : ""}
@@ -158,12 +158,12 @@ function TreeRow({
             aria-expanded={expanded}
             aria-label={`${expanded ? "Collapse" : "Expand"} ${node.name}`}
             className="shrink-0 rounded p-1 text-base-500 hover:text-base-200"
-            style={{ marginLeft: 6 + depth * 14 }}
+            style={{ marginLeft: 2 + depth * 10 }}
           >
             <ChevronRight size={12} className={"transition-transform " + (expanded ? "rotate-90" : "")} />
           </button>
         ) : (
-          <span aria-hidden="true" className="shrink-0" style={{ marginLeft: 6 + depth * 14, width: 22 }} />
+          <span aria-hidden="true" className="shrink-0" style={{ marginLeft: 2 + depth * 10, width: 18 }} />
         )}
         <button
           type="button"
@@ -184,8 +184,22 @@ function TreeRow({
           <HighlightedName name={node.name} term={term} />
           <SubjectCount node={node} />
         </button>
+        {/* THE ROW ACTIONS FLOAT OVER THE NAME, THEY DO NOT SIT BESIDE IT.
+            These were `opacity-0 group-hover:opacity-100`, which hides a
+            control without giving its width back -- three buttons' worth of
+            row, ~70px, was reserved on every folder for something visible on
+            one of them at a time. Combined with the indent and the chevron
+            that left a nested folder perhaps forty pixels to spell its name
+            in, so anything with children truncated to nothing.
+            Absolutely positioned instead: invisible means zero width now, and
+            the fade behind them keeps a long name from running under the
+            buttons when they do appear. */}
         {canManage && (
-          <div className="flex shrink-0 gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+            {/* Blurred rather than filled with a colour: a row can be neutral,
+                hovered, picked or open, and a hard-coded background would be
+                wrong on three of those four. */}
+            <div className="flex shrink-0 items-center gap-0.5 rounded-lg px-0.5 backdrop-blur-sm">
             <button type="button" className="btn-ghost btn-sm" onClick={() => onAddChild(node)}
               title="Add a folder inside this one" aria-label={`Add a folder inside ${node.name}`}>
               <Plus size={12} />
@@ -198,6 +212,7 @@ function TreeRow({
               onClick={() => onDelete(node)} title="Delete" aria-label={`Delete ${node.name}`}>
               <Trash2 size={12} />
             </button>
+            </div>
           </div>
         )}
       </div>
@@ -390,7 +405,12 @@ export function SubjectTreePane({
         )}
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col p-3 pt-2">
+      {/* `lg:pb-10` leaves room for the Library's collapse button, which is
+          absolutely positioned over the bottom-left of this pane. Without it
+          the last folder in a long list sits underneath the button and cannot
+          be clicked -- a dead row at the bottom of the tree with no visible
+          cause. */}
+      <div className="flex min-h-0 flex-1 flex-col p-3 pt-2 lg:pb-10">
         {/* The header is whatever it is -- Unfiled, Archive, Trash, and
             whatever gets pinned next. It sizes itself and the list takes what
             is left, so neither has to know the other's height. */}

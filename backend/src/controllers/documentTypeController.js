@@ -1,21 +1,19 @@
 const documentTypeRepository = require("../repositories/documentTypeRepository");
-const documentTypeService = require("../services/documentTypeService");
 
 /**
- * The plain list, unchanged: this is what the type dropdowns in EditFileModal
- * and DocumentsPage bind to, and they want an array, not an envelope.
+ * The taxonomy's second axis, as a plain list.
+ *
+ * This is what the type filter on the Files page and the type dropdown in the
+ * file editor bind to, and they want an array, not an envelope.
+ *
+ * There was a `browse` action here too, returning the same types with a
+ * filtered file count against each plus an untyped total. It existed for one
+ * caller, the Types page, and went with it: two aggregate scans over
+ * classification_results are not something to keep running for a screen
+ * nothing links to.
  */
 async function list(req, res) {
   res.json(await documentTypeRepository.list({ limit: 200 }));
 }
 
-/**
- * The browse surface: the same types with a filtered file count each, plus how
- * many files carry no type at all. Separate from `list` so a dropdown does not
- * pay for two aggregate queries every time a modal opens.
- */
-async function browse(req, res) {
-  res.json(await documentTypeService.list(req.query, req.user.id));
-}
-
-module.exports = { list, browse };
+module.exports = { list };

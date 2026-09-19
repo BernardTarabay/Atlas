@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Portal } from "./Portal";
 import {
-  ExternalLink, Eye, Download, Pencil, FolderInput, Trash2, Info,
+  ExternalLink, Eye, Download, Pencil, FolderInput, Trash2, Info, Share2, FolderSearch, Sparkles,
 } from "lucide-react";
 
 /**
@@ -27,7 +28,7 @@ import {
  * be. Measured in useLayoutEffect so the correction happens before paint
  * rather than as a visible jump.
  */
-export function FileContextMenu({ file, at, actions = {}, onClose }) {
+export function FileContextMenu({ file, at, actions = {}, onClose, nativeShare = false }) {
   const ref = useRef(null);
   // The CORRECTED position, or null until this particular opening has been
   // measured. Deliberately not seeded from `at`.
@@ -100,13 +101,43 @@ export function FileContextMenu({ file, at, actions = {}, onClose }) {
   const items = [
     actions.onOpen && { key: "open", icon: ExternalLink, label: "Open", hint: "double-click", fn: actions.onOpen },
     actions.onPreview && { key: "preview", icon: Eye, label: "Preview", fn: actions.onPreview },
-    actions.onDetails && { key: "details", icon: Info, label: "Details", fn: actions.onDetails },
+    // SHARE SITS WITH THE WAYS OF GETTING THE FILE OUT, above the ones that
+    // change it. Labelled by what the platform will actually do: on a phone,
+    // and on a desktop browser that supports it, this opens the system share
+    // sheet (where WhatsApp and everything else installed lives); everywhere
+    // else lib/shareFile falls back to a download and says so. One label for
+    // both would have to be vague about which.
+    actions.onShare && {
+      key: "share",
+      icon: Share2,
+      label: "Share…",
+      hint: nativeShare ? "share sheet" : "downloads",
+      fn: actions.onShare,
+    },
     actions.onDownload && { key: "download", icon: Download, label: "Download", fn: actions.onDownload },
+    // The bridge between two views of one inventory: Types is a different way
+    // of looking at the same files, so a file reached through it should be
+    // able to say where it actually lives.
+    actions.onShowInLibrary && {
+      key: "locate", icon: FolderSearch, label: "Show in Library", fn: actions.onShowInLibrary,
+    },
+    actions.onDetails && { key: "details", icon: Info, label: "Details", fn: actions.onDetails },
+    // The touch and keyboard route to what dragging a row onto the assistant
+    // does. Placed with the other read-only ways of looking at the file, above
+    // the ones that change it -- attaching a document reads it, nothing more.
+    actions.onAskAssistant && {
+      key: "assistant", icon: Sparkles, label: "Ask Gemini about this", fn: actions.onAskAssistant,
+    },
     actions.onRename && { key: "rename", icon: Pencil, label: "Rename", fn: actions.onRename },
     actions.onMove && { key: "move", icon: FolderInput, label: "Move to…", fn: actions.onMove },
   ].filter(Boolean);
 
   return (
+    // Portalled for the reason components/Portal.jsx documents: this positions
+    // itself against the viewport, and any ancestor that grows a `transform`
+    // or `backdrop-filter` would silently redefine what "the viewport" means.
+    // The navigation drawer already lost that argument once.
+    <Portal>
     <div
       ref={ref}
       role="menu"
@@ -150,6 +181,7 @@ export function FileContextMenu({ file, at, actions = {}, onClose }) {
         </>
       )}
     </div>
+    </Portal>
   );
 }
 

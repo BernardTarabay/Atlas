@@ -11,7 +11,7 @@ async function handle({ fileId, force = false }) {
   const result = await descriptionService.describeFile(fileId, { force });
 
   // Returned rather than thrown when the description could not be produced,
-  // for the reason ocrProcessor documents: BullMQ's retry ladder is the wrong
+  // for the reason ocrProcessor documents: the queue's retry ladder is the wrong
   // answer to "the daily cap is reached", "AI is switched off" or "no
   // extractor can read this format". descriptionService has already recorded
   // the outcome on the file and moved it to a state the user can see, so the

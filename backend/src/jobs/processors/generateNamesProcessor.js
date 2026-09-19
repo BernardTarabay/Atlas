@@ -296,7 +296,7 @@ async function handle({ fileId }) {
   // Bug fix (real-world report): 40 files produced 78 pending proposals.
   // Nothing here checked whether this file already had a pending proposal
   // before inserting a new one -- if generate_names ran twice for the same
-  // file for any reason (a BullMQ retry after a transient failure partway
+  // file for any reason (a queue retry after a transient failure partway
   // through the job, a duplicate enqueue), it just stacked a second
   // proposal on top. There should only ever be one pending proposal per
   // file: an exact repeat of the same suggestion is skipped outright; a
@@ -377,7 +377,7 @@ async function handle({ fileId }) {
     return created;
   });
 
-  const autoApplied = await autoDecide(proposal, file, latest);
+  const autoApplied = await autoDecide(proposal, file, latest, titleSource);
 
   // The machine is done with this document either way.
   //
@@ -428,23 +428,54 @@ async function handle({ fileId }) {
  * renames the file BACK, and every rename records its previous path and
  * filename in the audit log. Nothing is destroyed and every step is traceable.
  *
- * Below 0.90 nothing is touched at all.
+ * Below 0.90 nothing is touched at all -- UNLESS the name came from a real,
+ * vetted title, which is judged on its provenance instead. See the note in
+ * autoDecide for why a numeric floor is the wrong instrument for that case.
  */
 const AUTO_APPLY_MIN_SCORE = 0.9;
 
-async function autoDecide(proposal, file, classification) {
+async function autoDecide(proposal, file, classification, titleSource) {
   const score = Number(proposal.confidence_score ?? classification.confidence_score ?? 0);
 
-  if (score < AUTO_APPLY_MIN_SCORE) {
+  /* A VETTED TITLE IS ITS OWN EVIDENCE.
+   *
+   * The score above measures a CLASSIFICATION -- how sure the system is about
+   * which folder a document belongs in. For a name derived from a real title
+   * it is the wrong number, and frequently there is no right one: a file whose
+   * AI pass produced "Lease Renewal Notice, Arnold, Mullen and Pacheco, 25
+   * February 2025" but could not place it in any folder gets a good title and
+   * NO classification row at all. Nothing anywhere records how confident that
+   * title is.
+   *
+   * Then filing it wrote one. fileOrganizeService records an AI_AUTO placement
+   * at 0.75, that became "the latest classification", and naming inherited it
+   * -- so the organizer silently suppressed renaming for all 4,619 files it
+   * touched. Measured: 30 of 30 sampled files rejected, and a full pass would
+   * have rejected 6,128 of 6,966 on a number describing their folder.
+   *
+   * A title that reached this point has already been vetted, just not
+   * numerically. It passed isUsableTitle, it survived isBoilerplateTitle (the
+   * check that stops a Word template renaming a thousand files to the
+   * organisation's name), and the stages upstream refuse to derive a title
+   * from text they judged unusable. Those ARE the quality gates for a name.
+   *
+   * So provenance decides here, and the numeric floor still governs everything
+   * else -- a name assembled from a classification alone, with no real title
+   * behind it, must still clear 0.90.
+   */
+  const vetted = titleSource === "embedded" || titleSource === "ai";
+
+  if (!vetted && score < AUTO_APPLY_MIN_SCORE) {
     await renameProposalRepository.review(proposal.id, { status: "rejected", reviewedBy: null });
     await auditLogRepository.record({
       action: "rename.auto_rejected",
       entityType: "file",
       entityId: file.id,
-      newState: { proposalId: proposal.id, confidenceScore: score },
+      newState: { proposalId: proposal.id, confidenceScore: score, titleSource: titleSource || null },
       reason:
         `Proposed name scored ${score.toFixed(2)}, below the ${AUTO_APPLY_MIN_SCORE} needed to rename ` +
-        "without review. The name was rejected; the file keeps its classification and its place.",
+        "without review, and it was assembled from a classification rather than a real title. " +
+        "The name was rejected; the file keeps its classification and its place.",
     });
     return false;
   }
@@ -468,6 +499,10 @@ async function autoDecide(proposal, file, classification) {
     newState: {
       proposalId: proposal.id,
       confidenceScore: score,
+      // Which of the two bases applied. Worth recording separately: "renamed
+      // because a vetted title existed" and "renamed because a classification
+      // scored 0.94" are different claims, and only the log can say which.
+      basis: vetted ? `vetted-title:${titleSource}` : "confidence",
       // Recorded explicitly, because the two cases have genuinely different
       // consequences and "it was auto-applied" alone does not say which
       // happened. Anyone reading this log later needs to know whether a file
@@ -475,8 +510,11 @@ async function autoDecide(proposal, file, classification) {
       renamedOnDisk: writesToDisk,
     },
     reason:
-      `Auto-applied without review: the proposed name scored ${score.toFixed(2)}, at or above ` +
-      `${AUTO_APPLY_MIN_SCORE}. ` +
+      (vetted
+        ? `Auto-applied without review: the name comes from a vetted ${titleSource} title, ` +
+          "which passed the usable-title and boilerplate checks. "
+        : `Auto-applied without review: the proposed name scored ${score.toFixed(2)}, at or above ` +
+          `${AUTO_APPLY_MIN_SCORE}. `) +
       (writesToDisk
         ? `"${location.name}" is WRITABLE, so the file itself is renamed on disk. The previous path and ` +
           "filename are recorded on the file.renamed entry, which is what makes this reversible."

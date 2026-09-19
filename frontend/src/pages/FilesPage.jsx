@@ -20,11 +20,14 @@ import { DocumentDate, DocumentDateInline, LocationLabel } from "../components/D
 import { PreviewModal } from "../components/PreviewModal";
 import { FileContextMenu, useFileContextMenu } from "../components/FileContextMenu";
 import { openFileSmart } from "../lib/openFile";
+import { setFileDragData } from "../lib/fileDrag";
 import { EditFileModal } from "../components/EditFileModal";
 import { MoveFileModal } from "../components/MoveFileModal";
 import { useToast } from "../context/ToastContext";
 import { useAuth } from "../context/AuthContext";
 import { formatBytes } from "../utils/format";
+import { HighlightedText } from "../components/HighlightedText";
+import { useFileActions } from "../lib/useFileActions";
 
 const LIMIT = 25;
 
@@ -157,7 +160,7 @@ export function FilesPage() {
   // seven /files/count calls behind them. The results of the first six were
   // discarded before anyone could read them.
   //
-  // 300ms is the same interval SubjectsPage and CompareFilesModal already
+  // 300ms is the same interval the Library's own search box already
   // debounce at; matching them keeps the app feeling consistent rather than
   // having one search box behave differently from the others.
   const [debouncedQ, setDebouncedQ] = useState(q);
@@ -212,6 +215,19 @@ export function FilesPage() {
       onNotice: (msg, tone) => push(msg, tone),
     });
   }
+
+  /* The same shared action set the Library and Types use -- see
+   * lib/useFileActions. This page contributes only its own idea of "open"
+   * and which modals its edit/move/delete actions raise. */
+  const fileActions = useFileActions({
+    push,
+    onOpen: (f) => openFile(f),
+    onPreview: hasPermission("document.download") ? (f) => setPreviewFileId(f.id) : null,
+    onDetails: (f) => setSelectedId(f.id),
+    onRename: hasPermission("document.rename") ? (f) => setEditTarget(f) : null,
+    onMove: hasPermission("document.move") ? (f) => setMoveTarget(f) : null,
+    onDelete: hasPermission("document.delete") ? (f) => setRemoveTarget(f) : null,
+  });
 
   async function downloadFile(id, filename) {
     try {
@@ -421,12 +437,18 @@ export function FilesPage() {
                   // Clicking used to open the detail modal, which is what made
                   // double-click impossible -- the modal caught the second click.
                   className={
-                    "table-row-hover cursor-pointer border-b border-line last:border-0 " +
+                    "table-row-hover cursor-pointer border-b border-row-divider last:border-0 " +
                     (pickedId === f.id ? "row-selected" : "")
                   }
                   onClick={() => setPickedId(f.id)}
                   onDoubleClick={(e) => { e.preventDefault(); openFile(f); }}
                   onContextMenu={(e) => { setPickedId(f.id); fileMenu.openAt(e, f); }}
+                  /* Dragging a file out of this table hands it to the
+                     assistant as context -- the same gesture, and the same
+                     payload, as the Library's rows (lib/fileDrag). This page
+                     has no multi-select, so a drag is always one file. */
+                  draggable
+                  onDragStart={(e) => setFileDragData(e, [f])}
                 >
                   <td className="w-full max-w-0 px-4 py-3">
                     {/* max-w-0 + w-full below sm, and ONLY below sm.
@@ -448,7 +470,12 @@ export function FilesPage() {
                         its right. .table-shell still scrolls if a table genuinely
                         cannot fit; it just no longer has to here. */}
                     <div className="flex items-center gap-2">
-                      <p className="truncate font-medium text-base-100">{f.ai_short_title || f.filename_current}</p>
+                      <p className="truncate font-medium text-base-100">
+                        {/* Same find-in-page marking the Library uses, from the
+                            same component, so a match looks identical wherever
+                            a file is listed. */}
+                        <HighlightedText text={f.ai_short_title || f.filename_current} query={debouncedQ} />
+                      </p>
                       {/* Status only when it is NOT the normal case -- a
                           column of 40 "active" badges is noise, but a file
                           that went missing off disk needs to be obvious. */}
@@ -465,7 +492,9 @@ export function FilesPage() {
                         <span className="truncate">{f.ai_summary}</span>
                       </p>
                     ) : (
-                      <p className="mt-0.5 truncate text-xs text-base-500">{f.filename_current}</p>
+                      <p className="mt-0.5 truncate text-xs text-base-500">
+                        <HighlightedText text={f.filename_current} query={debouncedQ} />
+                      </p>
                     )}
                     <SearchSnippet snippet={f.snippet} />
                     <MatchReason file={f} />
@@ -549,15 +578,8 @@ export function FilesPage() {
         file={fileMenu.menu?.file}
         at={fileMenu.menu?.at}
         onClose={fileMenu.close}
-        actions={{
-          onOpen: (f) => openFile(f),
-          onPreview: hasPermission("document.download") ? (f) => setPreviewFileId(f.id) : null,
-          onDetails: (f) => setSelectedId(f.id),
-          onDownload: (f) => downloadFile(f.id, f.filename_current),
-          onRename: hasPermission("document.rename") ? (f) => setEditTarget(f) : null,
-          onMove: hasPermission("document.move") ? (f) => setMoveTarget(f) : null,
-          onDelete: hasPermission("document.delete") ? (f) => setRemoveTarget(f) : null,
-        }}
+        nativeShare={fileActions.nativeShareAvailable}
+        actions={fileActions.actions}
       />
 
       <EditFileModal

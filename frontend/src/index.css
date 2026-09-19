@@ -42,6 +42,15 @@
 @theme {
   --font-sans: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  /* ARABIC, AND WHY IT IS NOT A WEBFONT.
+     The one place this is used is the verse on the login screen -- before any
+     session, often on the worst connection someone will ever use this app on.
+     A downloaded Arabic face there means either a blank line or a reflow at
+     the exact moment of first impression. Every platform this app runs on
+     already ships a Naskh face that sets vowelled Arabic correctly; this asks
+     for the good one first and falls back through the rest. */
+  --font-arabic: "Noto Naskh Arabic", "Amiri", "Traditional Arabic",
+                 "Geeza Pro", "Segoe UI", "Tahoma", serif;
 
   /* THE INK RAMP, REVERSED.
      The numbers kept their meaning -- low is prominent, high is recessive --
@@ -75,12 +84,35 @@
   --color-inset: #eef3f9;
   --color-line: #e3eaf3;
   --color-line-strong: #cfd9e6;
+  /* THE LINE BETWEEN ONE FILE AND THE NEXT.
+     Separate from --color-line on purpose. That token is the app's general
+     hairline -- card edges, panel outlines, the rule under a table header --
+     and darkening it to make rows legible would have thickened every border
+     in the product to fix one of them.
+     Measured against the white surface these sit on: --color-line is 1.21:1,
+     which is the bottom of what an eye resolves at 1px, and it read as no
+     separation at all down a long list. This is 1.50:1 -- still a hairline,
+     still quiet enough to scan straight past, but now a file is visibly its
+     own object. Kept in the same blue-grey family as the rest of the
+     neutrals so it reads as chosen rather than as a grey line. */
+  --color-row-divider: #c9d4e3;
 
   /* Row states. A file explorer spends its life showing lists, so these three
      carry more of the design than anything else in the file. */
   --color-row-hover: #f2f7fe;
   --color-row-selected: #e7f0fe;
   --color-row-selected-line: #b9d4fd;
+  /* MULTI-SELECT. A second selected state for "more than one of these is
+     picked", so a batch never looks like a single choice.
+     Red, on the owner's call. It is the same rose the destructive controls
+     use (Trash, delete confirmations), and that overlap is the point rather
+     than a collision: a large selection IS the state where a careless click
+     does the most damage, so "stop and look" is the correct message. What
+     keeps it from crying wolf is that it never appears on its own -- one file
+     is blue, and red only arrives once there is genuinely more selected than
+     you can open. */
+  --color-row-multi: #ffe4e6;
+  --color-row-multi-line: #e11d48;
 
   /* BRAND: light blue rather than violet.
      Blue is the colour of every file manager a person has already used, and
@@ -187,6 +219,23 @@ h1, h2, h3, h4 {
      the work of saying "this is a distinct thing" at a glance, the shadow says
      "it sits above the page". The old version had neither in any readable
      amount, which is why panels dissolved into the background. */
+  /* THE FLOATING BAR.
+     One surface, two users: the navigation pill and the selection toolbar the
+     Library raises when files are ticked. It was already the selection
+     toolbar's look, written inline; the
+     brief was to make the header "the exact same as" that container, and the
+     only way two things stay exactly the same is if there is one of them.
+
+     `bg-surface/95` plus a blur rather than an opaque fill because these sit
+     ON TOP of content that scrolls underneath -- a solid slab would read as a
+     hole punched in the page, and a fully transparent one would leave text
+     crossing text. The brand-tinted hairline is what separates "floating
+     above the page" from "a card that happens to be up there". */
+  .floating-bar {
+    @apply rounded-xl border border-brand-500/30 bg-surface/95 backdrop-blur;
+    box-shadow: var(--shadow-overlay);
+  }
+
   .glass-card {
     @apply rounded-2xl border border-line bg-surface;
     box-shadow: var(--shadow-card);
@@ -292,11 +341,12 @@ h1, h2, h3, h4 {
   }
 
   /* ROW SEPARATION -- the fix for the original complaint.
-     Every row gets a real hairline. At 1px of #e3eaf3 on white this is quiet
-     enough to scan past and definite enough that a file is visibly its own
-     object, which a 5%-white line on near-black never managed. */
+     Every row gets a real hairline, in --color-row-divider rather than the
+     general --color-line: at 1px the latter measured 1.21:1 on white, which
+     is the bottom of what an eye resolves, and down a long list it read as no
+     separation at all. */
   .table-shell tbody tr {
-    border-bottom: 1px solid var(--color-line);
+    border-bottom: 1px solid var(--color-row-divider);
   }
   .table-shell tbody tr:last-child {
     border-bottom: 0;
@@ -323,6 +373,36 @@ h1, h2, h3, h4 {
   .row-selected {
     background: var(--color-row-selected);
     box-shadow: inset 2px 0 0 var(--color-brand-500);
+  }
+  /* FIND-IN-PAGE HIGHLIGHTS.
+     Yellow because that is what every browser's find bar, every PDF reader
+     and every chat search already uses -- this is one of the few places where
+     borrowing the convention outright is worth more than matching the brand
+     palette, because people are not looking AT the highlight, they are
+     scanning for it in peripheral vision.
+     The active hit is orange, not a brighter yellow: distinguishing "the one
+     you are on" from "the others" by hue survives a glance, where a
+     difference in brightness does not. */
+  .search-hit {
+    background: #fde68a;
+    color: #422006;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  .search-hit-active {
+    background: #fb923c;
+    color: #431407;
+    border-radius: 2px;
+    padding: 0 1px;
+    box-shadow: 0 0 0 1px #ea580c;
+  }
+
+  /* The same shape in the warning colour. Same 2px rule in the same place, so
+     the eye reads "selected" from the position and "how many" from the hue --
+     one signal, not two competing ones. */
+  .row-selected-multi {
+    background: var(--color-row-multi);
+    box-shadow: inset 2px 0 0 var(--color-row-multi-line);
   }
   .row-cursor {
     background: var(--color-base-900);
@@ -371,14 +451,23 @@ h1, h2, h3, h4 {
     @apply mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-base-500 sm:hidden;
   }
 
+  /* Vertical navigation: the mobile drawer, and the folder picker.
+     `min-h-11` (44px) rather than padding alone, because these are tapped far
+     more often than they are clicked -- padding sized for a cursor produces a
+     40px row, which is under every platform's minimum and is felt as needing
+     to aim long before anyone can say why. */
   .nav-link {
-    @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-base-400
-           transition-all duration-150 hover:bg-base-850 hover:text-base-100;
+    @apply flex min-h-11 items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-base-400
+           transition-colors duration-150 hover:bg-base-850 hover:text-base-100;
   }
+  /* The active row is a quiet tint, not a tinted row inside a coloured ring.
+     The inset brand-200 ring on top of a brand-50 fill drew a hard outline
+     around whichever destination you were already on -- in a narrow drawer
+     that is the loudest element on screen, marking the one thing you least
+     need to be told. The fill alone says it. */
   .nav-link-active {
-    @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium
-           transition-all duration-150 text-brand-700 bg-brand-50;
-    box-shadow: inset 0 0 0 1px var(--color-brand-200);
+    @apply flex min-h-11 items-center gap-3 rounded-xl px-3 py-2 text-sm font-semibold
+           transition-colors duration-150 text-brand-700 bg-brand-50;
   }
 
   /* Horizontal navigation (components/TopNav.jsx).
@@ -409,12 +498,54 @@ h1, h2, h3, h4 {
   }
 }
 
+/* THE LIBRARY'S TWO COLUMNS.
+   The folder pane's width is a number the user drags and the browser
+   remembers, so it arrives as a custom property set on the element rather than
+   as a utility class. It is applied ONLY at `lg` and above: below that the
+   grid is a single stacked column, and an inline `grid-template-columns` would
+   have applied at every width -- a 320px folder pane beside a sliver of files
+   on a tablet. The clamp is a second line of defence behind the JS one, so a
+   value restored from another machine's localStorage cannot squeeze the file
+   list off the page before the resize handler has run. */
+@media (min-width: 1024px) {
+  .library-split {
+    grid-template-columns: clamp(2.25rem, var(--library-tree-w, 20rem), 60%) minmax(0, 1fr);
+  }
+}
+
 @keyframes fade-in-up {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .animate-fade-in-up {
   animation: fade-in-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* THE ARABIC FACE, WITHOUT PINNING THE LINE HEIGHT TO IT.
+   This used to hard-set `line-height: 2`, on the reasoning that vowelled
+   Arabic needs room or the fatha and kasra of one line collide with the
+   descenders above. That reasoning is sound and the placement was not: it
+   made every user of this face pay for the worst case. The one place that
+   sets this face sets its own leading (`leading-loose`), which is enough for
+   the marks on a wrapped line, while a shorter verse gets a line box sized
+   for the text rather than for the possibility of a second line.
+   Anything that sets this face in real running paragraphs should ask for
+   looser leading there, and should measure it rather than inherit it. */
+.verse-arabic {
+  font-family: var(--font-arabic);
+  /* Kashida justification is off by default in browsers and stretches letters
+     unevenly across a short ragged line, so this only asks for the digits and
+     the shaping. */
+  font-feature-settings: "liga" 1, "calt" 1;
+}
+
+/* MOTION IS A PREFERENCE, NOT A DEFAULT.
+   Someone who has asked their system for less movement should not get panels
+   sliding in under them. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in-up {
+    animation: none;
+  }
 }
 
 @keyframes pulse-soft {

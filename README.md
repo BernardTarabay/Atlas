@@ -69,7 +69,7 @@ backend/
   tests/          node --test, no new dependencies (see tests/README.md)
   src/
     config/       env validation, pg Pool
-    db/           migrate.js / seed.js / resetData.js / Reclassify.js runners
+    db/           migrate.js / seed.js / resetData.js runners
     models/       enums.js -- JS mirror of the Postgres enum types
     repositories/ one file per entity group -- the only layer that talks to pg
     services/
@@ -113,13 +113,15 @@ frontend/         React 18 + Vite + Tailwind v4 SPA
   src/
     services/apiClient.js   thin fetch wrapper, attaches JWT, retries once on 401
     context/                AuthContext, ToastContext
-    components/             TopNav, Layout, Modal, ConfirmDialog, preview and
-                            folder-import components, AssistantPanel, SearchSnippet,
+    components/             TopNav, Layout, Modal, ConfirmDialog, preview
+                            components, AssistantPanel, SubjectTreePane,
+                            LibraryTable / LibraryFileRow, SearchSnippet,
                             MoveFileModal / MoveManyModal, DuplicateFindings, ...
-    pages/                  Login, Register, Dashboard, Files, Photos, Documents,
-                            Subjects, Triage, DuplicateGroups, RenameProposals,
-                            ProcessingJobs, StorageLocations, Devices, AuditLog,
-                            Users, Inbox
+    lib/                    fileDrag (what a dragged file carries), useFileActions,
+                            subjectTree, navLayout, verses
+    pages/                  Login, Register, Library (the landing page), Files,
+                            Photos, Failed, Dashboard, ProcessingJobs,
+                            StorageLocations, Devices, AuditLog, Users, Inbox
 
 desktop-agent/    Electron Filesystem Agent (Phase 12) -- see its own README
   src/            main/preload/renderer + the poll-execute-report runner
@@ -200,8 +202,9 @@ cd backend && node scripts/backfill-descriptions.js
 ## Reaching it from another device
 
 The API serves the built UI, so on the host machine Atlas is one address and one
-double-click (`scripts/install-autostart.ps1` registers a logon task and a desktop
-shortcut). Other devices were told to open `http://192.168.1.101:5000`, which moves
+double-click (`scripts/install-autostart.ps1` registers a startup + logon task, a
+5-minute watchdog, and a desktop shortcut — see `docs/12-server-operations.md`).
+Other devices were told to open `http://192.168.1.101:5000`, which moves
 with the DHCP lease, only works on that LAN, and — because it is not a secure
 context — prevents the service worker from registering at all, so Atlas can never be
 installed on a phone.
@@ -218,6 +221,11 @@ enabled for the tailnet — the script checks each precondition separately and n
 the one that failed. Full rationale, including why this is not solved by becoming a
 desktop app, is in `docs/11-remote-access.md`.
 
+Keeping the host itself available — sleep, unattended reboots, the watchdog, and
+SSH-over-Tailscale for remote maintenance — is `docs/12-server-operations.md`.
+Run `.\scripts\atlas-doctor.ps1` on the host for a one-screen answer to
+"why is Atlas down?".
+
 Once it is served over HTTPS, Atlas is installable: Chromium offers *Install app*,
 iOS Safari offers *Add to Home Screen*, and both run it in its own window with no
 URL bar.
@@ -225,7 +233,8 @@ URL bar.
 ## Tests
 
 ```bash
-cd backend && npm test          # 281 tests
+cd backend && npm test          # 363 tests
+cd frontend && npm test         # 3 suites (service worker, touch gestures, verses)
 cd desktop-agent && npm test    # 16 tests
 ```
 
@@ -323,28 +332,39 @@ PostgreSQL, not mocks:
 
 ## Known gaps (documented, not hidden)
 
-- **`bulk_move`** is the one `job_type` with no processor — superseded by
-  `bulk_rename`, which already carries a new folder via `proposed_relative_dir`
-  (docs/06 §6.1).
 - **Version detection suggests, never applies.** It records a `version.suggested`
-  audit entry rather than writing `document_versions` rows, because docs/01 §1.3
-  forbids resolving a Version relationship without a human confirming.
+  audit entry and stops there. docs/01 §1.3 forbids resolving a Version
+  relationship without a human confirming — and there is no UI for that
+  confirmation, so a suggestion is currently read by a person in the audit log
+  and acted on by hand. The `documents` / `document_versions` model it would
+  have written to was never populated by this pipeline and its code has been
+  removed; see `docs/08 §9.6`.
 - **Probable duplicates are capped at MEDIUM confidence** and are excluded from
   auto-resolve for the same reason. HIGH is reserved for provable hash matches.
 - **Similarity candidate selection is bounded** (300 same-extension files per check),
   a deliberate recall/cost trade-off documented in `fileRepository`.
 - **The desktop agent has no installer**, no code signing and no auto-update, and
-  transfers file bytes base64-encoded in one operation result (64 MB cap) rather than
-  in chunks. See `desktop-agent/README.md`.
+  transfers file bytes base64-encoded in one operation result (**200 MB cap**) rather
+  than in chunks. See `desktop-agent/README.md`.
+
+  Until recently the effective cap was not the documented one: `express.json` was
+  globally limited to 1 MB — set when nothing in the API carried bytes — so anything
+  over roughly **750 KB** was rejected with a 413 long before the agent's own 64 MB
+  guard could fire. The body limit is now scoped to the single endpoint that carries
+  bytes (`POST /api/agents/operations/:id/result`, 280 MB, mounted after agent
+  authentication) rather than raised globally, so an unauthenticated caller still
+  cannot make the API buffer more than 1 MB.
+
+  **The cap is a stopgap, not a design.** One transfer holds the raw buffer, its
+  base64 string and the serialised JSON body in memory at once — roughly 3× the file
+  on the agent, and again on the server — and it is a single POST with no resume, so
+  a drop at 95% resends everything. Chunked or binary streaming transfer remains the
+  actual fix; raising the constant past ~200 MB is not.
 - **The AI tiers have no unit tests** — they need a live `GEMINI_API_KEY`. Only the
   free rule tiers are unit-tested; the paid paths are covered by the `verify-*`
   scripts instead, which is a deliberate trade rather than an oversight.
 - **pbix data models are not parsed** — the xVelocity blob would need the Analysis
   Services engine (docs/07).
-- **Plain text has no extractor.** `.txt`, `.csv`, `.md`, `.json` and `.xml` are not
-  registered in `services/extraction/index.js`, so their text is never read — they
-  are invisible to content search and fall back to a facts-only description. The
-  easiest format in the archive is the one that is missing.
 - **Description search does not apply inside a subject branch.** Searching from the
   Subjects page still uses the older content-only ranking; only the Files page and
   the assistant get meaning-matching.

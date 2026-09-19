@@ -91,7 +91,7 @@ const fileToSubject = (fileId, subjectId) =>
   });
 
 /**
- * A stand-in for the BullMQ job, carrying a REAL processing_jobs row.
+ * A stand-in for the queued job, carrying a REAL processing_jobs row.
  *
  * Not a bare `{ data: {} }`: the processor writes a processing_job_item per
  * file so "why did 12 of 4,000 not move" is answerable afterwards, and those

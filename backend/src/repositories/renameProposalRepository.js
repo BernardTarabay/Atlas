@@ -144,7 +144,7 @@ async function findRejectedMatch(fileId, proposedFilename, proposedRelativeDir =
  * Bug fix (real-world report): 40 files produced 78 pending proposals.
  * generateNamesProcessor had no check for "does this file already have a
  * pending proposal" before creating a new one -- anything that caused
- * generate_names to run twice for the same file (a BullMQ retry after a
+ * generate_names to run twice for the same file (a queue retry after a
  * transient failure partway through the job, a duplicate enqueue, etc.)
  * just stacked a second identical-or-near-identical pending proposal on
  * top instead of recognizing one was already sitting there. There should

@@ -87,18 +87,46 @@ function browseRoots() {
  * reasons they could not possibly connect.
  */
 async function warnIfSharedAndUnconfined() {
-  if (browseRoots() !== null) return;   // already confined
   try {
     // Lazy require: this module is otherwise database-free and unit-testable.
     const db = require("../config/database");
     const { rows } = await db.query("SELECT count(*)::int AS n FROM users");
     if (rows[0].n <= 1) return;
 
+    // THE WARNING USED TO UNDERSTATE THE PROBLEM, IN A WAY THAT MATTERED.
+    //
+    // It said the risk was the folder PICKER enumerating the filesystem, and
+    // returned early whenever BROWSE_ROOTS was set -- implying that setting it
+    // closed the hole. It does not. `browseRoots` is consulted only inside this
+    // module; `storageLocationService.create` validates a submitted root_path
+    // against nothing at all. So a confined picker stops someone BROWSING to
+    // C:\Users\someone-else and does not stop them typing it into the API and
+    // scanning it.
+    //
+    // Enumeration is the smaller half. The larger half is that any account
+    // holding `storage.manage` -- which the default "User" role carries -- can
+    // register any directory on this machine as their own storage location and
+    // then read every file in it through the ordinary download endpoint, as its
+    // legitimate owner. Ownership scoping cannot see that: the attacker is not
+    // reading someone else's rows, they are creating their own over the same
+    // bytes.
+    //
+    // So this now fires whenever a second account exists, regardless of
+    // BROWSE_ROOTS, and says which control actually applies.
+    const confined = browseRoots() !== null;
+
     console.warn(
-      `[browse] ${rows[0].n} accounts exist and BROWSE_ROOTS is unset, so the folder picker can ` +
-      "enumerate this machine's entire filesystem for any of them -- including the other accounts' " +
-      "home directories. On a shared install, set BROWSE_ROOTS to the folders that should be " +
-      `reachable, e.g. BROWSE_ROOTS=${path.resolve(os.homedir())}`
+      `[security] ${rows[0].n} accounts exist on this install. Any of them holding ` +
+      "`storage.manage` (which the default \"User\" role does) can register ANY directory on " +
+      "this machine as a storage location and read every file in it -- storageLocationService" +
+      ".create does not restrict the path. " +
+      (confined
+        ? "BROWSE_ROOTS is set, which confines the folder picker but NOT this: the picker is a " +
+          "convenience, and the API accepts a path directly."
+        : "BROWSE_ROOTS is also unset, so the picker can enumerate the whole filesystem too. " +
+          `Set BROWSE_ROOTS to limit at least the picker, e.g. BROWSE_ROOTS=${path.resolve(os.homedir())}`) +
+      " If these accounts are not all trusted with this machine's filesystem, remove " +
+      "`storage.manage` from the roles they hold."
     );
   } catch {
     // A database that is not up yet is the server's problem to report, not

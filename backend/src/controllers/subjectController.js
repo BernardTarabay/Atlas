@@ -1,4 +1,7 @@
 const subjectService = require("../services/subjectService");
+const unfiledOrganizer = require("../services/unfiledOrganizer");
+const { enqueueJob } = require("../queues");
+const { JobType } = require("../models/enums");
 
 async function list(req, res) {
   res.json(await subjectService.list(req.query, req.user.id));
@@ -79,7 +82,45 @@ async function remove(req, res) {
 // importFile is gone along with folderImportService -- it copied file bytes
 // into the managed upload folder. See routes/storageLocationRoutes.js.
 
+/**
+ * How big the unfiled pile is, and whether anything can be done about it.
+ *
+ * Read-only, and cheap, so the Library can show the state before offering the
+ * action -- an "Organize" button that turns out to have nothing to organize,
+ * or no API key behind it, is worse than no button.
+ */
+async function unfiledSummary(req, res) {
+  res.json(await unfiledOrganizer.unfiledSummary(req.user.id));
+}
+
+/**
+ * Let the assistant file the unfiled pile, creating folders where the archive
+ * has none that fit.
+ *
+ * Queued rather than run inline: a full pass is dozens of planning calls and
+ * many minutes (see migrations/043). `batch: true` runs a SINGLE batch inline
+ * instead, which is what makes the feature demonstrable -- a person can press
+ * it once, watch ~120 files get filed, and see which folders were invented
+ * before handing it the whole backlog.
+ */
+async function organizeUnfiled(req, res) {
+  const { batch = false } = req.body || {};
+
+  if (batch) {
+    const result = await unfiledOrganizer.organizeUnfiled(req.user.id);
+    return res.json({ mode: "batch", ...result });
+  }
+
+  const job = await enqueueJob(
+    JobType.ORGANIZE_UNFILED,
+    { ownerUserId: req.user.id, actorUserId: req.user.id },
+    { createdBy: req.user.id, ownerUserId: req.user.id }
+  );
+  return res.status(202).json({ mode: "job", jobId: job.id });
+}
+
 module.exports = {
   list, documentsForSubject, countDocumentsForSubject, recentDestinations,
   create, update, remove, removalPreview, moveToParent,
+  unfiledSummary, organizeUnfiled,
 };

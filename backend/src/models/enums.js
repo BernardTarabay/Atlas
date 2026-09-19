@@ -87,6 +87,14 @@ const JobType = Object.freeze({
   // rows for good. See jobs/processors/purgeTrashProcessor.js for what makes
   // that safe to run unattended.
   PURGE_TRASH: "purge_trash",
+  // migration 043. Files the unfiled pile, creating the folders it needs --
+  // services/unfiledOrganizer.js.
+  ORGANIZE_UNFILED: "organize_unfiled",
+  // migration 045. Retention for finished jobs and pipeline telemetry -- the
+  // counterpart to PURGE_TRASH, which bounds files rather than history. See
+  // jobs/processors/purgeOperationalProcessor.js for the allowlist that makes
+  // it safe to run unattended.
+  PURGE_OPERATIONAL: "purge_operational",
 });
 
 const JobStatus = Object.freeze({

@@ -73,14 +73,6 @@ async function markFailed(id, errorMessage) {
   return rows[0] || null;
 }
 
-async function markCancelled(id) {
-  const { rows } = await db.query(
-    `UPDATE processing_jobs SET status = 'cancelled', finished_at = now() WHERE id = $1 RETURNING *`,
-    [id]
-  );
-  return rows[0] || null;
-}
-
 async function listActive(ownerUserId, { limit = 50, offset = 0 } = {}) {
   requireOwner(ownerUserId, "processingJobs.listActive");
   const { rows } = await db.query(
@@ -128,6 +120,6 @@ async function findByIdForOwner(id, ownerUserId) {
 
 module.exports = {
   ...base, create, markStarted, updateProgress, updateProgressTotal,
-  markCompleted, markFailed, markCancelled, listActive, listForOwner, countForOwner,
+  markCompleted, markFailed, listActive, listForOwner, countForOwner,
   findByIdForOwner,
 };

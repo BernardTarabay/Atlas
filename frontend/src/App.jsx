@@ -8,11 +8,9 @@ import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { FilesPage } from "./pages/FilesPage";
-import { DocumentsPage } from "./pages/DocumentsPage";
 import { LibraryPage } from "./pages/LibraryPage";
-import { DocumentTypesPage } from "./pages/DocumentTypesPage";
 import { ProcessingJobsPage } from "./pages/ProcessingJobsPage";
-import { TriagePage } from "./pages/TriagePage";
+import { FailedPage } from "./pages/FailedPage";
 import { PhotosPage } from "./pages/PhotosPage";
 import { DevicesPage } from "./pages/DevicesPage";
 import { StorageLocationsPage } from "./pages/StorageLocationsPage";
@@ -44,13 +42,20 @@ function App() {
               <Route path="/" element={<LibraryPage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/files" element={<FilesPage />} />
-              <Route path="/documents" element={<DocumentsPage />} />
               {/* The old address, kept working. Anyone who bookmarked
                   /subjects or has it in their history lands where that page
                   went rather than on the not-found redirect. */}
               <Route path="/subjects" element={<Navigate to="/" replace />} />
-              <Route path="/document-types" element={<DocumentTypesPage />} />
-              <Route path="/triage" element={<TriagePage />} />
+              {/* /document-types was the Types browse page. The page is gone;
+                  the document-type CLASSIFICATION AXIS it browsed is not, and
+                  still filters the Files page and is set by hand in the file
+                  editor. The redirect is here rather than left to the
+                  catch-all so a stale bookmark lands deliberately. */}
+              <Route path="/document-types" element={<Navigate to="/files" replace />} />
+              <Route path="/failed" element={<FailedPage />} />
+              {/* "Triage" was this screen's old name. Kept working for anyone
+                  who bookmarked it or linked to it from a note. */}
+              <Route path="/triage" element={<Navigate to="/failed" replace />} />
               <Route path="/photos" element={<PhotosPage />} />
               <Route path="/devices" element={<DevicesPage />} />
               <Route path="/jobs" element={<ProcessingJobsPage />} />

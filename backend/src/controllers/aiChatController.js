@@ -16,6 +16,18 @@ const { ValidationError } = require("../validators/validationError");
  */
 const RETRIEVED_FILE_LIMIT = 30;
 
+/**
+ * How many documents may be ATTACHED to one message.
+ *
+ * Deliberately far below the page-context bound. An attachment is a deliberate
+ * act with a person behind it -- nobody drags four hundred files onto a chat
+ * bubble on purpose -- so a number this size is not a limit anyone will meet,
+ * and it is small enough that a client cannot use the field to stuff the
+ * prompt. The frontend caps at the same figure and says so when a drop would
+ * exceed it, so the two agree rather than one silently truncating the other.
+ */
+const MAX_ATTACHMENTS = 25;
+
 /** Descriptions are prose and the prompt is shared; one sentence is the useful part. */
 const MAX_DESCRIPTION_CHARS = 220;
 
@@ -69,6 +81,37 @@ async function chat(req, res) {
     ? await fileRepository.listByIdsForOwner(requestedIds, req.user.id)
     : [];
 
+  /**
+   * ATTACHMENTS: the documents the user explicitly handed over.
+   *
+   * These arrive in their own field rather than mixed into `context.files`,
+   * and the distinction is the whole feature. `context.files` is whatever the
+   * page happens to be rendering -- it changes when you scroll or page, and
+   * the model is told it is "what is on screen". An attachment is a person
+   * pointing at four specific documents and saying "these". If the two shared
+   * a field, "summarise these" would resolve against a hundred rows the
+   * Library happened to be listing, and the answer would look plausible and be
+   * about the wrong documents.
+   *
+   * Owner-scoped by exactly the same rule, for exactly the same reason: the
+   * model describes these files back in its reply, and the reply is not
+   * validated by anything, so an unfiltered id list here would be a read
+   * oracle for another account's documents that never needs an Apply click.
+   *
+   * Unlike page context, though, a dropped id is NOT dropped silently. Page
+   * context that goes stale is noise; an attachment that goes missing changes
+   * what the answer is about, and the user is entitled to know their file was
+   * left out. `attachmentsUsed` in the response is that answer.
+   */
+  const attachmentIds = (Array.isArray(context?.attachments) ? context.attachments : [])
+    .map((f) => f?.id)
+    .filter((id) => typeof id === "string")
+    .slice(0, MAX_ATTACHMENTS);
+
+  const attachedRows = attachmentIds.length
+    ? await fileRepository.listByIdsForOwner(attachmentIds, req.user.id)
+    : [];
+
   const describe = (f) => ({
     id: f.id,
     filename: f.canonical_filename || f.filename_current,
@@ -82,6 +125,7 @@ async function chat(req, res) {
   });
 
   const visibleFiles = ownedFiles.map(describe);
+  const attachedFiles = attachedRows.map((f) => ({ ...describe(f), attached: true }));
 
   /**
    * WHAT THE USER IS ASKING ABOUT, NOT ONLY WHAT THEY ARE LOOKING AT.
@@ -182,6 +226,22 @@ async function chat(req, res) {
     }
   };
 
+  /**
+   * ATTACHMENTS LEAD, ahead of even retrieval.
+   *
+   * Order is not cosmetic here: buildInput trims to MAX_VISIBLE_FILES from the
+   * END, so position decides what survives a long list, and the block header
+   * tells the model that the first entries are what the user is looking at.
+   * Retrieval was the front of this list because it is the only bucket chosen
+   * for relevance to what was asked -- which is exactly the argument for
+   * putting attachments in front of it. A file the user physically dragged
+   * into the conversation is not a guess about relevance; it is a statement.
+   *
+   * `add` keeps the FIRST position and merges later fields in, so a file that
+   * is attached AND on screen AND a search hit appears once, at the top,
+   * carrying its description and its `attached` flag.
+   */
+  for (const file of attachedFiles) add(file);
   for (const file of retrievedFiles) add(file);
   for (const file of visibleFiles) add(file);
   for (const row of [...triageRows, ...photoRows]) {
@@ -232,7 +292,19 @@ async function chat(req, res) {
       : null,
   });
 
-  res.json(result);
+  res.json({
+    ...result,
+    /**
+     * Which attachments actually reached the model.
+     *
+     * The client marks anything absent from this list rather than deleting the
+     * chip: a file removed in another tab, or an id a stale client is still
+     * holding, must not just vanish from the row above the message box as
+     * though it had never been attached. Always present, so the client can
+     * tell "none were usable" from "this server does not report".
+     */
+    attachmentsUsed: attachedFiles.map((f) => f.id),
+  });
 }
 
 module.exports = { chat };

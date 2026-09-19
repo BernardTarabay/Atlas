@@ -6,6 +6,7 @@ const roleRepository = require("../repositories/roleRepository");
 const refreshTokenRepository = require("../repositories/refreshTokenRepository");
 const auditLogRepository = require("../repositories/auditLogRepository");
 const deviceRepository = require("../repositories/deviceRepository");
+const env = require("../config/env");
 const { hashPassword, verifyPassword } = require("../utils/passwords");
 const {
   signAccessToken,
@@ -46,7 +47,48 @@ async function issueTokenPair(user, { ipAddress, userAgent } = {}) {
  * someone to Manager/Admin is a separate, permission-gated action
  * (see userService.js), not a registration-time choice.
  */
+/**
+ * Is this install accepting new accounts right now?
+ *
+ * Enforced HERE rather than in the controller or a route guard, because this is
+ * the function every path to a new account goes through -- a check placed in
+ * front of one caller is a check the next caller forgets. See env.registration
+ * for why the answer is "first-run" by default and what it is protecting.
+ *
+ * The count is read per attempt rather than cached at boot: the first
+ * registration must succeed and the second must not, and those are two requests
+ * against one process.
+ */
+async function assertRegistrationAllowed() {
+  const mode = env.registration.mode;
+
+  if (mode === "open") return;
+
+  if (mode === "closed") {
+    throw new AuthError(
+      "This Atlas install is not accepting new accounts.",
+      403
+    );
+  }
+
+  // first-run
+  const existingAccounts = await userRepository.count();
+  if (existingAccounts === 0) return;
+
+  // Deliberately says nothing about who or how many. An unauthenticated caller
+  // learning "there is exactly one account here" is a small leak, but it is a
+  // free one, and this endpoint is reachable by anyone who can see the port.
+  throw new AuthError(
+    "This Atlas install already has an account and is not accepting new ones. " +
+    "If you are the owner and meant to add someone, set ALLOW_REGISTRATION=open, " +
+    "register them, and set it back.",
+    403
+  );
+}
+
 async function register({ email, password, fullName }, context = {}) {
+  await assertRegistrationAllowed();
+
   const existing = await userRepository.findByEmail(email);
   if (existing) throw new AuthError("An account with this email already exists.", 409);
 
@@ -209,4 +251,16 @@ function publicUser(user) {
   return rest;
 }
 
-module.exports = { AuthError, register, login, refresh, logout, getSession };
+module.exports = {
+  AuthError,
+  register,
+  login,
+  refresh,
+  logout,
+  getSession,
+  // Exported so the policy can be tested WITHOUT calling register(), which
+  // writes a user, a role assignment, a device, a refresh token and an audit
+  // row. A test for "is this registration permitted" should not be able to
+  // create an account as a side effect of asserting that it may.
+  assertRegistrationAllowed,
+};

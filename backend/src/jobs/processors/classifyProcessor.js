@@ -168,7 +168,7 @@ async function runAiEscalation({ file, bodyText, allSubjects, allDocTypes, embed
     // SUCCESS. Nothing retried, and the money was spent for a result that was
     // never saved.
     //
-    // A DB error is not an AI-tier problem: rethrow it and let BullMQ retry,
+    // A DB error is not an AI-tier problem: rethrow it and let the queue retry,
     // which is exactly the case retries exist for.
     const isUpstreamFailure =
       err instanceof geminiClassifier.GeminiClassificationError ||
@@ -184,7 +184,7 @@ async function runAiEscalation({ file, bodyText, allSubjects, allDocTypes, embed
 // Keyword scoring lives in services/taxonomyMatcher.js: it is pure, it is the
 // part that was silently wrong for the whole document-type axis, and it is now
 // unit-tested (tests/taxonomyMatcher.test.js) rather than only reachable
-// through a job that needs Postgres and Redis to run.
+// through a job that needs Postgres and a running worker.
 
 async function handle({ fileId }) {
   const file = await fileRepository.findById(fileId);

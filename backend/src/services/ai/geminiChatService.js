@@ -327,8 +327,25 @@ function buildInput({ message, history, subjectTree, visibleFiles, selectedSubje
    * ignoring them where they are not.
    */
   const trimmedFiles = visibleFiles.slice(0, MAX_VISIBLE_FILES);
+  /**
+   * The count, stated separately from the lines themselves.
+   *
+   * A model reading a two-hundred-line list is being asked to count marked
+   * entries in order to know how many "these" refers to, which it does
+   * unreliably -- and a wrong count here produces an answer that confidently
+   * covers three of four attached documents. Saying the number costs one line.
+   */
+  const attachedCount = trimmedFiles.filter((f) => f.attached).length;
+  const attachedNote = attachedCount
+    ? `\n\nThe user attached ${attachedCount} document${attachedCount === 1 ? "" : "s"} to this message (marked ATTACHED BY THE USER above).`
+    : "";
   const fileLine = (f) => {
     const parts = [`id: ${f.id}`, `filename: ${f.filename}`];
+    // FIRST, not last, and before the filename is even read: the model has to
+    // know which of these the user pointed at before it starts matching a
+    // request against a list of two hundred. A flag buried after the
+    // description is a flag that arrives too late to change the answer.
+    if (f.attached) parts.splice(1, 0, "ATTACHED BY THE USER");
     if (f.currentPath) parts.push(`path: ${f.currentPath}`);
     if (f.subjectName) parts.push(`subject: ${f.subjectName}`);
     if (f.waitingBecause) parts.push(`waiting: ${f.waitingBecause}`);
@@ -361,8 +378,14 @@ what is waiting to be filed. Each line gives an id and a filename, and where
 they are known, the folder path, the subject it is filed under, why it is
 waiting, and a DESCRIPTION of what the file actually contains. Most filenames
 in this archive are meaningless (camera and WhatsApp exports), so match the
-user's request against the description first and the filename second:
-${filesText}
+user's request against the description first and the filename second.
+
+Any line marked ATTACHED BY THE USER was deliberately handed to you for THIS
+message. When the user says "this", "these", "them" or "the attached", they
+mean those and only those -- do not widen the request to similar-looking files
+from the rest of the list. If they ask a general question and attachments are
+present, answer about the attachments first and say so:
+${filesText}${attachedNote}
 
 Conversation so far:
 ${historyText}
