@@ -15,6 +15,7 @@ AtlasService.exe (Windows service: boot start, restart, keep-awake, job object)
        ocr     ── bin/atlas-winrt.exe (Windows OCR + PDF rendering), per unique content
        planner ── deterministic rules → one library path per unique content
        http    ── 127.0.0.1:7717: UI + API (remote access via `tailscale serve`)
+       ui      ── a file manager over the planned library (ui/explorer.js)
 ```
 
 ## Run it (development)
@@ -96,6 +97,29 @@ Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB)
 
 The synthetic corpus measures the machinery. Representative numbers (real PDFs,
 photos, scans, OCR) come from the real corpus in the next milestone.
+
+## Browsing the library
+
+The library is a file manager, deliberately shaped like Windows File Explorer:
+navigation tree, command bar, address bar, status bar, and eight view modes
+(extra large / large / medium / small icons, list, details, tiles, content).
+Sorting, grouping, filtering, multi-selection (click, Ctrl, Shift, rubber band,
+type-ahead), sortable and choosable detail columns, a preview pane, properties,
+and light/dark that follows Windows. `ui/explorer.js`, no framework, no build.
+
+Sorting and grouping only offer what Atlas actually extracts - name, dates, type,
+size, category, title, language. Explorer's Authors and Tags are absent because
+nothing fills them yet.
+
+The commands that would change your disk - paste, rename, delete, new folder -
+are present and correctly enabled, and refuse with an explanation. The library is
+a **plan**: `files.plan` is where each file would go. Carrying it out needs the
+journalled apply step, which is not built. Cut and Copy do work: they fill an
+in-app clipboard, so you can see what a move would consist of.
+
+Icon views show real thumbnails by loading the original image, because there is
+no thumbnail service yet - fine on this machine, heavy over a tunnel. That is the
+next milestone.
 
 ## OCR
 

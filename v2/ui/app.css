@@ -71,3 +71,8 @@ pre.text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; ove
   .list .meta.hide-sm { display: none; }
   main { padding: 10px; }
 }
+
+/* The explorer owns the whole area under the header, so the page itself must
+   not scroll behind it. */
+body.explorer { overflow: hidden; }
+body.explorer #view { padding: 0; margin: 0; max-width: none; }

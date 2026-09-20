@@ -1,0 +1,530 @@
+/* The library explorer.
+ *
+ * Deliberately close to Windows File Explorer: a tree on the left, items on the
+ * right, a command bar above and a status bar below. That shape is not a
+ * preference, it is what browsing thousands of files actually needs - density,
+ * a fixed place for every control, and rows that look the same every time so
+ * the eye can scan instead of read.
+ *
+ * Light and dark only, both taken from the Windows 11 palette. No animation
+ * beyond a hover tint: movement on a list of 2,000 items is noise.
+ */
+
+.ex {
+  --bg: #f3f3f3;
+  --pane: #ffffff;
+  --bar: #f9f9f9;
+  --line: #e5e5e5;
+  --line-strong: #d6d6d6;
+  --text: #1b1b1b;
+  --muted: #5d5d5d;
+  --accent: #0067c0;
+  --sel: #cfe8fc;
+  --sel-line: #99d1ff;
+  --hover: #ededed;
+  --focus: #005fb8;
+  --shadow: 0 8px 20px rgba(0, 0, 0, .14);
+  --row: 28px;
+  --tile: 96px;
+
+  position: fixed;
+  inset: 0;
+  top: var(--ex-top, 0);
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ex:not([data-theme="light"]) {
+    --bg: #202020;
+    --pane: #272727;
+    --bar: #2b2b2b;
+    --line: #373737;
+    --line-strong: #454545;
+    --text: #ffffff;
+    --muted: #a0a0a0;
+    --accent: #4cc2ff;
+    --sel: #143a5c;
+    --sel-line: #2a6ea6;
+    --hover: #323232;
+    --focus: #4cc2ff;
+    --shadow: 0 8px 20px rgba(0, 0, 0, .5);
+  }
+}
+
+.ex[data-theme="dark"] {
+  --bg: #202020;
+  --pane: #272727;
+  --bar: #2b2b2b;
+  --line: #373737;
+  --line-strong: #454545;
+  --text: #ffffff;
+  --muted: #a0a0a0;
+  --accent: #4cc2ff;
+  --sel: #143a5c;
+  --sel-line: #2a6ea6;
+  --hover: #323232;
+  --focus: #4cc2ff;
+  --shadow: 0 8px 20px rgba(0, 0, 0, .5);
+}
+
+.ex * { box-sizing: border-box; }
+.ex [hidden] { display: none !important; }
+
+/* ---- command bar ---------------------------------------------------- */
+
+.ex-cmd {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bar);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.ex-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ex-btn:hover:not(:disabled) { background: var(--hover); }
+.ex-btn:active:not(:disabled) { background: var(--line); }
+.ex-btn[aria-expanded="true"] { background: var(--hover); border-color: var(--line-strong); }
+.ex-btn:disabled { opacity: .4; cursor: default; }
+.ex-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ex-btn svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ex-btn .caret { width: 10px; height: 10px; opacity: .7; }
+.ex-sep { width: 1px; height: 20px; background: var(--line-strong); margin: 0 6px; }
+.ex-spring { flex: 1 1 auto; }
+
+/* ---- address bar ---------------------------------------------------- */
+
+.ex-addr {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 8px;
+  background: var(--bar);
+  border-bottom: 1px solid var(--line);
+}
+
+.ex-nav { display: flex; gap: 2px; }
+.ex-nav .ex-btn { width: 32px; padding: 0; justify-content: center; }
+
+.ex-crumbs {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 32px;
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  background: var(--pane);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+}
+
+.ex-crumbs a {
+  max-width: 28ch;
+  padding: 3px 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  color: inherit;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ex-crumbs a:hover { background: var(--hover); }
+.ex-crumbs .chev { opacity: .5; flex: none; }
+
+.ex-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 240px;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--pane);
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+}
+
+.ex-filter:focus-within { border-color: var(--focus); }
+.ex-filter svg { width: 14px; height: 14px; flex: none; opacity: .6; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.ex-filter input { flex: 1; min-width: 0; border: 0; background: none; color: inherit; font: inherit; outline: none; }
+
+/* ---- body: tree | items | preview ------------------------------------ */
+
+.ex-body {
+  display: grid;
+  grid-template-columns: var(--nav, 240px) 1px 1fr;
+  min-height: 0;
+}
+
+.ex-body.with-preview { grid-template-columns: var(--nav, 240px) 1px 1fr 1px 320px; }
+
+.ex-tree {
+  overflow: auto;
+  padding: 6px 4px 12px;
+  background: var(--bg);
+}
+
+.ex-grip { cursor: col-resize; background: var(--line); }
+.ex-grip:hover, .ex-grip:active { background: var(--accent); }
+
+.ex-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding-right: 8px;
+  padding-left: calc(6px + var(--depth, 0) * 16px);
+  border-radius: 4px;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.ex-node:hover { background: var(--hover); }
+.ex-node[aria-selected="true"] { background: var(--sel); }
+.ex-node .twist {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  opacity: .8;
+}
+.ex-node .twist svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.8; transition: transform .1s; }
+.ex-node[aria-expanded="true"] .twist svg { transform: rotate(90deg); }
+.ex-node .ex-ico { width: 16px; height: 16px; }
+.ex-node .label { overflow: hidden; text-overflow: ellipsis; }
+.ex-node .n { margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 11px; }
+.ex-tree-head { padding: 8px 10px 4px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+
+/* ---- items ----------------------------------------------------------- */
+
+.ex-items {
+  position: relative;
+  overflow: auto;
+  padding: 4px 0 20px;
+  background: var(--pane);
+  outline: none;
+}
+
+.ex-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ex-group::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+.ex-item {
+  position: relative;
+  cursor: default;
+  user-select: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.ex-item:hover { background: var(--hover); }
+.ex-item[aria-selected="true"] { background: var(--sel); border-color: var(--sel-line); }
+.ex-items:focus-visible .ex-item.cursor { outline: 1px dotted var(--text); outline-offset: -3px; }
+/* Both are spans, so they need to be told they are lines; without this the name
+   and the type run together on one line in Tiles and Content. */
+.ex-item .nm { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-item .sub { display: block; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-item .meta { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+
+/* the icon/thumbnail box shared by every view */
+.ex-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  /* Every view that wants a bigger icon sets its own size; without a default
+     here the folder SVG (width: 100%) grows to fill whatever contains it. */
+  width: 16px;
+  height: 16px;
+  overflow: hidden;
+  border-radius: 2px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  background: #8a8a8a;
+}
+
+.ex-ico img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ex-ico.folder { background: none; color: #dfa000; }
+.ex-ico.folder svg { width: 100%; height: 100%; fill: currentColor; stroke: none; }
+.ex-ico.image { background: #7a5cc4; }
+.ex-ico.pdf { background: #c0392b; }
+.ex-ico.doc { background: #2b579a; }
+.ex-ico.sheet { background: #217346; }
+.ex-ico.slides { background: #b7472a; }
+.ex-ico.text { background: #5a6b7b; }
+.ex-ico.video { background: #b5651d; }
+.ex-ico.audio { background: #7b4397; }
+.ex-ico.archive { background: #8a6d3b; }
+
+/* grid views: xl / large / medium / small icons, tiles */
+.ex-items.v-xl .items, .ex-items.v-large .items, .ex-items.v-medium .items,
+.ex-items.v-small .items, .ex-items.v-tiles .items {
+  display: grid;
+  gap: 4px;
+  padding: 0 8px;
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr));
+}
+
+.ex-items.v-xl .ex-item, .ex-items.v-large .ex-item, .ex-items.v-medium .ex-item, .ex-items.v-small .ex-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  text-align: center;
+}
+
+.ex-items.v-xl .ex-ico, .ex-items.v-large .ex-ico, .ex-items.v-medium .ex-ico, .ex-items.v-small .ex-ico {
+  width: var(--icon);
+  height: var(--icon);
+  font-size: calc(var(--icon) / 5);
+}
+
+.ex-items.v-xl .ex-item .nm, .ex-items.v-large .ex-item .nm,
+.ex-items.v-medium .ex-item .nm, .ex-items.v-small .ex-item .nm {
+  width: 100%;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  word-break: break-word;
+}
+
+.ex-items.v-xl { --tile: 180px; --icon: 148px; }
+.ex-items.v-large { --tile: 120px; --icon: 88px; }
+.ex-items.v-medium { --tile: 96px; --icon: 60px; }
+.ex-items.v-small { --tile: 76px; --icon: 32px; }
+
+.ex-items.v-tiles { --tile: 240px; }
+.ex-items.v-tiles .ex-item { display: flex; align-items: center; gap: 10px; padding: 8px; }
+.ex-items.v-tiles .ex-ico { width: 40px; height: 40px; font-size: 10px; }
+
+/* list: columns that flow top to bottom, like Explorer's List view */
+.ex-items.v-list .items {
+  padding: 0 8px;
+  columns: 220px;
+  column-gap: 16px;
+}
+
+.ex-items.v-list .ex-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0 6px;
+  break-inside: avoid;
+}
+
+.ex-items.v-list .ex-ico { width: 16px; height: 16px; font-size: 7px; }
+
+/* content: a wide row per file, with what Atlas actually read */
+.ex-items.v-content .items { padding: 0 8px; }
+.ex-items.v-content .ex-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 8px; }
+.ex-items.v-content .ex-ico { width: 48px; height: 48px; font-size: 11px; }
+.ex-items.v-content .meta { flex: 1; min-width: 0; }
+.ex-items.v-content .right { color: var(--muted); font-size: 11px; text-align: right; white-space: nowrap; }
+
+/* details: the table */
+.ex-items.v-details .items { display: block; padding: 0; }
+
+.ex-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: var(--cols);
+  background: var(--pane);
+  border-bottom: 1px solid var(--line);
+}
+
+.ex-head button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.ex-head button:hover { background: var(--hover); color: var(--text); }
+.ex-head .arrow { font-size: 9px; opacity: .9; }
+.ex-items.v-details .ex-item {
+  display: grid;
+  grid-template-columns: var(--cols);
+  align-items: center;
+  height: var(--row);
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+}
+
+.ex-items.v-details .cell { padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-items.v-details .cell.num { text-align: right; }
+.ex-items.v-details .cell.muted { color: var(--muted); }
+.ex-items.v-details .ex-item .first { display: flex; align-items: center; gap: 8px; padding-left: 8px; }
+.ex-items.v-details .ex-ico { width: 16px; height: 16px; font-size: 7px; }
+
+/* rubber band */
+.ex-marquee {
+  position: absolute;
+  z-index: 3;
+  border: 1px solid var(--focus);
+  background: color-mix(in srgb, var(--focus) 18%, transparent);
+  pointer-events: none;
+}
+
+/* ---- preview pane ---------------------------------------------------- */
+
+.ex-preview { overflow: auto; padding: 12px; background: var(--bar); }
+.ex-preview h3 { margin: 0 0 8px; font-size: 13px; word-break: break-word; }
+.ex-preview img, .ex-preview iframe { width: 100%; border: 1px solid var(--line); border-radius: 4px; background: var(--pane); }
+.ex-preview iframe { height: 320px; }
+.ex-preview dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 12px 0 0; font-size: 12px; }
+.ex-preview dt { color: var(--muted); }
+.ex-preview dd { margin: 0; word-break: break-word; }
+.ex-preview .snip { margin-top: 12px; max-height: 240px; overflow: auto; padding: 8px; background: var(--pane); border: 1px solid var(--line); border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+
+/* ---- status bar ------------------------------------------------------ */
+
+.ex-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 28px;
+  padding: 0 12px;
+  background: var(--bar);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ex-status .grow { flex: 1; }
+.ex-status .views { display: flex; gap: 2px; }
+.ex-status .views button {
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 22px; padding: 0;
+  border: 1px solid transparent; border-radius: 3px;
+  background: none; color: inherit; cursor: pointer;
+}
+.ex-status .views button[aria-pressed="true"] { background: var(--sel); border-color: var(--sel-line); color: var(--text); }
+.ex-status .views svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+
+/* ---- menus and dialogs ----------------------------------------------- */
+
+.ex-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 220px;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 4px;
+  background: var(--bar);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.ex-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ex-menu button:hover:not(:disabled) { background: var(--hover); }
+.ex-menu button:disabled { color: var(--muted); opacity: .65; cursor: default; }
+.ex-menu button .key { margin-left: auto; padding-left: 16px; color: var(--muted); font-size: 11px; }
+.ex-menu button .tick { width: 14px; text-align: center; opacity: .9; }
+.ex-menu button svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ex-menu hr { margin: 4px 6px; border: 0; border-top: 1px solid var(--line); }
+.ex-menu .head { padding: 6px 10px 2px; color: var(--muted); font-size: 11px; font-weight: 600; text-transform: uppercase; }
+
+.ex-dialog {
+  padding: 0;
+  max-width: min(560px, 92vw);
+  color: var(--text);
+  background: var(--bar);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+
+.ex-dialog::backdrop { background: rgba(0, 0, 0, .35); }
+.ex-dialog h2 { margin: 0; padding: 14px 16px; font-size: 15px; border-bottom: 1px solid var(--line); }
+.ex-dialog .content { padding: 14px 16px; max-height: 60vh; overflow: auto; }
+.ex-dialog .content p { margin: 0 0 10px; }
+.ex-dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; }
+.ex-dialog dt { color: var(--muted); }
+.ex-dialog dd { margin: 0; word-break: break-word; }
+.ex-dialog .foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.ex-dialog .foot button {
+  height: 32px; padding: 0 16px;
+  border: 1px solid var(--line-strong); border-radius: 4px;
+  background: var(--pane); color: inherit; font: inherit; cursor: pointer;
+}
+.ex-dialog .foot button.primary { background: var(--focus); border-color: var(--focus); color: #fff; }
+.ex-dialog .why { color: var(--muted); font-size: 12px; }
+
+.ex-empty { padding: 40px 20px; color: var(--muted); text-align: center; }
+
+@media (max-width: 720px) {
+  .ex-body { grid-template-columns: 0 0 1fr; }
+  .ex-body.show-tree { grid-template-columns: 1fr 0 0; }
+  .ex-body.with-preview { grid-template-columns: 0 0 1fr; }
+  .ex-filter { width: 140px; }
+}

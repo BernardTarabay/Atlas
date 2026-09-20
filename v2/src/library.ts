@@ -5,27 +5,47 @@ import type { Db } from "./db/db.ts";
 
 const MAX = "\u{10FFFF}"; // sorts after every UTF-8 string, so prefix + MAX bounds a subtree
 
-export interface Entry { id: number; name: string; size: number; mtime: number; kind: string | null; ddate: number | null }
-export interface Listing { path: string; folders: { name: string; count: number }[]; files: Entry[]; more: boolean }
+export interface Entry {
+  id: number; name: string; size: number; mtime: number; ctime: number;
+  kind: string | null; dtype: string | null; title: string | null; lang: string | null;
+  ddate: number | null; pages: number | null; width: number | null; height: number | null;
+}
+export interface Folder { name: string; count: number; bytes: number; subs: number }
+export interface Listing { path: string; folders: Folder[]; files: Entry[]; more: boolean }
+
+interface Row {
+  id: number; plan: string; size: number; mtime: number; ctime: number;
+  kind: string | null; dtype: string | null; title: string | null; lang: string | null;
+  ddate: number | null; pages: number | null; width: number | null; height: number | null;
+}
 
 /**
  * Children of a library folder. Walks the plan index in order: files directly in
  * the folder are collected in pages; the first entry of a subfolder records the
  * subfolder and jumps the cursor past its entire subtree (one seek per subfolder).
+ *
+ * `foldersOnly` skips the files entirely, which is what the sidebar tree wants:
+ * expanding a node should cost one seek per child, not a page of file rows.
  */
-export function listFolder(db: Db, folder: string, fileLimit = 2000): Listing {
+export function listFolder(db: Db, folder: string, fileLimit = 2000, foldersOnly = false): Listing {
   const prefix = folder ? folder.replace(/\/+$/, "") + "/" : "";
   const page = db.q(
-    `SELECT f.id, f.plan, f.size, f.mtime, c.kind, c.ddate FROM files f LEFT JOIN contents c ON c.id = f.content
+    `SELECT f.id, f.plan, f.size, f.mtime, f.ctime, c.kind, c.dtype, c.title, c.lang, c.ddate, c.pages, c.width, c.height
+     FROM files f LEFT JOIN contents c ON c.id = f.content
      WHERE f.plan > ? AND f.plan < ? ORDER BY f.plan LIMIT 200`);
-  const count = db.q("SELECT count(*) AS n FROM files WHERE plan > ? AND plan < ?");
-  const folders: { name: string; count: number }[] = [];
+  // One row per subfolder: how much is in it, and whether it has folders of its own
+  // (the tree needs to know before you expand it, so an empty chevron never appears).
+  const summary = db.q(
+    `SELECT count(*) AS n, coalesce(sum(size), 0) AS bytes,
+            sum(instr(substr(plan, ?), '/') > 0) AS deeper
+     FROM files WHERE plan > ? AND plan < ?`);
+  const folders: Folder[] = [];
   const files: Entry[] = [];
   let cursor = prefix;
   const end = prefix + MAX;
   let more = false;
   outer: for (;;) {
-    const rows = page.all(cursor, end) as { id: number; plan: string; size: number; mtime: number; kind: string | null; ddate: number | null }[];
+    const rows = page.all(cursor, end) as unknown as Row[];
     if (!rows.length) break;
     for (const r of rows) {
       const rest = r.plan.slice(prefix.length);
@@ -33,12 +53,17 @@ export function listFolder(db: Db, folder: string, fileLimit = 2000): Listing {
       if (slash >= 0) {
         const name = rest.slice(0, slash);
         const sub = prefix + name + "/";
-        folders.push({ name, count: (count.get(sub, sub + MAX) as { n: number }).n });
+        const s = summary.get(sub.length + 1, sub, sub + MAX) as { n: number; bytes: number; deeper: number | null };
+        folders.push({ name, count: s.n, bytes: s.bytes, subs: s.deeper ?? 0 });
         cursor = sub + MAX;
         continue outer;
       }
+      if (foldersOnly) { cursor = r.plan; continue; }
       if (files.length >= fileLimit) { more = true; break outer; }
-      files.push({ id: r.id, name: rest, size: r.size, mtime: r.mtime, kind: r.kind, ddate: r.ddate });
+      files.push({
+        id: r.id, name: rest, size: r.size, mtime: r.mtime, ctime: r.ctime, kind: r.kind, dtype: r.dtype,
+        title: r.title, lang: r.lang, ddate: r.ddate, pages: r.pages, width: r.width, height: r.height,
+      });
       cursor = r.plan;
     }
   }

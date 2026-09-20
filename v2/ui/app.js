@@ -1,5 +1,9 @@
 // Atlas UI. No framework, no build step. The engine owns all state; this page
 // only reads it and sends a few commands, so closing it changes nothing.
+//
+// This file is the shell: routing, search, status, folders, one file's detail.
+// Browsing the library itself is explorer.js, which is a file manager.
+import { showExplorer } from "./explorer.js";
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -31,12 +35,8 @@ function crumbs(path) {
 }
 
 async function showLibrary(path) {
-  const d = await api(`/api/library?path=${encodeURIComponent(path)}`);
-  const folders = d.folders.map((f) => `<li><span class="icon folder">dir</span><a class="name" dir="auto" href="#/lib/${encodeURIComponent(path ? `${path}/${f.name}` : f.name)}">${esc(f.name)}</a><span class="meta">${fmtNum(f.count)} files</span></li>`);
-  const files = d.files.map((f) => `<li>${icon(f.kind, f.name)}<a class="name" dir="auto" href="#/file/${f.id}">${esc(f.name)}</a><span class="meta hide-sm">${fmtDate(f.ddate ?? f.mtime)}</span><span class="meta">${fmtBytes(f.size)}</span></li>`);
-  const empty = !folders.length && !files.length
-    ? `<p class="muted">Nothing here yet. ${path ? "" : 'Add a folder under <a href="#/roots">Folders</a>; Atlas scans it, reads each file once, and organizes a preview of your library here. Your files are not moved.'}</p>` : "";
-  view.innerHTML = `${crumbs(path)}<div class="panel"><ul class="list">${folders.join("")}${files.join("")}</ul>${empty}${d.more ? '<p class="muted small">Showing the first 2,000 files. Use search to narrow down.</p>' : ""}</div>`;
+  document.body.classList.add("explorer");
+  await showExplorer(path, view);
 }
 
 async function showSearch(q) {
@@ -181,6 +181,7 @@ async function route() {
   try {
     if (h === "#/login") return await showLogin();
     $("#bar").hidden = false;
+    if (!h.startsWith("#/lib/")) document.body.classList.remove("explorer");
     if (h.startsWith("#/lib/")) return await showLibrary(decodeURIComponent(h.slice(6)));
     if (h.startsWith("#/search")) return await showSearch(new URLSearchParams(h.split("?")[1] || "").get("q") || "");
     if (h.startsWith("#/file/")) return await showFile(Number(h.slice(7)));

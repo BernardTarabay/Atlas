@@ -73,7 +73,10 @@ const APP_HEADERS = {
   "referrer-policy": "no-referrer",
 };
 
-const STATIC: Record<string, string> = { "/": "index.html", "/app.js": "app.js", "/app.css": "app.css", "/icon.svg": "icon.svg", "/manifest.webmanifest": "manifest.webmanifest" };
+const STATIC: Record<string, string> = {
+  "/": "index.html", "/app.js": "app.js", "/app.css": "app.css", "/explorer.js": "explorer.js",
+  "/explorer.css": "explorer.css", "/icon.svg": "icon.svg", "/manifest.webmanifest": "manifest.webmanifest",
+};
 const STATIC_TYPE: Record<string, string> = { html: "text/html; charset=utf-8", js: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8", svg: "image/svg+xml", webmanifest: "application/manifest+json" };
 
 function serveStatic(res: Res, file: string) {
@@ -179,7 +182,7 @@ export function startServer(db: Db, engine: Engine): http.Server {
     }],
     ["GET", /^\/api\/library$/, (req) => {
       const u = new URL(req.url, "http://x");
-      return listFolder(db, u.searchParams.get("path") ?? "");
+      return listFolder(db, u.searchParams.get("path") ?? "", 2000, u.searchParams.has("folders"));
     }],
     ["GET", /^\/api\/search$/, (req) => {
       const u = new URL(req.url, "http://x");
