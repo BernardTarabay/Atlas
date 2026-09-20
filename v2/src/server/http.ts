@@ -20,6 +20,8 @@ import { listFolder, fileDetail, counts } from "../library.ts";
 import { search } from "../search/search.ts";
 import { addRoot, removeRoot, resolveFile, RootError } from "../roots.ts";
 import { kindFromExt, extOf } from "../analyze/sniff.ts";
+import { safeSegment } from "../plan/names.ts";
+import { S as STATE } from "../pipeline/states.ts";
 
 type Req = http.IncomingMessage & { remote: boolean; https: boolean; url: string };
 type Res = http.ServerResponse;
@@ -65,6 +67,23 @@ async function readBody(req: Req): Promise<Record<string, unknown>> {
   }
   if (!size) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new HttpError(400, "invalid JSON"); }
+}
+
+
+/**
+ * A folder inside the virtual library, sanitized segment by segment.
+ *
+ * This value becomes part of `files.plan`, which is what the apply step will one
+ * day turn into a real path - so it is checked here as strictly as a real path
+ * would be: no traversal, no drive letters, no reserved names, no trailing dots.
+ */
+function libraryFolder(input: string): string {
+  const parts = input.split(/[/\\]/).map((p) => p.trim()).filter((p) => p && p !== ".");
+  if (parts.some((p) => p === ".." || /^[a-zA-Z]:$/.test(p))) throw new HttpError(400, "invalid folder");
+  const clean = parts.map((p) => safeSegment(p));
+  if (!clean.length) throw new HttpError(400, "invalid folder");
+  if (clean.join("/").length > 400) throw new HttpError(400, "folder path too long");
+  return clean.join("/");
 }
 
 const APP_HEADERS = {
@@ -183,6 +202,38 @@ export function startServer(db: Db, engine: Engine): http.Server {
     ["GET", /^\/api\/library$/, (req) => {
       const u = new URL(req.url, "http://x");
       return listFolder(db, u.searchParams.get("path") ?? "", 2000, u.searchParams.has("folders"));
+    }],
+    // Moving a file in the library changes the PLAN, never the disk: it pins the
+    // folder, and the planner keeps naming and collision handling. That is why this
+    // is allowed while every disk-touching command is not.
+    ["POST", /^\/api\/plan\/move$/, (_req, _res, _m, b) => {
+      const ids = Array.isArray(b.ids) ? b.ids.map(Number).filter(Number.isInteger) : [];
+      if (!ids.length) throw new HttpError(400, "no files given");
+      if (ids.length > 5000) throw new HttpError(413, "too many files in one move");
+      const folder = libraryFolder(String(b.folder ?? ""));
+      const before = db.all<{ id: number; pin: string | null }>(
+        `SELECT id, pin FROM files WHERE id IN (SELECT value FROM json_each(?))`, JSON.stringify(ids));
+      const set = db.q(`UPDATE files SET pin = ?, state = ${STATE.IDENT} WHERE id = ? AND state = ${STATE.DONE}`);
+      let moved = 0;
+      db.tx(() => { for (const id of ids) moved += Number(set.run(folder, id).changes); });
+      engine.wake();
+      return { moved, folder, before };
+    }],
+    // Undo, and "let the rules decide again", are the same operation.
+    ["POST", /^\/api\/plan\/pin$/, (_req, _res, _m, b) => {
+      const items = Array.isArray(b.items) ? b.items : [];
+      const set = db.q(`UPDATE files SET pin = ?, state = ${STATE.IDENT} WHERE id = ? AND state = ${STATE.DONE}`);
+      let n = 0;
+      db.tx(() => {
+        for (const it of items as { id: unknown; pin: unknown }[]) {
+          const id = Number(it.id);
+          if (!Number.isInteger(id)) continue;
+          const pin = it.pin == null || it.pin === "" ? null : libraryFolder(String(it.pin));
+          n += Number(set.run(pin, id).changes);
+        }
+      });
+      engine.wake();
+      return { changed: n };
     }],
     ["GET", /^\/api\/search$/, (req) => {
       const u = new URL(req.url, "http://x");

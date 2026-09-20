@@ -13,7 +13,7 @@ import { nameText } from "../search/text.ts";
 import { splitName } from "./names.ts";
 
 interface Cand {
-  id: number; root: number; path: string; mtime: number; ctime: number; content: number | null; fid: string | null; plan: string | null;
+  id: number; root: number; path: string; mtime: number; ctime: number; content: number | null; fid: string | null; plan: string | null; pin: string | null;
   role: string; kind: string | null; dtype: string | null; title: string | null; quality: string | null;
   ddate: number | null; dsrc: string | null; meta: string | null; cstate: number | null; sha: string | null;
 }
@@ -55,7 +55,7 @@ export function chooseRepresentative(members: Member[]): Member {
  */
 export function planBatch(db: Db, limit: number, extracting: Set<string>): number {
   const rows = db.all<Cand>(
-    `SELECT f.id, f.root, f.path, f.mtime, f.ctime, f.content, f.fid, f.plan, r.role,
+    `SELECT f.id, f.root, f.path, f.mtime, f.ctime, f.content, f.fid, f.plan, f.pin, r.role,
             c.kind, c.dtype, c.title, c.quality, c.ddate, c.dsrc, c.meta, c.state AS cstate, hex(c.sha) AS sha
      FROM files f JOIN roots r ON r.id = f.root LEFT JOIN contents c ON c.id = f.content
      WHERE f.state = ${S.IDENT} ORDER BY f.id LIMIT ?`, limit);
@@ -108,6 +108,10 @@ export function planBatch(db: Db, limit: number, extracting: Set<string>): numbe
         camera: (meta.camera as string) ?? null, mtime: f.mtime, ctime: f.ctime,
       };
       const p = plan(input);
+      // A folder chosen by hand wins over the rule that would have picked one.
+      // The NAME still comes from the rules, and so does collision handling, so a
+      // moved file is numbered against its new neighbours like any other.
+      if (f.pin) { p.folder = f.pin; p.rule = "manual"; }
       // Two different files may earn the same place. The file that sorts first by
       // location always wins a name: if the current holder sorts after this file, it is
       // evicted and re-planned into the next number. The result does not depend on the

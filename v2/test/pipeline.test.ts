@@ -8,6 +8,7 @@ import { Db } from "../src/db/db.ts";
 import { Engine } from "../src/pipeline/engine.ts";
 import { search } from "../src/search/search.ts";
 import { listFolder } from "../src/library.ts";
+import { planBatch } from "../src/plan/planner.ts";
 import { S } from "../src/pipeline/states.ts";
 import { docx } from "./_zip.ts";
 
@@ -78,6 +79,33 @@ test("the virtual library lists folders and files without touching disk", () => 
   const photos = listFolder(db, "Photos/2026/2026-07");
   assert.deepEqual(photos.files.map((f) => f.name).sort(), ["2026-07-29 20.17.33 WhatsApp.jpeg", "2026-07-30 09.00.00 WhatsApp.jpeg"]);
   assert.ok(fs.existsSync(path.join(tree, "Photos/WhatsApp Image 2026-07-29 at 20.17.33.jpeg")), "originals are untouched");
+});
+
+test("a file moved by hand stays where it was put, and can be handed back", () => {
+  // Dragging a file onto a folder pins it. The planner then keeps naming and
+  // collision handling, but stops choosing the folder - and nothing on disk moves.
+  const f = byPath("Clients/Acme/scan0001.txt");
+  const before = f.plan;
+  assert.ok(before?.startsWith("Documents/Invoices/"), "the rules filed it as an invoice");
+  const onDisk = path.join(tree, "Clients/Acme/scan0001.txt");
+  const stat = fs.statSync(onDisk);
+
+  db.run(`UPDATE files SET pin = ?, state = ${S.IDENT} WHERE id = ?`, "Papers/Sorted by hand", f.id);
+  planBatch(db, 100, new Set());
+  const moved = byPath("Clients/Acme/scan0001.txt");
+  assert.equal(moved.plan, "Papers/Sorted by hand/2023-05-06 Invoice.txt", "the folder is the pinned one, the name is still the rules'");
+  assert.equal(moved.rule, "manual");
+  assert.ok(listFolder(db, "Papers/Sorted by hand").files.some((x) => x.id === f.id));
+  assert.deepEqual(
+    [fs.existsSync(onDisk), fs.statSync(onDisk).mtimeMs],
+    [true, stat.mtimeMs],
+    "the file itself was not touched",
+  );
+
+  db.run(`UPDATE files SET pin = NULL, state = ${S.IDENT} WHERE id = ?`, f.id);
+  planBatch(db, 100, new Set());
+  assert.equal(byPath("Clients/Acme/scan0001.txt").plan, before, "handing it back restores the rules' choice");
+  assert.equal(byPath("Clients/Acme/scan0001.txt").rule, "doc-invoice");
 });
 
 test("search: Arabic with and without the article, French plural, English, names", () => {

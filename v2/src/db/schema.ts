@@ -109,4 +109,7 @@ export const MIGRATIONS: string[] = [
     remote  INTEGER NOT NULL DEFAULT 0
   ) STRICT;
   `,
+  // 2: a folder chosen by hand, which beats the filing rules. Plan-only: moving a
+  // file in the library changes where it WOULD go, never where it is on disk.
+  `ALTER TABLE files ADD COLUMN pin TEXT;`,
 ];

@@ -121,6 +121,20 @@ Icon views show real thumbnails by loading the original image, because there is
 no thumbnail service yet - fine on this machine, heavy over a tunnel. That is the
 next milestone.
 
+**Search results are a place in the explorer**, not a separate page: the same
+rows, selection, views and context menu, plus a Folder column and the snippet
+that matched. Two questions are answered separately - the engine decides which
+files are *relevant*, and the rows that literally contain what you typed are
+marked and walkable with next/previous (Enter and Shift+Enter in the search box,
+F3 in the list). The walker counts snippet matches too, because an Arabic search
+finds files whose names are entirely Latin.
+
+**Dragging files onto a folder moves them** - in the library, which means it sets
+`files.pin` and re-plans them. Naming and collision handling stay with the rules,
+so a moved file is numbered against its new neighbours; the rule becomes
+`manual`. Nothing on disk moves. Ctrl+Z, or the Undo in the status bar, puts the
+plan back, and "Let the rules decide where this goes" hands a file back for good.
+
 ## OCR
 
 Scans, photographs of documents and image-only PDFs are read locally by Windows

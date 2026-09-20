@@ -7,7 +7,8 @@ import type { Db } from "../db/db.ts";
 import { ftsQuery, nameQuery, normalize, tokens, stem } from "./text.ts";
 
 export interface Hit {
-  id: number; path: string; plan: string | null; size: number; mtime: number; kind: string | null;
+  id: number; path: string; plan: string | null; size: number; mtime: number; ctime: number; kind: string | null;
+  dtype: string | null; lang: string | null; pages: number | null; width: number | null; height: number | null;
   title: string | null; ddate: number | null; root: number; score: number; why: string[]; snippet: string | null;
 }
 
@@ -51,7 +52,8 @@ export function search(db: Db, q: string, opts: { kind?: string; limit?: number 
 
   const ranked = [...scores.entries()].sort((a, b) => b[1].score - a[1].score);
   const detail = db.q(
-    `SELECT f.id, f.path, f.plan, f.size, f.mtime, f.root, f.content, c.kind, c.title, c.ddate
+    `SELECT f.id, f.path, f.plan, f.size, f.mtime, f.ctime, f.root, f.content,
+            c.kind, c.dtype, c.lang, c.pages, c.width, c.height, c.title, c.ddate
      FROM files f LEFT JOIN contents c ON c.id = f.content WHERE f.id = ?`);
   const terms = [...new Set(tokens(q).map(stem))].filter((t) => t.length >= 2);
   const hits: Hit[] = [];

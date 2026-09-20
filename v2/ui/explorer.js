@@ -41,6 +41,52 @@ async function api(path) {
   return data;
 }
 
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: "POST", credentials: "same-origin",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}),
+  });
+  const data = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
+  if (!res.ok) throw new Error(data?.error || res.statusText);
+  return data;
+}
+
+/* ---- marking what you typed ------------------------------------------ */
+
+// It goes into a RegExp and it is user input: "report (2024)" or "c++" would
+// throw and take the whole list down with it. The search box is the one input
+// guaranteed to receive punctuation.
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Does this text literally contain the query? The same test the marker uses. */
+function hasMatch(text, query) {
+  if (!query || !text) return false;
+  return String(text).toLowerCase().includes(String(query).toLowerCase());
+}
+
+/**
+ * `text` with every occurrence of `query` marked, find-in-page style, as HTML.
+ * The text is escaped FIRST and the marks added after, so a file called
+ * `<script>.pdf` is marked, not executed.
+ */
+function mark(text, query) {
+  const value = String(text ?? "");
+  const needle = (query || "").trim();
+  if (!needle) return esc(value);
+  const parts = value.split(new RegExp(`(${escapeRegExp(needle)})`, "gi"));
+  if (parts.length === 1) return esc(value);
+  return parts.map((part, i) => (i % 2 ? `<mark>${esc(part)}</mark>` : esc(part))).join("");
+}
+
+/* ---- what a dragged file carries -------------------------------------- */
+
+// A private MIME type, not text/plain: only our own targets react to it, and
+// `dataTransfer.types` can be inspected during dragover, where the payload
+// itself is deliberately unreadable. That is how a folder can light up for a
+// dragged file and stay inert for a dragged paragraph or a desktop file.
+const DRAG_MIME = "application/x-atlas-files";
+const MAX_DRAGGED = 5000;
+
 /* ---- icons ----------------------------------------------------------- */
 
 const PATHS = {
@@ -102,7 +148,11 @@ const COLUMNS = {
   title: { label: "Title", width: "minmax(120px, 1fr)" },
   lang: { label: "Language", width: "90px" },
   pages: { label: "Pages", width: "70px" },
+  folder: { label: "Folder", width: "minmax(140px, 1.4fr)" },
 };
+
+/** Why a result matched: worth saying, because the levels of confidence differ. */
+const WHY = { name: "name", content: "inside the document", semantic: "by meaning" };
 
 const KIND_LABEL = {
   image: "Image", video: "Video", audio: "Audio", pdf: "PDF document", doc: "Document",
@@ -133,6 +183,10 @@ function savePrefs() {
 const S = {
   ...loadPrefs(),
   path: "", listing: null, items: [], rows: [],
+  // Search is a place you can be, not a different page: same items, same
+  // selection, same views. `query` is what was searched for, `matches` are the
+  // rows whose NAME literally contains it, and `matchPos` walks them.
+  mode: "folder", query: "", ms: 0, matches: [], matchPos: 0,
   selected: new Set(), anchor: null, cursor: 0,
   filter: "", clip: null,
   nodes: new Map(), // path -> { open, loading, folders }
@@ -166,6 +220,22 @@ function toItems(listing) {
   }));
   for (const it of [...folders, ...files]) it.type = typeLabel(it);
   return [...folders, ...files];
+}
+
+function hitsToItems(hits) {
+  return hits.map((h) => {
+    const full = h.plan || h.path;
+    const name = full.slice(full.lastIndexOf("/") + 1);
+    const it = {
+      key: `f:${h.id}`, id: h.id, isDir: false, name, size: h.size, mtime: h.mtime, ctime: h.ctime,
+      kind: h.kind, dtype: h.dtype, title: h.title, lang: h.lang, pages: h.pages, ddate: h.ddate,
+      width: h.width, height: h.height, ext: extOf(name),
+      folder: h.plan ? h.plan.slice(0, h.plan.lastIndexOf("/")) : "",
+      snippet: h.snippet, why: h.why || [],
+    };
+    it.type = typeLabel(it);
+    return it;
+  });
 }
 
 /* ---- sorting and grouping -------------------------------------------- */
@@ -299,6 +369,7 @@ function cellText(it, col) {
     case "title": return it.title ?? "";
     case "lang": return it.lang ? LANG_LABEL[it.lang] ?? it.lang : "";
     case "pages": return it.pages ? String(it.pages) : "";
+    case "folder": return it.folder ?? "";
     default: return it.name;
   }
 }
@@ -306,10 +377,13 @@ function cellText(it, col) {
 function itemHtml(it, index) {
   const sel = S.selected.has(it.key) ? ' aria-selected="true"' : "";
   const cur = index === S.cursor ? " cursor" : "";
-  const a = `class="ex-item${cur}" data-key="${esc(it.key)}" data-index="${index}" role="option" tabindex="-1"${sel}`;
-  const name = `<span class="nm" dir="auto" title="${esc(it.name)}">${esc(it.name)}</span>`;
+  const hot = S.mode === "search" && S.matches[S.matchPos] === index ? " hot" : "";
+  const drag = it.isDir ? ' data-folder="1"' : "";
+  const a = `class="ex-item${cur}${hot}" data-key="${esc(it.key)}" data-index="${index}" role="option" tabindex="-1" draggable="true"${drag}${sel}`;
+  const label = S.mode === "search" ? mark(it.name, S.query) : esc(it.name);
+  const name = `<span class="nm" dir="auto" title="${esc(it.name)}">${label}</span>`;
   if (S.view === "details") {
-    const cells = S.cols.map((c, i) => (i === 0
+    const cells = visibleCols().map((c, i) => (i === 0
       ? `<span class="cell first">${iconFor(it)}${name}</span>`
       : `<span class="cell${c === "size" ? " num" : ""} muted">${esc(cellText(it, c))}</span>`));
     return `<div ${a}>${cells.join("")}</div>`;
@@ -320,16 +394,23 @@ function itemHtml(it, index) {
   }
   if (S.view === "content") {
     const line = it.isDir ? `${fmtNum(it.count)} items` : [it.title, it.dtype ? DTYPE_LABEL[it.dtype] ?? it.dtype : "", it.type].filter(Boolean).join(" · ");
-    return `<div ${a}>${iconFor(it)}<span class="meta">${name}<span class="sub" dir="auto">${esc(line)}</span></span>
+    const extra = S.mode === "search"
+      ? `<span class="sub" dir="auto">${esc(it.folder || "")}</span>
+         ${it.snippet ? `<span class="snippet" dir="auto">${mark(it.snippet, S.query)}</span>` : ""}
+         <span class="why">${(it.why || []).map((w) => `<span class="tag">${esc(WHY[w] ?? w)}</span>`).join("")}</span>`
+      : "";
+    return `<div ${a}>${iconFor(it)}<span class="meta">${name}<span class="sub" dir="auto">${esc(line)}</span>${extra}</span>
       <span class="right">${esc(it.isDir ? "" : fmtBytes(it.size))}<br>${esc(it.isDir ? "" : fmtDate(it.mtime))}</span></div>`;
   }
   if (S.view === "list") return `<div ${a}>${iconFor(it)}${name}</div>`;
   return `<div ${a}>${iconFor(it)}${name}</div>`; // icon grids
 }
 
+const visibleCols = () => (S.mode === "search" && !S.cols.includes("folder") ? [...S.cols, "folder"] : S.cols);
+
 function headHtml() {
   if (S.view !== "details") return "";
-  const cells = S.cols.map((c) => {
+  const cells = visibleCols().map((c) => {
     const on = S.sortBy === c;
     const arrow = on ? `<span class="arrow">${S.sortDir === "asc" ? "▲" : "▼"}</span>` : "";
     return `<button type="button" data-col="${esc(c)}" title="Sort by ${esc(COLUMNS[c].label)}">${esc(COLUMNS[c].label)}${arrow}</button>`;
@@ -342,17 +423,20 @@ function renderItems() {
   const groups = build();
   S.rows = groups.flatMap((g) => g.items);
   if (S.cursor >= S.rows.length) S.cursor = Math.max(0, S.rows.length - 1);
+  findMatches();     // before the rows are drawn: itemHtml marks the active one
   let i = 0;
   const body = groups.map((g) => {
     const head = g.label ? `<div class="ex-group">${esc(g.label)} <span>(${fmtNum(g.items.length)})</span></div>` : "";
     const html = g.items.map((it) => itemHtml(it, i++)).join("");
     return `${head}<div class="items" role="listbox" aria-multiselectable="true">${html}</div>`;
   }).join("");
-  const empty = S.rows.length ? "" : `<p class="ex-empty">${S.filter ? "No items match this filter." : "This folder is empty."}</p>`;
+  const empty = S.rows.length ? "" : `<p class="ex-empty">${
+    S.mode === "search" ? `Nothing matched “${esc(S.query)}”.` : S.filter ? "No items match this filter." : "This folder is empty."}</p>`;
+  updateFind();
   box.className = `ex-items v-${S.view}`;
   box.innerHTML = headHtml() + body + empty;
   if (S.view === "details") {
-    box.style.setProperty("--cols", S.cols.map((c) => COLUMNS[c].width).join(" "));
+    box.style.setProperty("--cols", visibleCols().map((c) => COLUMNS[c].width).join(" "));
   }
   renderStatus();
 }
@@ -361,12 +445,15 @@ function renderStatus() {
   const bar = root.querySelector("#exStatus");
   const sel = S.rows.filter((it) => S.selected.has(it.key));
   const bytes = sel.reduce((n, it) => n + (it.isDir ? 0 : it.size), 0);
-  const parts = [`${fmtNum(S.rows.length)} item${S.rows.length === 1 ? "" : "s"}`];
-  if (S.filter) parts.push(`filtered from ${fmtNum(S.items.length)}`);
+  const parts = [esc(`${fmtNum(S.rows.length)} item${S.rows.length === 1 ? "" : "s"}`)];
+  if (S.mode === "search") parts.push(`${fmtNum(S.matches.length)} showing “<bdi>${esc(S.query)}</bdi>”`);
+  if (S.filter) parts.push(esc(`filtered from ${fmtNum(S.items.length)}`));
   if (sel.length) parts.push(`${fmtNum(sel.length)} selected${bytes ? ` · ${fmtBytes(bytes)}` : ""}`);
   if (S.listing?.more) parts.push("first 2,000 files only");
   if (S.clip) parts.push(`${S.clip.mode === "cut" ? "Cut" : "Copied"}: ${fmtNum(S.clip.items.length)}`);
-  bar.querySelector(".info").textContent = parts.join("  |  ");
+  // Arabic queries sit inside an English sentence here: <bdi> keeps the two from
+  // reordering each other. Everything else in the line is escaped on the way in.
+  bar.querySelector(".info").innerHTML = parts.join("  |  ");
   for (const b of bar.querySelectorAll("[data-view]")) b.setAttribute("aria-pressed", String(b.dataset.view === S.view));
   syncCommands();
 }
@@ -388,9 +475,15 @@ async function loadNode(path) {
   let node = S.nodes.get(path);
   if (!node) { node = { open: false, loaded: false, folders: [] }; S.nodes.set(path, node); }
   if (node.loaded) return node;
-  const d = await api(`/api/library?folders=1&path=${encodeURIComponent(path)}`);
-  node.folders = d.folders;
-  node.loaded = true;
+  // Share one request between concurrent callers: revealing a path and drawing
+  // the tree both want the same children, and without this a single move fired
+  // the same query twice for every open folder.
+  if (!node.loading) {
+    node.loading = api(`/api/library?folders=1&path=${encodeURIComponent(path)}`)
+      .then((d) => { node.folders = d.folders; node.loaded = true; })
+      .finally(() => { node.loading = null; });
+  }
+  await node.loading;
   return node;
 }
 
@@ -425,7 +518,10 @@ function renderTree() {
 async function toggleNode(path) {
   const node = await loadNode(path);
   node.open = !node.open;
-  if (node.open) for (const f of node.folders) await loadNode(path ? `${path}/${f.name}` : f.name);
+  if (node.open) {
+    // Children of the node being opened, in parallel: they are about to be drawn.
+    await Promise.all(node.folders.map((f) => loadNode(path ? `${path}/${f.name}` : f.name).catch(() => {})));
+  }
   renderTree();
 }
 
@@ -438,7 +534,6 @@ async function revealInTree(path) {
   for (const p of chain) {
     const node = await loadNode(p);
     node.open = true;
-    for (const f of node.folders) await loadNode(p ? `${p}/${f.name}` : f.name);
   }
   renderTree();
 }
@@ -588,12 +683,14 @@ async function copyText(text, what) {
 }
 
 let flashTimer = null;
-function flash(msg) {
+function flash(msg, actionLabel, action) {
   const bar = root?.querySelector("#exStatus .flash");
   if (!bar) return;
-  bar.textContent = msg;
+  bar.innerHTML = esc(msg) + (actionLabel ? ` <button type="button" class="undo">${esc(actionLabel)}</button>` : "");
+  const btn = bar.querySelector("button");
+  if (btn) btn.onclick = () => { bar.innerHTML = ""; action?.(); };
   clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => { bar.textContent = ""; }, 2500);
+  flashTimer = setTimeout(() => { bar.innerHTML = ""; }, actionLabel ? 12000 : 2500);
 }
 
 /* ---- commands -------------------------------------------------------- */
@@ -636,6 +733,18 @@ const CMD = {
     copyText(`${d.file.rootPath}\\${String(d.file.path).replace(/\//g, "\\")}`, "Path");
   },
   download: () => { const it = selectedItems()[0]; if (it && !it.isDir) location.href = `/api/files/${it.id}/content?download`; },
+  openOriginal: () => { const it = selectedItems()[0]; if (it && !it.isDir) window.open(`/api/files/${it.id}/content`, "_blank", "noopener"); },
+  // The counterpart to dragging: hand the file back to the filing rules.
+  resetPlan: async () => {
+    const files = selectedItems().filter((it) => !it.isDir);
+    if (!files.length) return;
+    await post("/api/plan/pin", { items: files.map((f) => ({ id: f.id, pin: null })) });
+    flash(`${fmtNum(files.length)} file(s) handed back to the filing rules`);
+    await refreshAfterPlanChange();
+  },
+  undo: () => undoMove(),
+  findNext: () => goToMatch(S.matchPos + 1),
+  findPrev: () => goToMatch(S.matchPos - 1),
 };
 
 function setView(v) { S.view = v; savePrefs(); renderItems(); }
@@ -695,6 +804,7 @@ function itemMenu(it) {
   const many = S.selected.size > 1;
   return [
     { id: "open", label: it.isDir ? "Open" : "Open file", icon: "open", key: "Enter", disabled: many, run: () => open(it) },
+    { id: "orig", label: "Open the original", icon: "eye", disabled: many || it.isDir, run: CMD.openOriginal },
     { id: "preview", label: "Preview pane", icon: "eye", checked: S.preview, run: () => { S.preview = !S.preview; savePrefs(); layout(); updatePreview(); } },
     "-",
     { id: "cut", label: "Cut", icon: "cut", key: "Ctrl+X", run: CMD.cut },
@@ -705,6 +815,7 @@ function itemMenu(it) {
     { id: "path", label: "Copy path on disk", icon: "link", disabled: many, run: CMD.copyPath },
     { id: "download", label: "Download a copy", icon: "download", disabled: many || it.isDir, run: CMD.download },
     "-",
+    { id: "reset", label: "Let the rules decide where this goes", icon: "refresh", disabled: it.isDir, run: CMD.resetPlan },
     { id: "rename", label: "Rename", icon: "rename", key: "F2", disabled: many, run: CMD.rename },
     { id: "delete", label: "Delete", icon: "trash", key: "Del", run: CMD.delete },
     "-",
@@ -848,8 +959,34 @@ function crumbHtml(path) {
   return links.join("");
 }
 
+/** The match counter lives in the address bar but is decided by the rows. */
+function updateFind() {
+  const nav = root?.querySelector("#exFind");
+  if (!nav || nav.hidden) return;
+  nav.querySelector(".pos").textContent = S.matches.length ? `${S.matchPos + 1} / ${S.matches.length}` : "0 / 0";
+  for (const b of nav.querySelectorAll("button")) b.disabled = !S.matches.length;
+}
+
+function renderAddress() {
+  const box = root.querySelector("#exCrumbs");
+  const nav = root.querySelector("#exFind");
+  if (S.mode === "search") {
+    box.innerHTML = `<span class="chev">${ico("filter")}</span><a href="#/lib/" data-crumb="">Library</a>
+      <span class="chev">${ico("chev")}</span><span class="term" dir="auto">Results for “${esc(S.query)}”</span>
+      <span class="count">${fmtNum(S.items.length)} in ${S.ms} ms</span>`;
+    nav.hidden = false;
+    updateFind();
+  } else {
+    box.innerHTML = crumbHtml(S.path);
+    nav.hidden = true;
+  }
+}
+
 async function load(path, force = false) {
-  if (S.listing && S.path === path && !force) return;
+  if (S.mode === "folder" && S.listing && S.path === path && !force) return;
+  S.mode = "folder";
+  S.query = "";
+  S.matches = [];
   S.path = path;
   const d = await api(`/api/library?path=${encodeURIComponent(path)}`);
   S.listing = d;
@@ -860,10 +997,60 @@ async function load(path, force = false) {
   S.filter = "";
   const input = root.querySelector("#exFilter");
   if (input) input.value = "";
-  root.querySelector("#exCrumbs").innerHTML = crumbHtml(path);
+  renderAddress();
   renderItems();
   updatePreview();
   revealInTree(path).catch(() => {});
+}
+
+/**
+ * Two different questions, answered separately.
+ *
+ *   which files are RELEVANT?       the engine decided; that is the result list
+ *   which ones literally SAY this?  marked yellow, and walkable with next/prev
+ *
+ * Marking is done over the rows already on screen, without re-filtering, so the
+ * results that matched inside a document are still there when the literal
+ * filename matches run out.
+ */
+function findMatches() {
+  S.matches = [];
+  if (S.mode !== "search" || !S.query) return;
+  S.rows.forEach((it, i) => {
+    // The snippet counts too: searching in Arabic finds files whose names are
+    // all Latin, and a walker that only knew about names would sit at 0 of 0
+    // on exactly the searches that needed it most.
+    if (hasMatch(it.name, S.query) || hasMatch(it.folder ?? "", S.query) || hasMatch(it.snippet ?? "", S.query)) S.matches.push(i);
+  });
+  if (S.matchPos >= S.matches.length) S.matchPos = 0;
+}
+
+function goToMatch(pos) {
+  if (!S.matches.length) return;
+  // Wrap both ways, like every find bar: running off the end returns you to the
+  // top rather than stopping dead.
+  S.matchPos = ((pos % S.matches.length) + S.matches.length) % S.matches.length;
+  const index = S.matches[S.matchPos];
+  selectOnly(index);
+  renderItems();
+  root.querySelector(`.ex-item[data-index="${index}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  updatePreview();
+}
+
+async function loadSearch(q) {
+  S.mode = "search";
+  S.query = q;
+  S.listing = null;
+  S.selected.clear();
+  S.cursor = 0;
+  S.anchor = null;
+  S.matchPos = 0;
+  const d = await api(`/api/search?limit=200&q=${encodeURIComponent(q)}`);
+  S.items = hitsToItems(d.hits);
+  S.ms = d.ms;
+  renderAddress();
+  renderItems();
+  updatePreview();
 }
 
 /* ---- the shell ------------------------------------------------------- */
@@ -898,6 +1085,11 @@ function shell() {
       <button class="ex-btn" data-cmd="refresh" type="button" title="Refresh (F5)">${ico("refresh")}</button>
     </div>
     <div class="ex-crumbs" id="exCrumbs"></div>
+    <div class="ex-find" id="exFind" hidden>
+      <button class="ex-btn" type="button" data-find="prev" title="Previous match (Shift+Enter)">${ico("back")}</button>
+      <span class="pos">0 / 0</span>
+      <button class="ex-btn" type="button" data-find="next" title="Next match (Enter)">${ico("forward")}</button>
+    </div>
     <label class="ex-filter">${ico("filter")}<input id="exFilter" type="search" placeholder="Filter this folder" autocomplete="off" dir="auto"></label>
   </div>
   <div class="ex-body" id="exBody">
@@ -970,7 +1162,11 @@ function wire() {
 
   items.addEventListener("dblclick", (e) => {
     const el = e.target.closest(".ex-item");
-    if (el) open(S.rows[Number(el.dataset.index)]);
+    if (!el) return;
+    // More than one picked changes what the marked rows MEAN: that is a batch,
+    // and opening twenty tabs is never what the second click was asking for.
+    if (S.selected.size > 1) { flash(`${fmtNum(S.selected.size)} files selected - opening one at a time`); return; }
+    open(S.rows[Number(el.dataset.index)]);
   });
 
   items.addEventListener("click", (e) => {
@@ -1012,8 +1208,14 @@ function wire() {
     if (b) setView(b.dataset.view);
   });
 
+  root.querySelector("#exFind").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-find]");
+    if (b) (b.dataset.find === "next" ? CMD.findNext : CMD.findPrev)();
+  });
+
   grip(root.querySelector("#exGrip"), (dx) => { S.nav = Math.max(140, Math.min(480, S.nav + dx)); savePrefs(); layout(); });
   marquee.attach(items);
+  wireDrag();
 
   document.addEventListener("mousedown", (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); });
   window.addEventListener("resize", () => { closeMenu(); layout(); });
@@ -1092,6 +1294,130 @@ const marquee = {
   consumeDrag() { const d = this.justDragged; this.justDragged = false; return d; },
 };
 
+/* ---- drag and drop --------------------------------------------------- */
+
+/**
+ * Dropping files on a folder MOVES them in the library, which means it changes
+ * where they are planned to go - `files.pin` - and nothing on disk. That is why
+ * this gesture works while Cut/Paste refuses: one edits a plan, the other would
+ * edit your disk.
+ */
+async function moveTo(items, folder) {
+  const ids = items.filter((it) => !it.isDir).map((it) => it.id);
+  if (!ids.length || !folder) return;
+  const r = await post("/api/plan/move", { ids, folder });
+  // Remember the previous pins so this is undoable: a move nobody can take back
+  // is a move nobody should make by accident with a mouse.
+  lastMove = { items: r.before ?? [], folder };
+  flash(`Moved ${fmtNum(r.moved)} file(s) to ${folder}`, "Undo", undoMove);
+  await refreshAfterPlanChange();
+}
+
+let lastMove = null;
+async function undoMove() {
+  if (!lastMove) return;
+  const items = lastMove.items.map((b) => ({ id: b.id, pin: b.pin }));
+  await post("/api/plan/pin", { items });
+  lastMove = null;
+  flash("Move undone");
+  await refreshAfterPlanChange();
+}
+
+/**
+ * Planning is asynchronous: give the engine a moment, then reload what is on
+ * screen. Only OPEN tree nodes are re-fetched - their counts are the ones a move
+ * changed and the ones you can see. Collapsed branches reload when opened.
+ */
+async function refreshAfterPlanChange() {
+  await new Promise((r) => setTimeout(r, 350));
+  if (S.mode === "search") await loadSearch(S.query);
+  else await load(S.path, true);
+  const open = [...S.nodes.entries()].filter(([, n]) => n.open).map(([p]) => p);
+  for (const p of open) S.nodes.get(p).loaded = false;
+  await Promise.all(open.map((p) => loadNode(p).catch(() => {})));
+  renderTree();
+}
+
+const dragState = { items: [] };
+
+function dragPayload(e) {
+  const chosen = selectedItems();
+  const el = e.target.closest(".ex-item");
+  const it = el ? S.rows[Number(el.dataset.index)] : null;
+  // Dragging something that was not selected drags THAT, the way every file
+  // manager does, instead of silently carrying the old selection.
+  const items = it && !S.selected.has(it.key) ? [it] : chosen;
+  return items.slice(0, MAX_DRAGGED);
+}
+
+const isOurDrag = (e) => [...(e.dataTransfer?.types || [])].includes(DRAG_MIME);
+
+function dropFolderFor(el) {
+  if (el.dataset.path !== undefined) return el.dataset.path;            // a tree node
+  const it = S.rows[Number(el.dataset.index)];
+  if (it?.isDir) return S.path ? `${S.path}/${it.name}` : it.name;      // a folder row
+  return null;
+}
+
+function wireDrag() {
+  const items = root.querySelector("#exItems");
+
+  items.addEventListener("dragstart", (e) => {
+    const el = e.target.closest(".ex-item");
+    if (!el) return;
+    const picked = dragPayload(e);
+    const files = picked.filter((it) => !it.isDir);
+    if (!files.length) { e.preventDefault(); return; }  // folders are not movable: they are derived
+    dragState.items = files;
+    e.dataTransfer.setData(DRAG_MIME, JSON.stringify(files.map((f) => ({ id: f.id, name: f.name }))));
+    e.dataTransfer.effectAllowed = "move";
+    root.classList.add("dragging");
+  });
+  items.addEventListener("dragend", () => {
+    root.classList.remove("dragging");
+    for (const el of root.querySelectorAll(".drop")) el.classList.remove("drop");
+  });
+
+  const over = (e) => {
+    if (!isOurDrag(e)) return;
+    const el = e.target.closest("[data-path], .ex-item[data-folder]");
+    for (const d of root.querySelectorAll(".drop")) if (d !== el) d.classList.remove("drop");
+    if (!el) return;
+    const folder = dropFolderFor(el);
+    if (folder == null) return;
+    e.preventDefault();                       // only a preventDefault makes it a drop target
+    e.dataTransfer.dropEffect = "move";
+    el.classList.add("drop");
+  };
+  const drop = async (e) => {
+    if (!isOurDrag(e)) return;
+    const el = e.target.closest("[data-path], .ex-item[data-folder]");
+    if (!el) return;
+    const folder = dropFolderFor(el);
+    if (folder == null) return;
+    e.preventDefault();
+    el.classList.remove("drop");
+    root.classList.remove("dragging");
+    // Prefer the payload, so a drag begun before a re-render still moves the
+    // right files; fall back to what dragstart recorded.
+    let files = dragState.items;
+    try {
+      const raw = e.dataTransfer.getData(DRAG_MIME);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length) files = parsed.filter((f) => Number.isInteger(f?.id));
+      }
+    } catch { /* malformed: a drop handler that throws leaves the page stuck mid-drag */ }
+    try { await moveTo(files, folder); } catch (err) { flash(err.message); }
+  };
+
+  for (const zone of [items, root.querySelector("#exTree")]) {
+    zone.addEventListener("dragover", over);
+    zone.addEventListener("dragleave", (e) => e.target.closest?.(".drop")?.classList.remove("drop"));
+    zone.addEventListener("drop", drop);
+  }
+}
+
 /* ---- keyboard -------------------------------------------------------- */
 
 function onKey(e) {
@@ -1106,6 +1432,7 @@ function onKey(e) {
     if (k === "x") { e.preventDefault(); return CMD.cut(); }
     if (k === "v") { e.preventDefault(); return CMD.paste(); }
     if (k === "n" && e.shiftKey) { e.preventDefault(); return CMD.new(); }
+    if (k === "z") { e.preventDefault(); return CMD.undo(); }
     return;
   }
   switch (e.key) {
@@ -1121,6 +1448,7 @@ function onKey(e) {
     case "Backspace": e.preventDefault(); return CMD.up();
     case "Escape": e.preventDefault(); return CMD.selectNone();
     case "F2": e.preventDefault(); return CMD.rename();
+    case "F3": e.preventDefault(); return e.shiftKey ? CMD.findPrev() : CMD.findNext();
     case "F5": e.preventDefault(); return CMD.refresh();
     case "Delete": e.preventDefault(); return CMD.delete();
     case " ": e.preventDefault(); toggleAt(S.cursor); renderItems(); return updatePreview();
@@ -1159,8 +1487,18 @@ export async function showExplorer(path, container) {
     renderTree();
     await loadNode("").then((n) => { n.open = true; renderTree(); }).catch(() => {});
   }
+  if (path === null) return;                 // mounted for a search; the caller loads it
   await load(path);
   root.querySelector("#exItems").focus({ preventScroll: true });
 }
+
+export async function showSearchResults(q, container) {
+  await showExplorer(null, container);
+  await loadSearch(q);
+  root.querySelector("#exItems").focus({ preventScroll: true });
+}
+
+/** Walk the literal matches from outside (the header's search box). */
+export function explorerFind(dir) { goToMatch(S.matchPos + dir); }
 
 export function explorerActive() { return !!root && root.isConnected; }

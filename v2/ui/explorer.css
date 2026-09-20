@@ -528,3 +528,74 @@
   .ex-body.with-preview { grid-template-columns: 0 0 1fr; }
   .ex-filter { width: 140px; }
 }
+
+/* ---- search results --------------------------------------------------- */
+
+.ex-crumbs .term { padding: 3px 6px; font-weight: 600; }
+.ex-crumbs .count { margin-left: auto; padding-right: 6px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+.ex-find { display: flex; align-items: center; gap: 2px; }
+.ex-find .ex-btn { width: 28px; padding: 0; justify-content: center; }
+.ex-find .pos { min-width: 56px; text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* What you typed, marked inside the name and the snippet. Yellow in light,
+   amber in dark - the same convention as a browser's find bar. */
+.ex-item mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: #fde68a;
+  color: inherit;
+}
+
+.ex[data-theme="dark"] .ex-item mark { background: #8a6d1f; color: #fff; }
+@media (prefers-color-scheme: dark) {
+  .ex:not([data-theme="light"]) .ex-item mark { background: #8a6d1f; color: #fff; }
+}
+
+/* The match you have walked TO, rendered hotter than the rest. */
+.ex-item.hot { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ex-item.hot mark { background: var(--focus); color: #fff; }
+
+.ex-item .snippet {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ex-item .why { display: flex; gap: 4px; margin-top: 3px; flex-wrap: wrap; }
+.ex-item .why .tag {
+  padding: 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 15px;
+}
+
+/* ---- drag and drop ---------------------------------------------------- */
+
+.ex.dragging .ex-item { cursor: grabbing; }
+.ex .drop {
+  background: var(--sel) !important;
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.ex.dragging .ex-tree .ex-node { transition: none; }
+
+.ex-status .flash { color: var(--text); }
+.ex-status .flash .undo {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--pane);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ex-status .flash .undo:hover { background: var(--hover); }

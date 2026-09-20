@@ -3,7 +3,7 @@
 //
 // This file is the shell: routing, search, status, folders, one file's detail.
 // Browsing the library itself is explorer.js, which is a file manager.
-import { showExplorer } from "./explorer.js";
+import { showExplorer, showSearchResults, explorerFind } from "./explorer.js";
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -41,7 +41,15 @@ async function showLibrary(path) {
 
 async function showSearch(q) {
   $("#q").value = q;
-  if (!q.trim()) { view.innerHTML = `<p class="muted">Type to search file names and contents.</p>`; return; }
+  if (!q.trim()) { document.body.classList.remove("explorer"); view.innerHTML = `<p class="muted">Type to search file names and contents.</p>`; return; }
+  // Results are a place in the explorer, not a different page: same rows, same
+  // selection, same views, same context menu.
+  document.body.classList.add("explorer");
+  return showSearchResults(q, view);
+}
+
+async function showSearchOld(q) {
+  $("#q").value = q;
   const d = await api(`/api/search?q=${encodeURIComponent(q)}`);
   const items = d.hits.map((h) => {
     const name = (h.plan || h.path).split("/").pop();
@@ -181,7 +189,7 @@ async function route() {
   try {
     if (h === "#/login") return await showLogin();
     $("#bar").hidden = false;
-    if (!h.startsWith("#/lib/")) document.body.classList.remove("explorer");
+    if (!h.startsWith("#/lib/") && !h.startsWith("#/search")) document.body.classList.remove("explorer");
     if (h.startsWith("#/lib/")) return await showLibrary(decodeURIComponent(h.slice(6)));
     if (h.startsWith("#/search")) return await showSearch(new URLSearchParams(h.split("?")[1] || "").get("q") || "");
     if (h.startsWith("#/file/")) return await showFile(Number(h.slice(7)));
@@ -193,6 +201,19 @@ async function route() {
   }
 }
 
-$("#searchForm").addEventListener("submit", (e) => { e.preventDefault(); location.hash = `#/search?q=${encodeURIComponent($("#q").value)}`; });
+$("#searchForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = $("#q").value;
+  const next = `#/search?q=${encodeURIComponent(q)}`;
+  // Enter again on the same query walks to the next literal match instead of
+  // re-running the search - the gesture every find bar has taught everyone.
+  if (location.hash === next) explorerFind(1);
+  else location.hash = next;
+});
+$("#q").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !e.shiftKey) return;
+  e.preventDefault();
+  explorerFind(-1);
+});
 window.addEventListener("hashchange", route);
 api("/api/session").then((s) => { if (!s.authenticated) location.hash = "#/login"; route(); });

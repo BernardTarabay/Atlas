@@ -98,6 +98,9 @@ export class Engine {
     log.info("engine stopped");
   }
 
+  /** Something outside the engine changed a row's state: look again now. */
+  wake() { this.kick(); }
+
   reloadRoots() {
     this.roots.clear();
     for (const r of this.db.all<{ id: number; path: string }>("SELECT id, path FROM roots WHERE enabled = 1")) this.roots.set(r.id, r.path);
