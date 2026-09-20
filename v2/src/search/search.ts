@@ -14,9 +14,13 @@ export interface Hit {
 
 const K = 60;
 
-export function search(db: Db, q: string, opts: { kind?: string; limit?: number } = {}): { hits: Hit[]; ms: number } {
+export function search(db: Db, q: string, opts: { kind?: string; limit?: number; path?: string } = {}): { hits: Hit[]; ms: number } {
   const t0 = performance.now();
   const limit = Math.min(opts.limit ?? 50, 200);
+  // Scope: searching from inside a folder searches THAT folder, subfolders and
+  // all. Applied to the planned path - the folder a person can see, not where
+  // the bytes happen to live on disk.
+  const scope = opts.path ? opts.path.replace(/[/]+$/, "") + "/" : "";
   const scores = new Map<number, { score: number; why: Set<string> }>();
   const add = (fileId: number, rank: number, why: string) => {
     const s = scores.get(fileId) ?? { score: 0, why: new Set<string>() };
@@ -61,6 +65,7 @@ export function search(db: Db, q: string, opts: { kind?: string; limit?: number 
     const r = detail.get(id) as (Omit<Hit, "score" | "why" | "snippet"> & { content: number | null }) | undefined;
     if (!r) continue;
     if (opts.kind && r.kind !== opts.kind) continue;
+    if (scope && !(r.plan ?? "").startsWith(scope)) continue;
     hits.push({ ...r, score: +s.score.toFixed(5), why: [...s.why], snippet: s.why.has("content") && r.content ? snippet(db, r.content, terms) : null });
     if (hits.length >= limit) break;
   }

@@ -126,6 +126,7 @@ const VIEWS = [
 // Every sort key here is backed by something Atlas actually knows. Explorer also
 // offers Authors and Tags; the analyzers do not extract either yet, so they are
 // not in this menu - a menu item that can only ever sort by blank is a lie.
+const RELEVANCE = ["relevance", "Best match"];
 const SORTS = [
   ["name", "Name"], ["mtime", "Date modified"], ["type", "Type"], ["size", "Size"],
   ["ctime", "Date created"], ["ddate", "Date of document"], ["dtype", "Category"],
@@ -186,7 +187,13 @@ const S = {
   // Search is a place you can be, not a different page: same items, same
   // selection, same views. `query` is what was searched for, `matches` are the
   // rows whose NAME literally contains it, and `matchPos` walks them.
-  mode: "folder", query: "", ms: 0, matches: [], matchPos: 0,
+  mode: "folder", query: "", scope: "", ms: 0, matches: [], matchPos: 0,
+  photoStatus: "all", photoCounts: {}, photoTotal: 0,
+  // Anything that is not a folder - results, photos - keeps its OWN arrangement.
+  // Results arrive ranked and that ranking answers "which of these is most what
+  // I meant"; photos arrive newest first. Either way the folder you came from
+  // keeps how you arranged IT, and arranging these never writes to preferences.
+  tmpSort: "relevance", tmpDir: "asc", tmpGroup: "none",
   selected: new Set(), anchor: null, cursor: 0,
   filter: "", clip: null,
   nodes: new Map(), // path -> { open, loading, folders }
@@ -223,7 +230,7 @@ function toItems(listing) {
 }
 
 function hitsToItems(hits) {
-  return hits.map((h) => {
+  return hits.map((h, ord) => {
     const full = h.plan || h.path;
     const name = full.slice(full.lastIndexOf("/") + 1);
     const it = {
@@ -231,7 +238,7 @@ function hitsToItems(hits) {
       kind: h.kind, dtype: h.dtype, title: h.title, lang: h.lang, pages: h.pages, ddate: h.ddate,
       width: h.width, height: h.height, ext: extOf(name),
       folder: h.plan ? h.plan.slice(0, h.plan.lastIndexOf("/")) : "",
-      snippet: h.snippet, why: h.why || [],
+      snippet: h.snippet, why: h.why || [], ord,
     };
     it.type = typeLabel(it);
     return it;
@@ -240,8 +247,14 @@ function hitsToItems(hits) {
 
 /* ---- sorting and grouping -------------------------------------------- */
 
+const transient = () => S.mode !== "folder";
+const sortBy = () => (transient() ? S.tmpSort : S.sortBy);
+const sortDir = () => (transient() ? S.tmpDir : S.sortDir);
+const groupBy = () => (transient() ? S.tmpGroup : S.groupBy);
+
 function sortValue(it, key) {
   switch (key) {
+    case "relevance": return it.ord ?? 0;
     case "name": return it.name;
     case "type": return it.type;
     case "dtype": return it.dtype ? DTYPE_LABEL[it.dtype] ?? it.dtype : "";
@@ -255,9 +268,9 @@ function compare(a, b) {
   // Folders first, always, whatever the sort - the same rule every file manager
   // uses, because "where can I go" and "what is here" are different questions.
   if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-  const dir = S.sortDir === "asc" ? 1 : -1;
-  const va = sortValue(a, S.sortBy);
-  const vb = sortValue(b, S.sortBy);
+  const dir = sortDir() === "asc" ? 1 : -1;
+  const va = sortValue(a, sortBy());
+  const vb = sortValue(b, sortBy());
   let r;
   if (typeof va === "string" || typeof vb === "string") r = collator.compare(String(va), String(vb));
   else r = (va || 0) - (vb || 0);
@@ -294,7 +307,7 @@ function sizeGroup(n) {
 }
 
 function groupOf(it) {
-  switch (S.groupBy) {
+  switch (groupBy()) {
     case "name": { const c = it.name.trim().charAt(0).toUpperCase(); return /\p{L}/u.test(c) ? c : /\d/.test(c) ? "0 - 9" : "Other"; }
     case "type": return it.type;
     case "size": return it.isDir ? "Folders" : sizeGroup(it.size);
@@ -326,7 +339,7 @@ function build() {
       || it.type.toLowerCase().includes(f));
   }
   items = [...items].sort(compare);
-  if (S.groupBy === "none") return [{ label: "", items }];
+  if (groupBy() === "none") return [{ label: "", items }];
   const map = new Map();
   for (const it of items) {
     const label = groupOf(it);
@@ -339,9 +352,9 @@ function build() {
     const ra = groupRank(a.label);
     const rb = groupRank(b.label);
     if (known.includes(a.label) || known.includes(b.label) || a.label === "Folders" || b.label === "Folders") {
-      if (ra !== rb) return (ra - rb) * (S.sortDir === "asc" ? 1 : -1);
+      if (ra !== rb) return (ra - rb) * (sortDir() === "asc" ? 1 : -1);
     }
-    return collator.compare(a.label, b.label) * (S.sortDir === "asc" ? 1 : -1);
+    return collator.compare(a.label, b.label) * (sortDir() === "asc" ? 1 : -1);
   });
   return groups;
 }
@@ -382,6 +395,12 @@ function itemHtml(it, index) {
   const a = `class="ex-item${cur}${hot}" data-key="${esc(it.key)}" data-index="${index}" role="option" tabindex="-1" draggable="true"${drag}${sel}`;
   const label = S.mode === "search" ? mark(it.name, S.query) : esc(it.name);
   const name = `<span class="nm" dir="auto" title="${esc(it.name)}">${label}</span>`;
+  if (S.mode === "photos") {
+    const ocr = it.ocr === 2 ? "" : it.ocr === 1 ? "waiting for OCR" : it.ocr === 3 ? "OCR failed" : "";
+    return `<div ${a}><span class="ex-ico image"><img loading="lazy" decoding="async" alt="" src="/api/files/${it.id}/content"></span>
+      <span class="meta">${name}<span class="sub" dir="auto">${esc(it.folder || "")}</span>
+      ${ocr ? `<span class="sub warn">${esc(ocr)}</span>` : ""}</span></div>`;
+  }
   if (S.view === "details") {
     const cells = visibleCols().map((c, i) => (i === 0
       ? `<span class="cell first">${iconFor(it)}${name}</span>`
@@ -409,10 +428,10 @@ function itemHtml(it, index) {
 const visibleCols = () => (S.mode === "search" && !S.cols.includes("folder") ? [...S.cols, "folder"] : S.cols);
 
 function headHtml() {
-  if (S.view !== "details") return "";
+  if (S.view !== "details" || S.mode === "photos") return "";
   const cells = visibleCols().map((c) => {
-    const on = S.sortBy === c;
-    const arrow = on ? `<span class="arrow">${S.sortDir === "asc" ? "▲" : "▼"}</span>` : "";
+    const on = sortBy() === c;
+    const arrow = on ? `<span class="arrow">${sortDir() === "asc" ? "▲" : "▼"}</span>` : "";
     return `<button type="button" data-col="${esc(c)}" title="Sort by ${esc(COLUMNS[c].label)}">${esc(COLUMNS[c].label)}${arrow}</button>`;
   });
   return `<div class="ex-head" id="exHead">${cells.join("")}</div>`;
@@ -433,9 +452,9 @@ function renderItems() {
   const empty = S.rows.length ? "" : `<p class="ex-empty">${
     S.mode === "search" ? `Nothing matched “${esc(S.query)}”.` : S.filter ? "No items match this filter." : "This folder is empty."}</p>`;
   updateFind();
-  box.className = `ex-items v-${S.view}`;
+  box.className = `ex-items v-${S.mode === "photos" ? "photos" : S.view}`;
   box.innerHTML = headHtml() + body + empty;
-  if (S.view === "details") {
+  if (S.view === "details" && S.mode !== "photos") {
     box.style.setProperty("--cols", visibleCols().map((c) => COLUMNS[c].width).join(" "));
   }
   renderStatus();
@@ -731,6 +750,7 @@ const selectedItems = () => S.rows.filter((it) => S.selected.has(it.key));
 function open(it) {
   if (!it) return;
   if (it.isDir) navigate(S.path ? `${S.path}/${it.name}` : it.name);
+  else if (S.mode === "photos") openViewer(S.rows.indexOf(it));   // a picture is opened by looking at it
   else location.hash = `#/file/${it.id}`;
 }
 
@@ -795,13 +815,23 @@ const CMD = {
 };
 
 function setView(v) { S.view = v; savePrefs(); renderItems(); }
-function setSort(by) {
-  if (S.sortBy === by) S.sortDir = S.sortDir === "asc" ? "desc" : "asc";
-  else { S.sortBy = by; S.sortDir = ["mtime", "ctime", "ddate", "size"].includes(by) ? "desc" : "asc"; }
-  savePrefs();
+function setDir(d) {
+  if (transient()) S.tmpDir = d;
+  else { S.sortDir = d; savePrefs(); }
   renderItems();
 }
-function setGroup(by) { S.groupBy = by; savePrefs(); renderItems(); }
+function setSort(by) {
+  const flip = sortBy() === by;
+  const dir = flip ? (sortDir() === "asc" ? "desc" : "asc") : ["mtime", "ctime", "ddate", "size"].includes(by) ? "desc" : "asc";
+  if (transient()) { S.tmpSort = by; S.tmpDir = dir; }     // these results only; the folder keeps its own
+  else { S.sortBy = by; S.sortDir = dir; savePrefs(); }
+  renderItems();
+}
+function setGroup(by) {
+  if (transient()) S.tmpGroup = by;
+  else { S.groupBy = by; savePrefs(); }
+  renderItems();
+}
 function setTheme(t) { S.theme = t; savePrefs(); applyTheme(); }
 function applyTheme() {
   if (S.theme === "system") root.removeAttribute("data-theme");
@@ -816,15 +846,16 @@ const viewMenu = () => [
   { id: "reset-view", label: "Reset to default", icon: "refresh", run: CMD.resetView },
 ];
 const sortMenu = () => [
-  ...SORTS.map(([id, label]) => ({ id, label, checked: S.sortBy === id, run: () => setSort(id) })),
+  ...(S.mode === "search" ? [RELEVANCE] : []).concat(SORTS)
+    .map(([id, label]) => ({ id, label, checked: sortBy() === id, run: () => setSort(id) })),
   "-",
-  { id: "asc", label: "Ascending", checked: S.sortDir === "asc", run: () => { S.sortDir = "asc"; savePrefs(); renderItems(); } },
-  { id: "desc", label: "Descending", checked: S.sortDir === "desc", run: () => { S.sortDir = "desc"; savePrefs(); renderItems(); } },
+  { id: "asc", label: "Ascending", checked: sortDir() === "asc", run: () => setDir("asc") },
+  { id: "desc", label: "Descending", checked: sortDir() === "desc", run: () => setDir("desc") },
   "-",
   { id: "reset-view", label: "Reset to default", icon: "refresh", run: CMD.resetView },
 ];
 const groupMenu = () => [
-  ...GROUPS.map(([id, label]) => ({ id, label, checked: S.groupBy === id, run: () => setGroup(id) })),
+  ...GROUPS.map(([id, label]) => ({ id, label, checked: groupBy() === id, run: () => setGroup(id) })),
   "-",
   { id: "reset-view", label: "Reset to default", icon: "refresh", run: CMD.resetView },
 ];
@@ -1031,10 +1062,16 @@ function renderAddress() {
   const nav = root.querySelector("#exFind");
   if (S.mode === "search") {
     box.innerHTML = `<span class="chev">${ico("filter")}</span><a href="#/lib/" data-crumb="">Library</a>
-      <span class="chev">${ico("chev")}</span><span class="term" dir="auto">Results for “${esc(S.query)}”</span>
+      <span class="chev">${ico("chev")}</span><span class="term" dir="auto">“<bdi>${esc(S.query)}</bdi>”</span>
+      ${S.scope ? `<span class="chev">${ico("chev")}</span><span class="scope" dir="auto">in ${esc(S.scope)}</span>
+        <button type="button" class="widen" data-widen="1">Search everywhere</button>` : ""}
       <span class="count">${fmtNum(S.items.length)} in ${S.ms} ms</span>`;
     nav.hidden = false;
     updateFind();
+  } else if (S.mode === "photos") {
+    box.innerHTML = `<span class="chev">${ico("view")}</span><span class="term">Photos</span>
+      <span class="tabs">${photoTabsHtml()}</span>`;
+    nav.hidden = true;
   } else {
     box.innerHTML = crumbHtml(S.path);
     nav.hidden = true;
@@ -1097,20 +1134,160 @@ function goToMatch(pos) {
   updatePreview();
 }
 
-async function loadSearch(q) {
+async function loadSearch(q, scope = "") {
+  const fresh = S.mode !== "search" || S.query !== q || S.scope !== scope;
   S.mode = "search";
   S.query = q;
+  S.scope = scope;
   S.listing = null;
   S.selected.clear();
   S.cursor = 0;
   S.anchor = null;
   S.matchPos = 0;
-  const d = await api(`/api/search?limit=200&q=${encodeURIComponent(q)}`);
+  // A new search starts at best-match and ungrouped, whatever the folder behind
+  // it was arranged by. Re-running the same one keeps how you arranged it.
+  if (fresh) { S.tmpSort = "relevance"; S.tmpDir = "asc"; S.tmpGroup = "none"; }
+  const d = await api(`/api/search?limit=200&q=${encodeURIComponent(q)}&in=${encodeURIComponent(scope)}`);
   S.items = hitsToItems(d.hits);
   S.ms = d.ms;
   renderAddress();
   renderItems();
   updatePreview();
+}
+
+/* ---- photos ---------------------------------------------------------- */
+
+// V1's reason for a separate photos page, which still holds: a photograph is
+// identified by LOOKING at it. Filename, text layer, dates - everything a file
+// list is good at - say almost nothing about a picture of a receipt that
+// arrived called IMG_4821.jpg. So: big tiles, the whole library at once, and
+// the one fact that decides whether a picture is findable by its words yet.
+const PHOTO_TABS = [
+  ["all", "All"], ["read", "Read by OCR"], ["pending", "Waiting for OCR"],
+  ["failed", "OCR failed"], ["none", "Not an OCR format"],
+];
+
+async function loadPhotos(status = "all") {
+  S.mode = "photos";
+  S.photoStatus = status;
+  S.listing = null;
+  S.query = "";
+  S.matches = [];
+  S.selected.clear();
+  S.cursor = 0;
+  S.anchor = null;
+  S.tmpSort = "ddate";
+  S.tmpDir = "desc";
+  S.tmpGroup = "none";
+  const d = await api(`/api/photos?limit=1000&status=${encodeURIComponent(status)}`);
+  S.photoCounts = d.counts ?? {};
+  S.photoTotal = d.total ?? 0;
+  S.items = d.files.map((f) => {
+    const it = {
+      key: `f:${f.id}`, id: f.id, isDir: false, name: f.name, size: f.size, mtime: f.mtime, ctime: f.ctime,
+      kind: f.kind, dtype: f.dtype, title: f.title, lang: f.lang, pages: f.pages,
+      width: f.width, height: f.height, ext: extOf(f.name), ocr: f.ocr,
+      // The date a person means for a photograph: when it was taken, falling
+      // back to the file's own time when the picture carries no EXIF.
+      ddate: f.ddate ?? f.mtime,
+      folder: f.plan ? f.plan.slice(0, f.plan.lastIndexOf("/")) : "",
+    };
+    it.type = typeLabel(it);
+    return it;
+  });
+  renderAddress();
+  renderItems();
+  updatePreview();
+}
+
+function photoTabsHtml() {
+  return PHOTO_TABS.map(([id, label]) => {
+    const n = id === "all" ? S.photoCounts?.all : S.photoCounts?.[id];
+    if (id !== "all" && !n) return "";                       // a tab nothing is in is noise
+    return `<button type="button" class="tab${S.photoStatus === id ? " on" : ""}" data-photos="${id}">
+      ${esc(label)}<span class="n">${fmtNum(n ?? 0)}</span></button>`;
+  }).join("");
+}
+
+/**
+ * The viewer: one picture at a time, big, with what OCR read beside it.
+ * Arrows walk the grid, +/- zoom, 0 resets, Escape closes - and the zoom resets
+ * between pictures, because carrying 4x onto the next one shows a corner of it
+ * and reads as broken.
+ */
+let viewer = null;
+async function openViewer(index) {
+  const it = S.rows[index];
+  if (!it || it.isDir) return;
+  S.cursor = index;
+  if (!viewer) {
+    viewer = document.createElement("div");
+    viewer.className = "ex-viewer";
+    viewer.innerHTML = `<div class="shade" data-close="1"></div>
+      <figure><img alt=""><figcaption></figcaption></figure>
+      <aside class="read"></aside>
+      <div class="tools">
+        <button type="button" data-go="-1" title="Previous (Left)">${ico("back")}</button>
+        <span class="pos"></span>
+        <button type="button" data-go="1" title="Next (Right)">${ico("forward")}</button>
+        <span class="gap"></span>
+        <button type="button" data-zoom="-1" title="Zoom out (-)">&minus;</button>
+        <button type="button" data-zoom="0" title="Actual size (0)">1:1</button>
+        <button type="button" data-zoom="1" title="Zoom in (+)">+</button>
+        <button type="button" data-open="1" title="Open the file">${ico("open")}</button>
+        <button type="button" data-close="1" title="Close (Esc)">&times;</button>
+      </div>`;
+    viewer.addEventListener("click", (e) => {
+      const t = e.target.closest("[data-close], [data-go], [data-zoom], [data-open]");
+      if (!t) return;
+      if (t.dataset.close) closeViewer();
+      else if (t.dataset.go) openViewer(Math.max(0, Math.min(S.rows.length - 1, S.cursor + Number(t.dataset.go))));
+      else if (t.dataset.open) open(S.rows[S.cursor]);
+      else zoomViewer(Number(t.dataset.zoom));
+    });
+    root.appendChild(viewer);
+  }
+  viewer.hidden = false;
+  root.classList.add("viewing");
+  zoomViewer(0);
+  const img = viewer.querySelector("img");
+  img.src = `/api/files/${it.id}/content`;
+  viewer.querySelector("figcaption").textContent = it.name;
+  viewer.querySelector(".pos").textContent = `${index + 1} / ${S.rows.length}`;
+  const aside = viewer.querySelector(".read");
+  aside.innerHTML = `<p class="ex-empty">Reading…</p>`;
+  const seq = ++previewSeq;
+  const d = await api(`/api/files/${it.id}`);
+  if (seq !== previewSeq || viewer.hidden) return;
+  const c = d.content || {};
+  const text = d.ocrText || d.text || "";
+  aside.innerHTML = `<h3 dir="auto">${esc(it.name)}</h3>
+    <dl>
+      <dt>Folder</dt><dd dir="auto">${esc(it.folder || "")}</dd>
+      <dt>Size</dt><dd>${fmtBytes(it.size)}${c.width ? ` · ${c.width} × ${c.height}` : ""}</dd>
+      ${c.dtype ? `<dt>Category</dt><dd>${esc(DTYPE_LABEL[c.dtype] ?? c.dtype)}</dd>` : ""}
+      ${c.meta?.ocr ? `<dt>OCR</dt><dd>${esc(c.meta.ocr.engine)}, ${fmtNum(c.meta.ocr.chars)} characters</dd>` : ""}
+      <dt>Rule</dt><dd>${esc(d.file.rule ?? "")}</dd>
+    </dl>
+    ${text ? `<div class="snip" dir="auto">${esc(text)}</div>` : `<p class="ex-empty">No text was read from this picture.</p>`}`;
+}
+
+function zoomViewer(step) {
+  const img = viewer?.querySelector("img");
+  if (!img) return;
+  const now = Number(img.dataset.zoom || 1);
+  const next = step === 0 ? 1 : Math.max(1, Math.min(8, step > 0 ? now * 1.4 : now / 1.4));
+  img.dataset.zoom = String(next);
+  img.style.setProperty("--zoom", String(next));
+  img.classList.toggle("zoomed", next > 1);
+}
+
+function closeViewer() {
+  if (!viewer) return;
+  viewer.hidden = true;
+  viewer.querySelector("img").src = "";
+  root.classList.remove("viewing");
+  root.querySelector("#exItems").focus({ preventScroll: true });
 }
 
 /* ---- the shell ------------------------------------------------------- */
@@ -1266,6 +1443,12 @@ function wire() {
   root.querySelector("#exStatus").addEventListener("click", (e) => {
     const b = e.target.closest("[data-view]");
     if (b) setView(b.dataset.view);
+  });
+
+  root.querySelector("#exCrumbs").addEventListener("click", (e) => {
+    const tab = e.target.closest("[data-photos]");
+    if (tab) { loadPhotos(tab.dataset.photos); return; }
+    if (e.target.closest("[data-widen]")) { location.hash = `#/search?q=${encodeURIComponent(S.query)}`; }
   });
 
   root.querySelector("#exFind").addEventListener("click", (e) => {
@@ -1482,7 +1665,16 @@ function wireDrag() {
 /* ---- keyboard -------------------------------------------------------- */
 
 function onKey(e) {
-  const grid = ["xl", "large", "medium", "small", "list"].includes(S.view);
+  if (viewer && !viewer.hidden) {
+    if (e.key === "Escape") { e.preventDefault(); return closeViewer(); }
+    if (e.key === "ArrowRight") { e.preventDefault(); return openViewer(Math.min(S.rows.length - 1, S.cursor + 1)); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); return openViewer(Math.max(0, S.cursor - 1)); }
+    if (e.key === "+" || e.key === "=") { e.preventDefault(); return zoomViewer(1); }
+    if (e.key === "-") { e.preventDefault(); return zoomViewer(-1); }
+    if (e.key === "0") { e.preventDefault(); return zoomViewer(0); }
+    return;
+  }
+  const grid = ["xl", "large", "medium", "small", "list"].includes(S.view) || S.mode === "photos";
   if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); return CMD.back(); }
   if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); return CMD.forward(); }
   if (e.altKey && e.key === "Enter") { e.preventDefault(); return CMD.props(); }
@@ -1553,11 +1745,20 @@ export async function showExplorer(path, container) {
   root.querySelector("#exItems").focus({ preventScroll: true });
 }
 
-export async function showSearchResults(q, container) {
+export async function showPhotos(container) {
   await showExplorer(null, container);
-  await loadSearch(q);
+  await loadPhotos(S.photoStatus);
   root.querySelector("#exItems").focus({ preventScroll: true });
 }
+
+export async function showSearchResults(q, scope, container) {
+  await showExplorer(null, container);
+  await loadSearch(q, scope);
+  root.querySelector("#exItems").focus({ preventScroll: true });
+}
+
+/** Where a search typed right now would look: the folder you are in, or everywhere. */
+export function currentScope() { return root && root.isConnected && S.mode === "folder" ? S.path : ""; }
 
 /** Walk the literal matches from outside (the header's search box). */
 export function explorerFind(dir) { goToMatch(S.matchPos + dir); }

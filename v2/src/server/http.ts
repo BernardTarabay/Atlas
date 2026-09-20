@@ -16,7 +16,7 @@ import type { Engine } from "../pipeline/engine.ts";
 import { config } from "../config.ts";
 import { log } from "../log.ts";
 import * as auth from "./auth.ts";
-import { listFolder, fileDetail, counts } from "../library.ts";
+import { listFolder, fileDetail, counts, photos } from "../library.ts";
 import { search } from "../search/search.ts";
 import { addRoot, removeRoot, resolveFile, RootError } from "../roots.ts";
 import { kindFromExt, extOf } from "../analyze/sniff.ts";
@@ -237,7 +237,19 @@ export function startServer(db: Db, engine: Engine): http.Server {
     }],
     ["GET", /^\/api\/search$/, (req) => {
       const u = new URL(req.url, "http://x");
-      return search(db, u.searchParams.get("q") ?? "", { kind: u.searchParams.get("kind") ?? undefined, limit: Number(u.searchParams.get("limit") ?? 50) });
+      return search(db, u.searchParams.get("q") ?? "", {
+        kind: u.searchParams.get("kind") ?? undefined,
+        limit: Number(u.searchParams.get("limit") ?? 50),
+        path: u.searchParams.get("in") ?? undefined,
+      });
+    }],
+    ["GET", /^\/api\/photos$/, (req) => {
+      const u = new URL(req.url, "http://x");
+      return photos(db, {
+        status: u.searchParams.get("status") ?? undefined,
+        limit: Number(u.searchParams.get("limit") ?? 200),
+        offset: Number(u.searchParams.get("offset") ?? 0),
+      });
     }],
     ["GET", /^\/api\/files\/(\d+)$/, (_req, _res, m) => fileDetail(db, Number(m[1])) ?? (() => { throw new HttpError(404, "no such file"); })()],
     ["GET", /^\/api\/files\/(\d+)\/content$/, (req, res, m) => {

@@ -132,6 +132,19 @@ marked and walkable with next/previous (Enter and Shift+Enter in the search box,
 F3 in the list). The walker counts snippet matches too, because an Arabic search
 finds files whose names are entirely Latin.
 
+**Search is scoped to where you are.** From inside a folder it searches that
+folder and everything under it; from the top of the library it searches
+everything, and results offer "Search everywhere" to widen. Results arrive
+ranked by best match and ungrouped, whatever the folder behind them was sorted
+or grouped by - and sorting or grouping the results never disturbs the folder's
+own arrangement.
+
+**Photos** is a page of its own, for the reason V1 gave: a photograph is
+identified by looking at it, and a filename says nothing about a picture of a
+receipt called IMG_4821.jpg. Big tiles, three or four to a row, the whole
+library at once, tabs for what OCR made of them, and a viewer - arrows to walk,
++/- to zoom, Escape to leave - with the OCR reading beside the picture.
+
 **Dragging files onto a folder moves them** - in the library, which means it sets
 `files.pin` and re-plans them. Naming and collision handling stay with the rules,
 so a moved file is numbered against its new neighbours; the rule becomes

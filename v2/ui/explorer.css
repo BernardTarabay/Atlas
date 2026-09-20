@@ -599,3 +599,88 @@
   cursor: pointer;
 }
 .ex-status .flash .undo:hover { background: var(--hover); }
+
+/* ---- photos ----------------------------------------------------------- */
+
+.ex-crumbs .tabs { display: flex; gap: 2px; margin-left: 8px; overflow: hidden; }
+.ex-crumbs .tab {
+  display: flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: 12px;
+  background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
+  white-space: nowrap;
+}
+.ex-crumbs .tab:hover { background: var(--hover); color: var(--text); }
+.ex-crumbs .tab.on { background: var(--sel); border-color: var(--sel-line); color: var(--text); }
+.ex-crumbs .tab .n { font-size: 11px; opacity: .75; font-variant-numeric: tabular-nums; }
+.ex-crumbs .scope { padding: 3px 6px; color: var(--muted); }
+.ex-crumbs .widen {
+  margin-left: 6px; padding: 2px 8px;
+  border: 1px solid var(--line-strong); border-radius: 10px;
+  background: var(--bar); color: inherit; font: inherit; font-size: 11px; cursor: pointer;
+}
+.ex-crumbs .widen:hover { background: var(--hover); }
+
+/* Three or four to a row, never more: a photograph shown small is a thumbnail
+   of something you still cannot identify. */
+.ex-items.v-photos .items {
+  display: grid;
+  gap: 12px;
+  padding: 8px 12px;
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+}
+.ex-items.v-photos .ex-item { display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+.ex-items.v-photos .ex-ico { width: 100%; height: 200px; border-radius: 4px; background: var(--bg); }
+.ex-items.v-photos .ex-ico img { object-fit: contain; }
+.ex-items.v-photos .sub.warn { color: #b26a00; }
+.ex[data-theme="dark"] .ex-items.v-photos .sub.warn { color: #ffb84d; }
+@media (prefers-color-scheme: dark) {
+  .ex:not([data-theme="light"]) .ex-items.v-photos .sub.warn { color: #ffb84d; }
+}
+
+/* ---- the viewer ------------------------------------------------------- */
+
+/* `.ex` is position:fixed, which creates a stacking context in Chromium and
+   WebKit even at z-index auto - so a z-index:50 child is trapped INSIDE it,
+   below the app header (z-index 5), and clipped by its overflow:hidden. Both
+   are lifted only while a picture is open, so nothing else is affected. */
+.ex.viewing { overflow: visible; z-index: 60; }
+
+/* The viewer IS the backdrop: one opaque layer, rather than a translucent sheet
+   over a page that is still legible behind a photograph. `.shade` is only the
+   click-anywhere-to-close target. */
+.ex-viewer {
+  position: fixed; inset: 0; z-index: 50;
+  display: grid; grid-template-columns: 1fr 340px; grid-template-rows: 1fr auto;
+  background: #0b0b0c;
+}
+.ex-viewer .shade { position: absolute; inset: 0; }
+.ex-viewer figure { position: relative; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; padding: 16px; }
+.ex-viewer img { max-width: 100%; max-height: calc(100vh - 120px); object-fit: contain; transform: scale(var(--zoom, 1)); transition: transform .12s; }
+.ex-viewer img.zoomed { cursor: zoom-out; }
+.ex-viewer figcaption { position: relative; margin-top: 10px; color: #fff; font-size: 12px; text-align: center; word-break: break-word; }
+.ex-viewer .read { position: relative; overflow: auto; padding: 16px; background: var(--pane); border-left: 1px solid var(--line); }
+.ex-viewer .read h3 { margin: 0 0 10px; font-size: 14px; word-break: break-word; }
+.ex-viewer .read dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0 0 12px; font-size: 12px; }
+.ex-viewer .read dt { color: var(--muted); }
+.ex-viewer .read dd { margin: 0; word-break: break-word; }
+.ex-viewer .read .snip { padding: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+.ex-viewer .tools {
+  position: relative; grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 4px;
+  padding: 8px 12px; background: var(--bar); border-top: 1px solid var(--line);
+}
+.ex-viewer .tools .gap { flex: 1; }
+.ex-viewer .tools .pos { min-width: 70px; text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ex-viewer .tools button {
+  display: flex; align-items: center; justify-content: center;
+  min-width: 32px; height: 30px; padding: 0 8px;
+  border: 1px solid var(--line-strong); border-radius: 4px;
+  background: var(--pane); color: inherit; font: inherit; cursor: pointer;
+}
+.ex-viewer .tools button:hover { background: var(--hover); }
+.ex-viewer .tools svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+
+@media (max-width: 900px) {
+  .ex-viewer { grid-template-columns: 1fr; grid-template-rows: 1fr 180px auto; }
+}

@@ -3,7 +3,7 @@
 //
 // This file is the shell: routing, search, status, folders, one file's detail.
 // Browsing the library itself is explorer.js, which is a file manager.
-import { showExplorer, showSearchResults, explorerFind } from "./explorer.js";
+import { showExplorer, showSearchResults, showPhotos, explorerFind, currentScope } from "./explorer.js";
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -39,13 +39,13 @@ async function showLibrary(path) {
   await showExplorer(path, view);
 }
 
-async function showSearch(q) {
+async function showSearch(q, scope = "") {
   $("#q").value = q;
   if (!q.trim()) { document.body.classList.remove("explorer"); view.innerHTML = `<p class="muted">Type to search file names and contents.</p>`; return; }
   // Results are a place in the explorer, not a different page: same rows, same
   // selection, same views, same context menu.
   document.body.classList.add("explorer");
-  return showSearchResults(q, view);
+  return showSearchResults(q, scope, view);
 }
 
 async function showSearchOld(q) {
@@ -189,9 +189,13 @@ async function route() {
   try {
     if (h === "#/login") return await showLogin();
     $("#bar").hidden = false;
-    if (!h.startsWith("#/lib/") && !h.startsWith("#/search")) document.body.classList.remove("explorer");
+    if (!h.startsWith("#/lib/") && !h.startsWith("#/search") && h !== "#/photos") document.body.classList.remove("explorer");
     if (h.startsWith("#/lib/")) return await showLibrary(decodeURIComponent(h.slice(6)));
-    if (h.startsWith("#/search")) return await showSearch(new URLSearchParams(h.split("?")[1] || "").get("q") || "");
+    if (h.startsWith("#/search")) {
+      const p = new URLSearchParams(h.split("?")[1] || "");
+      return await showSearch(p.get("q") || "", p.get("in") || "");
+    }
+    if (h === "#/photos") { document.body.classList.add("explorer"); return await showPhotos(view); }
     if (h.startsWith("#/file/")) return await showFile(Number(h.slice(7)));
     if (h === "#/status") return await showStatus();
     if (h === "#/roots") return await showRoots();
@@ -204,7 +208,10 @@ async function route() {
 $("#searchForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const q = $("#q").value;
-  const next = `#/search?q=${encodeURIComponent(q)}`;
+  // Searching from inside a folder searches that folder. At the top of the
+  // library - or anywhere that is not a folder - it searches everything.
+  const scope = currentScope();
+  const next = `#/search?q=${encodeURIComponent(q)}${scope ? `&in=${encodeURIComponent(scope)}` : ""}`;
   // Enter again on the same query walks to the next literal match instead of
   // re-running the search - the gesture every find bar has taught everyone.
   if (location.hash === next) explorerFind(1);
@@ -215,5 +222,12 @@ $("#q").addEventListener("keydown", (e) => {
   e.preventDefault();
   explorerFind(-1);
 });
-window.addEventListener("hashchange", route);
-api("/api/session").then((s) => { if (!s.authenticated) location.hash = "#/login"; route(); });
+function syncSearchScope() {
+  const scope = currentScope();
+  const box = $("#q");
+  if (!box) return;
+  box.placeholder = scope ? `Search in ${scope.split("/").pop()}` : "Search names and contents — English, العربية, français";
+}
+
+window.addEventListener("hashchange", () => { route().then(syncSearchScope); });
+api("/api/session").then((s) => { if (!s.authenticated) location.hash = "#/login"; route().then(syncSearchScope); });

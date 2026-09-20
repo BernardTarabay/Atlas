@@ -95,6 +95,42 @@ export function fileDetail(db: Db, id: number) {
   return { file: f, content: c, copies, text, ocrText };
 }
 
+/**
+ * Every image in the library, newest first.
+ *
+ * A photograph is identified by looking at it: a filename and a text layer say
+ * almost nothing about a picture of a receipt that arrived as IMG_4821.jpg. So
+ * this returns a flat list across the whole library rather than a folder at a
+ * time, with the OCR state on each row - which is the one fact that decides
+ * whether the picture is findable by its words yet.
+ */
+export function photos(db: Db, opts: { status?: string; limit?: number; offset?: number } = {}) {
+  const limit = Math.min(opts.limit ?? 200, 1000);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const OCR_STATE: Record<string, number> = { pending: 1, read: 2, failed: 3, noengine: 4, none: 0 };
+  const wanted = opts.status && opts.status in OCR_STATE ? OCR_STATE[opts.status] : null;
+  const where = `f.plan IS NOT NULL AND c.kind = 'image'${wanted == null ? "" : " AND c.ocr = ?"}`;
+  const args: (string | number)[] = wanted == null ? [] : [wanted];
+  const files = db.all<Entry & { plan: string; ocr: number }>(
+    `SELECT f.id, f.plan, f.size, f.mtime, f.ctime, c.kind, c.dtype, c.title, c.lang, c.ddate,
+            c.pages, c.width, c.height, c.ocr
+     FROM files f JOIN contents c ON c.id = f.content
+     WHERE ${where}
+     ORDER BY coalesce(c.ddate, f.mtime) DESC, f.id LIMIT ? OFFSET ?`, ...args, limit, offset);
+  const total = db.get<{ n: number }>(
+    `SELECT count(*) AS n FROM files f JOIN contents c ON c.id = f.content WHERE ${where}`, ...args)!.n;
+  const byState = db.all<{ ocr: number; n: number }>(
+    `SELECT c.ocr, count(*) AS n FROM files f JOIN contents c ON c.id = f.content
+     WHERE f.plan IS NOT NULL AND c.kind = 'image' GROUP BY c.ocr`);
+  const counts: Record<string, number> = { all: 0 };
+  for (const r of byState) {
+    counts.all += r.n;
+    const name = Object.keys(OCR_STATE).find((k) => OCR_STATE[k] === r.ocr) ?? "none";
+    counts[name] = (counts[name] ?? 0) + r.n;
+  }
+  return { files: files.map((f) => ({ ...f, name: f.plan.slice(f.plan.lastIndexOf("/") + 1) })), total, counts };
+}
+
 export function counts(db: Db) {
   const states = db.all<{ state: number; n: number; bytes: number }>("SELECT state, count(*) AS n, sum(size) AS bytes FROM files GROUP BY state");
   const dups = db.get<{ groups: number; copies: number; bytes: number }>(
