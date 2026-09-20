@@ -107,6 +107,9 @@ Sorting, grouping, filtering, multi-selection (click, Ctrl, Shift, rubber band,
 type-ahead), sortable and choosable detail columns, a preview pane, properties,
 and light/dark that follows Windows. `ui/explorer.js`, no framework, no build.
 
+Double-click opens a folder or a file; **Reset to default** at the bottom of the
+View, Sort and Group menus puts every display setting back at once.
+
 Sorting and grouping only offer what Atlas actually extracts - name, dates, type,
 size, category, title, language. Explorer's Authors and Tags are absent because
 nothing fills them yet.

@@ -441,6 +441,37 @@ function renderItems() {
   renderStatus();
 }
 
+/**
+ * Selection, cursor and active match, painted onto the rows already on screen.
+ *
+ * WHY THIS IS NOT renderItems()
+ *
+ * Because rebuilding the list on a click is what broke double-click: the first
+ * click replaced every row, so the second one landed on a DIFFERENT element and
+ * the browser had no pair to report - `dblclick` fired on the container, or not
+ * at all, and folders would not open. Exactly the trap V1 fell into with its
+ * detail modal. Rebuilding 2,000 rows to tick one of them is also just waste.
+ *
+ * So: the row set changes -> renderItems(). Only which rows are MARKED changes
+ * -> this.
+ */
+function applySelection() {
+  const box = root?.querySelector("#exItems");
+  if (!box) return;
+  const hotIndex = S.mode === "search" && S.matches.length ? S.matches[S.matchPos] : -1;
+  for (const el of box.querySelectorAll(".ex-item")) {
+    const i = Number(el.dataset.index);
+    // setAttribute, not toggleAttribute: the latter writes aria-selected="" and
+    // the stylesheet matches [aria-selected="true"], so the row would be selected
+    // without ever looking selected.
+    if (S.selected.has(el.dataset.key)) el.setAttribute("aria-selected", "true");
+    else el.removeAttribute("aria-selected");
+    el.classList.toggle("cursor", i === S.cursor);
+    el.classList.toggle("hot", i === hotIndex);
+  }
+  renderStatus();
+}
+
 function renderStatus() {
   const bar = root.querySelector("#exStatus");
   const sel = S.rows.filter((it) => S.selected.has(it.key));
@@ -722,9 +753,9 @@ const CMD = {
     copyText(url, "Link");
   },
   props: () => showProperties(),
-  selectAll: () => { S.selected = new Set(S.rows.map((it) => it.key)); renderItems(); },
-  selectNone: () => { S.selected.clear(); renderItems(); },
-  invert: () => { const next = new Set(); for (const it of S.rows) if (!S.selected.has(it.key)) next.add(it.key); S.selected = next; renderItems(); },
+  selectAll: () => { S.selected = new Set(S.rows.map((it) => it.key)); applySelection(); updatePreview(); },
+  selectNone: () => { S.selected.clear(); applySelection(); updatePreview(); },
+  invert: () => { const next = new Set(); for (const it of S.rows) if (!S.selected.has(it.key)) next.add(it.key); S.selected = next; applySelection(); updatePreview(); },
   copyPath: async () => {
     const it = selectedItems()[0];
     if (!it) return;
@@ -743,6 +774,22 @@ const CMD = {
     await refreshAfterPlanChange();
   },
   undo: () => undoMove(),
+  /** Put every display setting back to how Atlas ships: one button, no memory of what you changed. */
+  resetView: () => {
+    Object.assign(S, {
+      view: defaults.view, sortBy: defaults.sortBy, sortDir: defaults.sortDir, groupBy: defaults.groupBy,
+      theme: defaults.theme, nav: defaults.nav, tree: defaults.tree, preview: defaults.preview, cols: [...defaults.cols],
+    });
+    S.filter = "";
+    const input = root.querySelector("#exFilter");
+    if (input) input.value = "";
+    savePrefs();
+    applyTheme();
+    layout();
+    renderItems();
+    updatePreview();
+    flash("View, sorting and grouping reset to default");
+  },
   findNext: () => goToMatch(S.matchPos + 1),
   findPrev: () => goToMatch(S.matchPos - 1),
 };
@@ -763,14 +810,24 @@ function applyTheme() {
 
 /* ---- menu contents --------------------------------------------------- */
 
-const viewMenu = () => VIEWS.map(([id, label]) => ({ id, label, checked: S.view === id, run: () => setView(id) }));
+const viewMenu = () => [
+  ...VIEWS.map(([id, label]) => ({ id, label, checked: S.view === id, run: () => setView(id) })),
+  "-",
+  { id: "reset-view", label: "Reset to default", icon: "refresh", run: CMD.resetView },
+];
 const sortMenu = () => [
   ...SORTS.map(([id, label]) => ({ id, label, checked: S.sortBy === id, run: () => setSort(id) })),
   "-",
   { id: "asc", label: "Ascending", checked: S.sortDir === "asc", run: () => { S.sortDir = "asc"; savePrefs(); renderItems(); } },
   { id: "desc", label: "Descending", checked: S.sortDir === "desc", run: () => { S.sortDir = "desc"; savePrefs(); renderItems(); } },
+  "-",
+  { id: "reset-view", label: "Reset to default", icon: "refresh", run: CMD.resetView },
 ];
-const groupMenu = () => GROUPS.map(([id, label]) => ({ id, label, checked: S.groupBy === id, run: () => setGroup(id) }));
+const groupMenu = () => [
+  ...GROUPS.map(([id, label]) => ({ id, label, checked: S.groupBy === id, run: () => setGroup(id) })),
+  "-",
+  { id: "reset-view", label: "Reset to default", icon: "refresh", run: CMD.resetView },
+];
 const selectMenu = () => [
   { id: "all", label: "Select all", key: "Ctrl+A", run: CMD.selectAll },
   { id: "none", label: "Select none", key: "Esc", run: CMD.selectNone },
@@ -798,6 +855,8 @@ const optionsMenu = () => [
   "-",
   { head: "Details columns" },
   ...columnsMenu(),
+  "-",
+  { id: "reset-view", label: "Reset to default", icon: "refresh", run: CMD.resetView },
 ];
 
 function itemMenu(it) {
@@ -870,7 +929,7 @@ function moveCursor(next, e) {
   const i = Math.max(0, Math.min(S.rows.length - 1, next));
   if (e?.shiftKey) selectRange(i);
   else selectOnly(i);
-  renderItems();
+  applySelection();
   root.querySelector(`.ex-item[data-index="${i}"]`)?.scrollIntoView({ block: "nearest" });
 }
 
@@ -1032,7 +1091,8 @@ function goToMatch(pos) {
   S.matchPos = ((pos % S.matches.length) + S.matches.length) % S.matches.length;
   const index = S.matches[S.matchPos];
   selectOnly(index);
-  renderItems();
+  applySelection();
+  updateFind();
   root.querySelector(`.ex-item[data-index="${index}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
   updatePreview();
 }
@@ -1156,7 +1216,7 @@ function wire() {
     else if (e.shiftKey) selectRange(index);
     else if (!S.selected.has(el.dataset.key)) selectOnly(index);
     else { S.cursor = index; }
-    renderItems();
+    applySelection();
     updatePreview();
   });
 
@@ -1182,7 +1242,7 @@ function wire() {
     const el = e.target.closest(".ex-item");
     if (el) {
       const index = Number(el.dataset.index);
-      if (!S.selected.has(el.dataset.key)) { selectOnly(index); renderItems(); updatePreview(); }
+      if (!S.selected.has(el.dataset.key)) { selectOnly(index); applySelection(); updatePreview(); }
       openMenu(itemMenu(S.rows[index]), e.clientX, e.clientY);
     } else {
       openMenu(emptyMenu(), e.clientX, e.clientY);
@@ -1273,7 +1333,8 @@ const marquee = {
         }
         S.selected = next;
         for (const el of container.querySelectorAll(".ex-item")) {
-          el.toggleAttribute("aria-selected", S.selected.has(el.dataset.key));
+          if (S.selected.has(el.dataset.key)) el.setAttribute("aria-selected", "true");
+          else el.removeAttribute("aria-selected");
         }
         renderStatus();
       };
@@ -1282,7 +1343,7 @@ const marquee = {
         document.removeEventListener("mouseup", up);
         this.box?.remove();
         this.box = null;
-        if (!this.dragged && !additive) { S.selected.clear(); renderItems(); }
+        if (!this.dragged && !additive) { S.selected.clear(); applySelection(); }
         this.justDragged = this.dragged;
         updatePreview();
       };
@@ -1451,7 +1512,7 @@ function onKey(e) {
     case "F3": e.preventDefault(); return e.shiftKey ? CMD.findPrev() : CMD.findNext();
     case "F5": e.preventDefault(); return CMD.refresh();
     case "Delete": e.preventDefault(); return CMD.delete();
-    case " ": e.preventDefault(); toggleAt(S.cursor); renderItems(); return updatePreview();
+    case " ": e.preventDefault(); toggleAt(S.cursor); applySelection(); return updatePreview();
     default: break;
   }
   // Type-ahead: the fastest way to reach a file in a folder of two thousand.
