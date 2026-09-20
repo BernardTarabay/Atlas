@@ -1,7 +1,28 @@
 import os from "node:os";
 import path from "node:path";
 
+import fs from "node:fs";
+
 const appDir = path.resolve(import.meta.dirname, "..");
+
+/**
+ * Secrets come from the environment, and for development from a .env beside the
+ * app - which is gitignored, because an API key in a repository is a key that
+ * has already leaked. Nothing here is ever sent to the browser.
+ */
+function loadEnvFile(): void {
+  for (const file of [path.join(appDir, ".env"), path.join(process.env.ATLAS_HOME ?? "", ".env")]) {
+    if (!file || !fs.existsSync(file)) continue;
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+      const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
+      if (!m) continue;
+      const value = m[2].trim().replace(/^["']|["']$/g, "");
+      if (value && process.env[m[1]] === undefined) process.env[m[1]] = value;
+    }
+  }
+}
+loadEnvFile();
+
 const env = process.env;
 const num = (v: string | undefined, d: number) => (v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : d);
 
@@ -41,6 +62,16 @@ export const config = {
     "$RECYCLE.BIN", "System Volume Information", ".git", ".svn", ".hg", "node_modules",
     "__pycache__", ".venv", "venv", ".tox", ".cache", ".atlas-quarantine", ".atlas-mirror",
   ],
+
+  /**
+   * The assistant. One call per message a person types - never per file, never
+   * in the pipeline, never on a timer. Unset key = the assistant is simply off.
+   */
+  ai: {
+    key: env.GEMINI_API_KEY ?? "",
+    model: env.GEMINI_MODEL ?? "gemini-3.1-flash-lite",
+    timeoutMs: num(env.GEMINI_TIMEOUT_MS, 30000),
+  },
 };
 
 export type Config = typeof config;

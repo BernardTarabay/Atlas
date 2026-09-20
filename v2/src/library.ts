@@ -131,6 +131,47 @@ export function photos(db: Db, opts: { status?: string; limit?: number; offset?:
   return { files: files.map((f) => ({ ...f, name: f.plan.slice(f.plan.lastIndexOf("/") + 1) })), total, counts };
 }
 
+/**
+ * Files by criteria rather than by words: "every PDF", "anything filed after
+ * March", "the Arabic invoices". The structured counterpart to search, and what
+ * the assistant reaches for when the request is a property rather than a phrase.
+ */
+export interface Criteria {
+  ext?: string; kind?: string; dtype?: string; lang?: string; folder?: string;
+  nameContains?: string; after?: number; before?: number; minSize?: number; maxSize?: number;
+  limit?: number;
+}
+
+export function find(db: Db, c: Criteria) {
+  const where: string[] = ["f.plan IS NOT NULL"];
+  const args: (string | number)[] = [];
+  if (c.folder) { where.push("f.plan LIKE ?"); args.push(`${c.folder.replace(/\/+$/, "")}/%`); }
+  if (c.kind) { where.push("c.kind = ?"); args.push(c.kind); }
+  if (c.dtype) { where.push("c.dtype = ?"); args.push(c.dtype); }
+  if (c.lang) { where.push("c.lang = ?"); args.push(c.lang); }
+  if (c.nameContains) { where.push("lower(f.plan) LIKE ?"); args.push(`%${c.nameContains.toLowerCase()}%`); }
+  if (c.ext) {
+    const exts = c.ext.split(",").map((e) => e.trim().replace(/^\./, "").toLowerCase()).filter(Boolean);
+    if (exts.length) {
+      where.push(`(${exts.map(() => "lower(f.plan) LIKE ?").join(" OR ")})`);
+      for (const e of exts) args.push(`%.${e}`);
+    }
+  }
+  // Dates mean the document's own date when it has one, the file's otherwise -
+  // the same date the library shows and sorts by.
+  if (c.after != null) { where.push("coalesce(c.ddate, f.mtime) >= ?"); args.push(c.after); }
+  if (c.before != null) { where.push("coalesce(c.ddate, f.mtime) <= ?"); args.push(c.before); }
+  if (c.minSize != null) { where.push("f.size >= ?"); args.push(c.minSize); }
+  if (c.maxSize != null) { where.push("f.size <= ?"); args.push(c.maxSize); }
+  const limit = Math.min(c.limit ?? 500, 2000);
+  const sql = `FROM files f LEFT JOIN contents c ON c.id = f.content WHERE ${where.join(" AND ")}`;
+  const files = db.all<Entry & { plan: string }>(
+    `SELECT f.id, f.plan, f.size, f.mtime, f.ctime, c.kind, c.dtype, c.title, c.lang, c.ddate, c.pages, c.width, c.height
+     ${sql} ORDER BY coalesce(c.ddate, f.mtime) DESC, f.id LIMIT ?`, ...args, limit);
+  const total = db.get<{ n: number }>(`SELECT count(*) AS n ${sql}`, ...args)!.n;
+  return { files: files.map((f) => ({ ...f, name: f.plan.slice(f.plan.lastIndexOf("/") + 1) })), total };
+}
+
 export function counts(db: Db) {
   const states = db.all<{ state: number; n: number; bytes: number }>("SELECT state, count(*) AS n, sum(size) AS bytes FROM files GROUP BY state");
   const dups = db.get<{ groups: number; copies: number; bytes: number }>(

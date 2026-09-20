@@ -187,7 +187,7 @@ const S = {
   // Search is a place you can be, not a different page: same items, same
   // selection, same views. `query` is what was searched for, `matches` are the
   // rows whose NAME literally contains it, and `matchPos` walks them.
-  mode: "folder", query: "", scope: "", ms: 0, matches: [], matchPos: 0,
+  mode: "folder", query: "", scope: "", found: "", ms: 0, matches: [], matchPos: 0,
   photoStatus: "all", photoCounts: {}, photoTotal: 0,
   // Anything that is not a folder - results, photos - keeps its OWN arrangement.
   // Results arrive ranked and that ranking answers "which of these is most what
@@ -496,7 +496,7 @@ function renderStatus() {
   const sel = S.rows.filter((it) => S.selected.has(it.key));
   const bytes = sel.reduce((n, it) => n + (it.isDir ? 0 : it.size), 0);
   const parts = [esc(`${fmtNum(S.rows.length)} item${S.rows.length === 1 ? "" : "s"}`)];
-  if (S.mode === "search") parts.push(`${fmtNum(S.matches.length)} showing “<bdi>${esc(S.query)}</bdi>”`);
+  if (S.mode === "search" && S.query) parts.push(`${fmtNum(S.matches.length)} showing “<bdi>${esc(S.query)}</bdi>”`);
   if (S.filter) parts.push(esc(`filtered from ${fmtNum(S.items.length)}`));
   if (sel.length) parts.push(`${fmtNum(sel.length)} selected${bytes ? ` · ${fmtBytes(bytes)}` : ""}`);
   if (S.listing?.more) parts.push("first 2,000 files only");
@@ -763,7 +763,25 @@ const CMD = {
   cut: () => { S.clip = { mode: "cut", items: selectedItems(), from: S.path }; renderStatus(); flash(`Cut ${S.clip.items.length} item(s)`); },
   copy: () => { S.clip = { mode: "copy", items: selectedItems(), from: S.path }; renderStatus(); flash(`Copied ${S.clip.items.length} item(s)`); },
   paste: () => refuse("Paste", `Atlas would have to ${S.clip?.mode === "cut" ? "move" : "copy"} ${S.clip?.items.length ?? 0} file(s) into this folder on disk.`),
-  rename: () => refuse("Rename", "Atlas would have to rename the file on disk. Its planned name already follows the filing rules - open Properties to see which rule produced it."),
+  rename: () => {
+    const it = selectedItems()[0];
+    if (!it || it.isDir) return;
+    const d = dialog("Rename", `<p>The name this file has <b>in the library</b>. Its name on disk does not change.</p>
+      <p><input id="exNewName" type="text" dir="auto" value="${esc(it.name)}"></p>`);
+    d.querySelector(".foot").innerHTML = `<button type="button" data-close>Cancel</button><button type="button" class="primary" id="exDoRename">Rename</button>`;
+    const input = d.querySelector("#exNewName");
+    const dot = it.name.lastIndexOf(".");
+    input.focus();
+    input.setSelectionRange(0, dot > 0 ? dot : it.name.length);   // the stem, the way Explorer does
+    const go = async () => {
+      const name = input.value.trim();
+      d.close();
+      if (!name || name === it.name) return;
+      try { await agent.rename(it.id, name); } catch (e) { flash(e.message); }
+    };
+    d.querySelector("#exDoRename").addEventListener("click", go);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+  },
   delete: () => refuse("Delete", `Atlas would have to delete ${S.selected.size} file(s) from disk. During development no file is ever deleted, including duplicates.`),
   share: async () => {
     const it = selectedItems()[0];
@@ -1062,11 +1080,12 @@ function renderAddress() {
   const nav = root.querySelector("#exFind");
   if (S.mode === "search") {
     box.innerHTML = `<span class="chev">${ico("filter")}</span><a href="#/lib/" data-crumb="">Library</a>
-      <span class="chev">${ico("chev")}</span><span class="term" dir="auto">“<bdi>${esc(S.query)}</bdi>”</span>
+      <span class="chev">${ico("chev")}</span><span class="term" dir="auto">${S.query ? `“<bdi>${esc(S.query)}</bdi>”` : esc(S.found ?? "Selected files")}</span>
       ${S.scope ? `<span class="chev">${ico("chev")}</span><span class="scope" dir="auto">in ${esc(S.scope)}</span>
         <button type="button" class="widen" data-widen="1">Search everywhere</button>` : ""}
       <span class="count">${fmtNum(S.items.length)} in ${S.ms} ms</span>`;
-    nav.hidden = false;
+    // Nothing to walk when the set came from a property rather than a phrase.
+    nav.hidden = !S.query;
     updateFind();
   } else if (S.mode === "photos") {
     box.innerHTML = `<span class="chev">${ico("view")}</span><span class="term">Photos</span>
@@ -1223,8 +1242,11 @@ async function openViewer(index) {
   if (!viewer) {
     viewer = document.createElement("div");
     viewer.className = "ex-viewer";
+    // The close button belongs in the top-right corner, where every picture
+    // viewer ever made has put it - not only in the toolbar at the bottom.
     viewer.innerHTML = `<div class="shade" data-close="1"></div>
-      <figure><img alt=""><figcaption></figcaption></figure>
+      <button type="button" class="shut" data-close="1" title="Close (Esc)" aria-label="Close">&times;</button>
+      <figure data-close="1"><img alt=""><figcaption></figcaption></figure>
       <aside class="read"></aside>
       <div class="tools">
         <button type="button" data-go="-1" title="Previous (Left)">${ico("back")}</button>
@@ -1238,6 +1260,8 @@ async function openViewer(index) {
         <button type="button" data-close="1" title="Close (Esc)">&times;</button>
       </div>`;
     viewer.addEventListener("click", (e) => {
+      // Clicking the picture itself must NOT close: that is where the eye is.
+      if (e.target.tagName === "IMG") return;
       const t = e.target.closest("[data-close], [data-go], [data-zoom], [data-open]");
       if (!t) return;
       if (t.dataset.close) closeViewer();
@@ -1249,6 +1273,7 @@ async function openViewer(index) {
   }
   viewer.hidden = false;
   root.classList.add("viewing");
+  document.body.classList.add("viewing");
   zoomViewer(0);
   const img = viewer.querySelector("img");
   img.src = `/api/files/${it.id}/content`;
@@ -1287,6 +1312,7 @@ function closeViewer() {
   viewer.hidden = true;
   viewer.querySelector("img").src = "";
   root.classList.remove("viewing");
+  document.body.classList.remove("viewing");
   root.querySelector("#exItems").focus({ preventScroll: true });
 }
 
@@ -1550,22 +1576,32 @@ async function moveTo(items, folder) {
   const ids = items.filter((it) => !it.isDir).map((it) => it.id);
   if (!ids.length || !folder) return;
   const r = await post("/api/plan/move", { ids, folder });
-  // Remember the previous pins so this is undoable: a move nobody can take back
-  // is a move nobody should make by accident with a mouse.
-  lastMove = { items: r.before ?? [], folder };
-  flash(`Moved ${fmtNum(r.moved)} file(s) to ${folder}`, "Undo", undoMove);
+  // The previous pins, captured HERE: a move nobody can take back is a move
+  // nobody should make by accident with a mouse. The payload travels with the
+  // button rather than living in a variable a later action could overwrite.
+  offerUndo(`Moved ${fmtNum(r.moved)} file(s) to ${folder}`, r.before ?? []);
   await refreshAfterPlanChange();
 }
 
 let lastMove = null;
-async function undoMove() {
-  if (!lastMove) return;
-  const items = lastMove.items.map((b) => ({ id: b.id, pin: b.pin }));
-  await post("/api/plan/pin", { items });
-  lastMove = null;
-  flash("Move undone");
+
+function offerUndo(message, items) {
+  lastMove = items;
+  flash(message, "Undo", () => undoPins(items));
+}
+
+async function undoPins(items) {
+  if (!items?.length) return;
+  await post("/api/plan/pin", {
+    items: items.map((b) => ("pinname" in b ? { id: b.id, pin: b.pin ?? null, pinname: b.pinname ?? null } : { id: b.id, pin: b.pin ?? null })),
+  });
+  if (lastMove === items) lastMove = null;
+  flash("Undone");
   await refreshAfterPlanChange();
 }
+
+/** Ctrl+Z: whatever the last undoable change was. */
+const undoMove = () => undoPins(lastMove);
 
 /**
  * Planning is asynchronous: give the engine a moment, then reload what is on
@@ -1756,6 +1792,88 @@ export async function showSearchResults(q, scope, container) {
   await loadSearch(q, scope);
   root.querySelector("#exItems").focus({ preventScroll: true });
 }
+
+/* ---- what the assistant can drive ------------------------------------ */
+
+/**
+ * The assistant does what the toolbar does, through the same functions the
+ * toolbar calls. It gets no privileges of its own: everything below is a thing
+ * a person can already do by clicking, and the two destructive-looking ones
+ * (move, rename) go through the same plan-only endpoints, with the same undo.
+ */
+export const agent = {
+  context() {
+    if (!root || !root.isConnected) return { where: "elsewhere in Atlas" };
+    const sel = selectedItems();
+    return {
+      where: S.mode,
+      folder: S.path,
+      query: S.mode === "search" ? S.query : undefined,
+      scope: S.mode === "search" ? S.scope : undefined,
+      arrangement: { view: S.view, sortBy: sortBy(), sortDir: sortDir(), groupBy: groupBy(), filter: S.filter || undefined },
+      counts: { shown: S.rows.length, selected: sel.length },
+      selected: sel.slice(0, 40).map((it) => ({ id: it.id, name: it.name, isFolder: it.isDir })),
+      // A sample, not the library: 60 rows is enough for "this file" to resolve
+      // and keeps what leaves this machine small.
+      onScreen: S.rows.slice(0, 60).map((it) => (it.isDir
+        ? { folder: it.name, files: it.count }
+        : { id: it.id, name: it.name, ext: it.ext, kind: it.kind, dtype: it.dtype, lang: it.lang,
+            size: it.size, date: it.ddate ?? it.mtime, in: it.folder ?? S.path })),
+      folders: (S.nodes.get("")?.folders ?? []).map((f) => f.name),
+    };
+  },
+  navigate: (path) => navigate(path ?? ""),
+  search: (q, scope) => { location.hash = `#/search?q=${encodeURIComponent(q)}${scope ? `&in=${encodeURIComponent(scope)}` : ""}`; },
+  photos: (status) => { if (S.mode === "photos") loadPhotos(status || "all"); else location.hash = "#/photos"; },
+  open: (id) => { const it = S.rows.find((r) => r.id === id); if (it) open(it); else location.hash = `#/file/${id}`; },
+  view: (mode) => VIEWS.some(([v]) => v === mode) && setView(mode),
+  sort: (by, dir) => { setSort(by); if (dir && sortDir() !== dir) setDir(dir); },
+  group: (by) => setGroup(by),
+  reset: () => CMD.resetView(),
+  select(ids) {
+    S.selected = new Set(S.rows.filter((it) => ids.includes(it.id)).map((it) => it.key));
+    const first = S.rows.findIndex((it) => S.selected.has(it.key));
+    if (first >= 0) { S.cursor = first; S.anchor = first; }
+    applySelection();
+    updatePreview();
+    root.querySelector(`.ex-item[data-index="${Math.max(0, first)}"]`)?.scrollIntoView({ block: "center" });
+    return S.selected.size;
+  },
+  /** Show an arbitrary set of files as its own result list. */
+  showFiles(files, title) {
+    S.mode = "search";
+    S.query = "";
+    S.scope = "";
+    S.listing = null;
+    S.found = title;
+    S.selected.clear();
+    S.cursor = 0;
+    S.tmpSort = "relevance";
+    S.tmpDir = "asc";
+    S.tmpGroup = "none";
+    S.items = files.map((f, ord) => {
+      const it = {
+        key: `f:${f.id}`, id: f.id, isDir: false, name: f.name, size: f.size, mtime: f.mtime, ctime: f.ctime,
+        kind: f.kind, dtype: f.dtype, title: f.title, lang: f.lang, pages: f.pages, ddate: f.ddate,
+        width: f.width, height: f.height, ext: extOf(f.name), ord,
+        folder: f.plan ? f.plan.slice(0, f.plan.lastIndexOf("/")) : "",
+      };
+      it.type = typeLabel(it);
+      return it;
+    });
+    S.ms = 0;
+    renderAddress();
+    renderItems();
+    updatePreview();
+  },
+  move: (ids, folder) => moveTo(ids.map((id) => ({ id })), folder),
+  async rename(id, name) {
+    const r = await post("/api/plan/rename", { id, name });
+    offerUndo(`Renamed to ${r.name}`, [{ id, pinname: r.before ?? null }]);
+    await refreshAfterPlanChange();
+  },
+  refresh: () => refreshAfterPlanChange(),
+};
 
 /** Where a search typed right now would look: the folder you are in, or everywhere. */
 export function currentScope() { return root && root.isConnected && S.mode === "folder" ? S.path : ""; }

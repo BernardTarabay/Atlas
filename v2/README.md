@@ -165,6 +165,25 @@ and hashing, and its state lives on the content row: a crash leaves it PENDING a
 it runs again. `ATLAS_OCR_WORKERS=0` turns it off; without the helper, contents
 simply stay "waiting for OCR".
 
+## The assistant
+
+A panel in the bottom-right corner that does what the toolbar does, by
+conversation: go somewhere, find things by property or by words, arrange what is
+shown, select, move, rename. `GEMINI_API_KEY` in `v2/.env` (gitignored) turns it
+on; without one the panel never appears.
+
+It is not a tool-execution loop. The model returns a reply plus a list of
+PROPOSED actions, and the browser decides what to do with them - the same shape
+V1 used, for the same reason. Actions that only change what is on screen run
+immediately; **move** and **rename** are drawn as a card and wait for a click,
+then are undoable like any other plan change. Deleting and copying are not in
+its vocabulary at all, so it cannot propose what it cannot name.
+
+**One call per message you type.** Never per file, never in the pipeline, never
+on a timer - that is what made V1 expensive. What leaves the machine is your
+message, where you are, and a sample of up to 60 rows (names and metadata, never
+file contents).
+
 ## Not built yet
 
 Thumbnails, local semantic search, mirror mode (links), journaled apply, the AI

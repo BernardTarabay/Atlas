@@ -4,6 +4,7 @@
 // This file is the shell: routing, search, status, folders, one file's detail.
 // Browsing the library itself is explorer.js, which is a file manager.
 import { showExplorer, showSearchResults, showPhotos, explorerFind, currentScope } from "./explorer.js";
+import { mountAssistant } from "./assistant.js";
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -230,4 +231,8 @@ function syncSearchScope() {
 }
 
 window.addEventListener("hashchange", () => { route().then(syncSearchScope); });
-api("/api/session").then((s) => { if (!s.authenticated) location.hash = "#/login"; route().then(syncSearchScope); });
+api("/api/session").then((s) => {
+  if (!s.authenticated) { location.hash = "#/login"; route(); return; }
+  route().then(syncSearchScope);
+  mountAssistant();
+});

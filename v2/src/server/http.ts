@@ -16,7 +16,9 @@ import type { Engine } from "../pipeline/engine.ts";
 import { config } from "../config.ts";
 import { log } from "../log.ts";
 import * as auth from "./auth.ts";
-import { listFolder, fileDetail, counts, photos } from "../library.ts";
+import { listFolder, fileDetail, counts, photos, find } from "../library.ts";
+import { chat, READ_ONLY } from "../ai/assistant.ts";
+import { aiAvailable, AiError } from "../ai/gemini.ts";
 import { search } from "../search/search.ts";
 import { addRoot, removeRoot, resolveFile, RootError } from "../roots.ts";
 import { kindFromExt, extOf } from "../analyze/sniff.ts";
@@ -93,7 +95,7 @@ const APP_HEADERS = {
 };
 
 const STATIC: Record<string, string> = {
-  "/": "index.html", "/app.js": "app.js", "/app.css": "app.css", "/explorer.js": "explorer.js",
+  "/": "index.html", "/app.js": "app.js", "/app.css": "app.css", "/explorer.js": "explorer.js", "/assistant.js": "assistant.js",
   "/explorer.css": "explorer.css", "/icon.svg": "icon.svg", "/manifest.webmanifest": "manifest.webmanifest",
 };
 const STATIC_TYPE: Record<string, string> = { html: "text/html; charset=utf-8", js: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8", svg: "image/svg+xml", webmanifest: "application/manifest+json" };
@@ -212,7 +214,7 @@ export function startServer(db: Db, engine: Engine): http.Server {
       if (ids.length > 5000) throw new HttpError(413, "too many files in one move");
       const folder = libraryFolder(String(b.folder ?? ""));
       const before = db.all<{ id: number; pin: string | null }>(
-        `SELECT id, pin FROM files WHERE id IN (SELECT value FROM json_each(?))`, JSON.stringify(ids));
+        `SELECT id, pin, pinname FROM files WHERE id IN (SELECT value FROM json_each(?))`, JSON.stringify(ids));
       const set = db.q(`UPDATE files SET pin = ?, state = ${STATE.IDENT} WHERE id = ? AND state = ${STATE.DONE}`);
       let moved = 0;
       db.tx(() => { for (const id of ids) moved += Number(set.run(folder, id).changes); });
@@ -230,6 +232,10 @@ export function startServer(db: Db, engine: Engine): http.Server {
           if (!Number.isInteger(id)) continue;
           const pin = it.pin == null || it.pin === "" ? null : libraryFolder(String(it.pin));
           n += Number(set.run(pin, id).changes);
+          if ("pinname" in it) {
+            const nm = it.pinname == null || it.pinname === "" ? null : safeSegment(String(it.pinname));
+            db.run(`UPDATE files SET pinname = ?, state = ${STATE.IDENT} WHERE id = ?`, nm, id);
+          }
         }
       });
       engine.wake();
@@ -242,6 +248,45 @@ export function startServer(db: Db, engine: Engine): http.Server {
         limit: Number(u.searchParams.get("limit") ?? 50),
         path: u.searchParams.get("in") ?? undefined,
       });
+    }],
+    ["GET", /^\/api\/find$/, (req) => {
+      const u = new URL(req.url, "http://x");
+      const n = (k: string) => (u.searchParams.has(k) ? Number(u.searchParams.get(k)) : undefined);
+      const t = (k: string) => u.searchParams.get(k) ?? undefined;
+      return find(db, {
+        ext: t("ext"), kind: t("kind"), dtype: t("dtype"), lang: t("lang"), folder: t("folder"),
+        nameContains: t("name"), after: n("after"), before: n("before"),
+        minSize: n("minSize"), maxSize: n("maxSize"), limit: n("limit"),
+      });
+    }],
+    // Renaming changes the planned NAME, the way dragging changes the planned
+    // folder. The rules still number it against its neighbours; the disk is not touched.
+    ["POST", /^\/api\/plan\/rename$/, (_req, _res, _m, b) => {
+      const id = Number(b.id);
+      if (!Number.isInteger(id)) throw new HttpError(400, "no file given");
+      const name = safeSegment(String(b.name ?? "").split(/[/\\]/).pop() ?? "");
+      if (!name || name === "_") throw new HttpError(400, "invalid name");
+      const before = db.get<{ pinname: string | null }>("SELECT pinname FROM files WHERE id = ?", id);
+      if (!before) throw new HttpError(404, "no such file");
+      db.run(`UPDATE files SET pinname = ?, state = ${STATE.IDENT} WHERE id = ? AND state = ${STATE.DONE}`, name, id);
+      engine.wake();
+      return { id, name, before: before.pinname };
+    }],
+    ["GET", /^\/api\/ai$/, () => ({ available: aiAvailable(), model: aiAvailable() ? config.ai.model : null })],
+    ["POST", /^\/api\/ai\/chat$/, async (_req, _res, _m, b) => {
+      if (!aiAvailable()) throw new HttpError(503, "the assistant is off: no GEMINI_API_KEY");
+      const message = String(b.message ?? "").slice(0, 4000);
+      if (!message.trim()) throw new HttpError(400, "say something");
+      const history = Array.isArray(b.history) ? (b.history as { role: string; text: string }[]).slice(-8) : [];
+      try {
+        const answer = await chat(message, history, b.context ?? {});
+        // The browser is told which of these it may run without asking. Deciding
+        // that here, not there, keeps the rule in one place.
+        return { ...answer, actions: answer.actions.map((a) => ({ ...a, confirm: !READ_ONLY.has(a.type) })) };
+      } catch (e) {
+        if (e instanceof AiError) throw new HttpError(502, e.message);
+        throw e;
+      }
     }],
     ["GET", /^\/api\/photos$/, (req) => {
       const u = new URL(req.url, "http://x");

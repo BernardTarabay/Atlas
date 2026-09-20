@@ -3,3 +3,6 @@ bin/
 data/
 bench/corpus/
 bench/results/
+
+# Secrets: the assistant key lives here in development only.
+.env

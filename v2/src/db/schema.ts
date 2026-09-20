@@ -112,4 +112,7 @@ export const MIGRATIONS: string[] = [
   // 2: a folder chosen by hand, which beats the filing rules. Plan-only: moving a
   // file in the library changes where it WOULD go, never where it is on disk.
   `ALTER TABLE files ADD COLUMN pin TEXT;`,
+  // 3: the same idea for the name. Renaming in Atlas renames the file in the
+  // PLAN; the bytes on disk keep the name they have until apply exists.
+  `ALTER TABLE files ADD COLUMN pinname TEXT;`,
 ];
