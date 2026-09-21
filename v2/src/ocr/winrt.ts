@@ -68,6 +68,10 @@ export class WinRt {
     return (await this.call({ op: "ocrpdf", path: pdf, page, dpi, lang })) as unknown as OcrText;
   }
   async render(pdf: string, page: number, dpi: number, out: string): Promise<void> { await this.call({ op: "render", path: pdf, page, dpi, out }); }
+  /** Explorer's own thumbnail for a file, written to `out`. Rejects "no thumbnail" when Windows has none. */
+  async thumb(file: string, size: number, out: string): Promise<{ w: number; h: number; source: string; format: string; bytes: number; ms: number }> {
+    return (await this.call({ op: "thumb", path: file, size, out })) as unknown as { w: number; h: number; source: string; format: string; bytes: number; ms: number };
+  }
 
   close() { this.p?.kill(); this.p = null; }
 }

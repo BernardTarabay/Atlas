@@ -275,6 +275,26 @@ export function stats(db: Db, q: StatsQuery) {
   return { by: q.by, metric, rows: q.by === "year" || q.by === "month" ? rows.slice(-limit) : rows.slice(0, limit), total };
 }
 
+/** The duplicate groups worth seeing first: the ones that would free the most space. */
+export function duplicateGroups(db: Db, limit = 8) {
+  return db.all<{ content: number; copies: number; size: number; wasted: number; name: string; kind: string | null }>(
+    `SELECT g.content, g.n - 1 AS copies, g.size, (g.n - 1) * g.size AS wasted,
+            (SELECT coalesce(f.plan, f.path) FROM files f WHERE f.content = g.content AND f.plan IS NOT NULL LIMIT 1) AS name,
+            c.kind
+     FROM (SELECT content, count(DISTINCT coalesce(fid, id)) AS n, max(size) AS size FROM files
+           WHERE content IS NOT NULL AND state = 50 GROUP BY content HAVING n > 1) g
+     JOIN contents c ON c.id = g.content
+     ORDER BY wasted DESC LIMIT ?`, Math.min(limit, 50))
+    .map((r) => ({ ...r, name: (r.name ?? "").slice((r.name ?? "").lastIndexOf("/") + 1) }));
+}
+
+/** Files that could not be read, newest first, with the reason. */
+export function failedFiles(db: Db, limit = 10) {
+  return db.all<{ id: number; path: string; err: string | null; tries: number; root: string }>(
+    `SELECT f.id, f.path, f.err, f.tries, r.path AS root FROM files f JOIN roots r ON r.id = f.root
+     WHERE f.state = 90 ORDER BY f.id DESC LIMIT ?`, Math.min(limit, 100));
+}
+
 export function counts(db: Db) {
   const states = db.all<{ state: number; n: number; bytes: number }>("SELECT state, count(*) AS n, sum(size) AS bytes FROM files GROUP BY state");
   const dups = db.get<{ groups: number; copies: number; bytes: number }>(

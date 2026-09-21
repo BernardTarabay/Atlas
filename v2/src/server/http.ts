@@ -16,13 +16,14 @@ import type { Engine } from "../pipeline/engine.ts";
 import { config } from "../config.ts";
 import { log } from "../log.ts";
 import * as auth from "./auth.ts";
-import { listFolder, fileDetail, counts, photos, find, dashboard, stats, type StatsQuery } from "../library.ts";
+import { listFolder, fileDetail, counts, photos, find, dashboard, stats, duplicateGroups, failedFiles, type StatsQuery } from "../library.ts";
 import { chat, READ_ONLY, designCard } from "../ai/assistant.ts";
 import { aiAvailable, AiError } from "../ai/gemini.ts";
 import { search } from "../search/search.ts";
 import { addRoot, removeRoot, resolveFile, RootError } from "../roots.ts";
 import { kindFromExt, extOf } from "../analyze/sniff.ts";
 import { safeSegment } from "../plan/names.ts";
+import { Thumbs, bucket, THUMB_V } from "../thumbs.ts";
 import { S as STATE } from "../pipeline/states.ts";
 
 type Req = http.IncomingMessage & { remote: boolean; https: boolean; url: string };
@@ -166,7 +167,43 @@ function browse(p: string | null) {
   return { path: abs, parent: path.dirname(abs) !== abs ? path.dirname(abs) : null, dirs };
 }
 
+/**
+ * A file's thumbnail. Content-addressed, so the response can be cached by the
+ * browser for good: the same URL can never mean different pixels, because a
+ * changed file is a different content with a different hash.
+ */
+async function sendThumb(db: Db, thumbs: Thumbs, req: Req, res: Res, id: number, want: number) {
+  const row = db.get<{ path: string; rootPath: string; sha: string | null }>(
+    `SELECT f.path, r.path AS rootPath, hex(c.sha) AS sha FROM files f JOIN roots r ON r.id = f.root
+     LEFT JOIN contents c ON c.id = f.content WHERE f.id = ?`, id);
+  if (!row?.sha) throw new HttpError(404, "no thumbnail");
+  const size = bucket(want);
+  const etag = `"${row.sha.slice(0, 16)}-${size}-v${THUMB_V}"`;
+  if (req.headers["if-none-match"] === etag) { res.writeHead(304, { etag }); res.end(); return; }
+  const abs = resolveFile(row.rootPath, row.path);
+  let closed = false;
+  res.on("close", () => { closed = true; });
+  const file = await thumbs.get(row.sha, abs, size, () => closed);
+  if (closed) return;
+  if (!file) {
+    // Short-lived: the file may gain a thumbnail handler, or come back online.
+    res.writeHead(404, { "cache-control": "private, max-age=600", "content-type": "text/plain" });
+    res.end("no thumbnail");
+    return;
+  }
+  const body = fs.readFileSync(file);
+  res.writeHead(200, {
+    "content-type": body[0] === 0x89 ? "image/png" : "image/jpeg",
+    "content-length": body.length,
+    "cache-control": "private, max-age=31536000, immutable",
+    etag,
+    "x-content-type-options": "nosniff",
+  });
+  res.end(body);
+}
+
 export function startServer(db: Db, engine: Engine): http.Server {
+  const thumbs = new Thumbs(2);
   let statesCache: { at: number; value: ReturnType<typeof counts> } | null = null;
   let dashCache: { at: number; value: ReturnType<typeof dashboard> } | null = null;
   const routes: [string, RegExp, Handler, { public?: boolean; local?: boolean }?][] = [
@@ -263,6 +300,8 @@ export function startServer(db: Db, engine: Engine): http.Server {
       const total = db.get<{ n: number }>("SELECT count(*) AS n FROM files WHERE state <> 70")!.n;
       return { ...engine.activity(), busy: engine.isBusy, scan: engine.scanState, waiting, ocrPending, total, counters: engine.counters };
     }],
+    ["GET", /^\/api\/duplicates$/, (req) => duplicateGroups(db, Number(new URL(req.url, "http://x").searchParams.get("limit") ?? 8))],
+    ["GET", /^\/api\/failed$/, (req) => failedFiles(db, Number(new URL(req.url, "http://x").searchParams.get("limit") ?? 10))],
     ["GET", /^\/api\/stats$/, (req) => {
       const u = new URL(req.url, "http://x");
       const t = (k: string) => u.searchParams.get(k) || undefined;
@@ -331,6 +370,11 @@ export function startServer(db: Db, engine: Engine): http.Server {
       });
     }],
     ["GET", /^\/api\/files\/(\d+)$/, (_req, _res, m) => fileDetail(db, Number(m[1])) ?? (() => { throw new HttpError(404, "no such file"); })()],
+    ["GET", /^\/api\/files\/(\d+)\/thumb$/, async (req, res, m) => {
+      const want = Number(new URL(req.url, "http://x").searchParams.get("s") ?? 256);
+      await sendThumb(db, thumbs, req, res, Number(m[1]), Number.isFinite(want) ? want : 256);
+      return undefined;
+    }],
     ["GET", /^\/api\/files\/(\d+)\/content$/, (req, res, m) => {
       streamFile(db, req, res, Number(m[1]), new URL(req.url, "http://x").searchParams.has("download"));
       return undefined;

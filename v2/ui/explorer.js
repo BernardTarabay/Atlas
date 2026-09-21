@@ -361,14 +361,29 @@ function build() {
 
 /* ---- rendering ------------------------------------------------------- */
 
+// How big each view draws an icon, in CSS pixels. The thumbnail asked for is the
+// smallest cached size that stays sharp at the screen's pixel density.
+const ICON_PX = { xl: 148, large: 88, medium: 60, tiles: 40, content: 48 };
+const thumbSize = (css) => [128, 256, 512].find((s) => s >= css * (window.devicePixelRatio || 1)) ?? 512;
+// Must match THUMB_V in src/thumbs.ts: thumbnails are cached as immutable, so a
+// new generator only reaches the browser through a new URL.
+const THUMB_V = 2;
+export const thumbUrl = (id, css) => `/api/files/${id}/thumb?s=${thumbSize(css)}&v=${THUMB_V}`;
+// Kinds Windows can usually draw: photos always, PDFs by their first page,
+// video frames, and Office documents where a handler is installed.
+const THUMBABLE = new Set(["image", "pdf", "video", "doc", "slides", "sheet"]);
+
 function iconFor(it) {
   if (it.isDir) return `<span class="ex-ico folder">${FOLDER_SVG}</span>`;
   const cls = it.kind || "";
-  const big = ["xl", "large", "medium", "tiles", "content"].includes(S.view);
-  if (it.kind === "image" && big) {
-    return `<span class="ex-ico image"><img loading="lazy" decoding="async" alt="" src="/api/files/${it.id}/content"></span>`;
+  const badge = esc(it.ext || it.kind || "?");
+  const px = ICON_PX[S.view];
+  if (px && THUMBABLE.has(it.kind)) {
+    // The badge travels with the picture: if Windows has no thumbnail, the image
+    // fails and is swapped for the badge (see the error handler in wire()).
+    return `<span class="ex-ico ${esc(cls)} thumb" data-badge="${badge}"><img loading="lazy" decoding="async" alt="" src="${thumbUrl(it.id, px)}"></span>`;
   }
-  return `<span class="ex-ico ${esc(cls)}">${esc(it.ext || it.kind || "?")}</span>`;
+  return `<span class="ex-ico ${esc(cls)}">${badge}</span>`;
 }
 
 function cellText(it, col) {
@@ -397,7 +412,7 @@ function itemHtml(it, index) {
   const name = `<span class="nm" dir="auto" title="${esc(it.name)}">${label}</span>`;
   if (S.mode === "photos") {
     const ocr = it.ocr === 2 ? "" : it.ocr === 1 ? "waiting for OCR" : it.ocr === 3 ? "OCR failed" : "";
-    return `<div ${a}><span class="ex-ico image"><img loading="lazy" decoding="async" alt="" src="/api/files/${it.id}/content"></span>
+    return `<div ${a}><span class="ex-ico image thumb" data-badge="${esc(it.ext || "img")}"><img loading="lazy" decoding="async" alt="" src="${thumbUrl(it.id, 260)}"></span>
       <span class="meta">${name}<span class="sub" dir="auto">${esc(it.folder || "")}</span>
       ${ocr ? `<span class="sub warn">${esc(ocr)}</span>` : ""}</span></div>`;
   }
@@ -1466,6 +1481,14 @@ function wire() {
   }, true);
 
   items.addEventListener("keydown", onKey);
+  items.addEventListener("error", (e) => {
+    const img = e.target;
+    if (img?.tagName !== "IMG") return;
+    const box = img.closest(".ex-ico.thumb");
+    if (!box) return;
+    box.classList.remove("thumb");
+    box.textContent = box.dataset.badge || "?";
+  }, true);
   root.querySelector("#exStatus").addEventListener("click", (e) => {
     const b = e.target.closest("[data-view]");
     if (b) setView(b.dataset.view);

@@ -120,9 +120,15 @@ a **plan**: `files.plan` is where each file would go. Carrying it out needs the
 journalled apply step, which is not built. Cut and Copy do work: they fill an
 in-app clipboard, so you can see what a move would consist of.
 
-Icon views show real thumbnails by loading the original image, because there is
-no thumbnail service yet - fine on this machine, heavy over a tunnel. That is the
-next milestone.
+**Thumbnails** come from Windows itself - the same shell thumbnails Explorer
+shows, so photos, video frames and (with a handler installed) Office documents
+all work - with PDFs drawn from their first page and other images decoded
+directly. They are cached by content hash in `<home>/thumbs`, so every copy of a
+file shares one and moving or renaming never invalidates it, at three sizes
+(128/256/512) chosen by view and screen density. JPEG unless the picture really
+has transparency. A screenful of photos is ~300 KB instead of ~13 MB of
+originals; files Windows cannot draw show their type badge. URLs carry a
+generator version, because they are cached as immutable.
 
 **Search results are a place in the explorer**, not a separate page: the same
 rows, selection, views and context menu, plus a Folder column and the snippet
@@ -179,6 +185,14 @@ The **live pipeline** card shows every reader and OCR slot and the file each is
 on, how long it has been on it, files/s and MB/s over the last minute, an ETA,
 and what finished in the last minute - which lingers so a fast file does not
 flash past unseen.
+
+Cards come in six sizes, from the menu or by pulling the corner grip, and a
+bigger card shows more: Files lists what the library is made of, Photos shows
+the newest pictures, Duplicates lists the groups that waste the most space,
+Could-not-read lists the files and why, By type charts that type by year, and
+breakdowns show more rows. Dragging lifts a card like an icon on a phone: it
+turns to clear glass you can see the other cards through, the rest shiver, and
+everything springs into place.
 
 A card is data - what to count, split how, narrowed how - so the assistant can
 design one from a sentence ("Arabic invoices by year"). That costs **one**

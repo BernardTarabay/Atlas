@@ -27,6 +27,9 @@
   --lift: 0 24px 48px -12px rgba(15, 23, 42, .28), 0 2px 6px rgba(15, 23, 42, .08);
   --rest: 0 1px 2px rgba(15, 23, 42, .05), 0 8px 24px -12px rgba(15, 23, 42, .12);
   --ease: cubic-bezier(.2, .8, .2, 1);
+  --spring: cubic-bezier(.34, 1.56, .64, 1);
+  --clear: rgba(255, 255, 255, .2);
+  --clear-line: rgba(255, 255, 255, .75);
 
   position: relative;
   min-height: calc(100vh - 60px);
@@ -57,6 +60,8 @@
     --bad: #fb7185;
     --lift: 0 28px 56px -12px rgba(0, 0, 0, .7), 0 2px 8px rgba(0, 0, 0, .4);
     --rest: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 30px -14px rgba(0, 0, 0, .6);
+    --clear: rgba(40, 46, 58, .22);
+    --clear-line: rgba(255, 255, 255, .22);
     background:
       radial-gradient(1200px 600px at 10% -10%, rgba(99, 102, 241, .22), transparent 60%),
       radial-gradient(900px 500px at 100% 0%, rgba(14, 165, 233, .16), transparent 55%),
@@ -102,6 +107,8 @@
   /* Fill the hole a wide card leaves at the end of a row with the next card that
      fits, instead of leaving it empty. */
   grid-auto-flow: row dense;
+  /* A row is a unit a card can span two of; content can still make it taller. */
+  grid-auto-rows: minmax(170px, auto);
 }
 
 .card {
@@ -117,24 +124,51 @@
   touch-action: none;           /* the card is draggable with a finger too */
   user-select: none;
   cursor: grab;
-  transition: box-shadow .25s var(--ease), transform .32s var(--ease), opacity .25s var(--ease);
+  transition: box-shadow .25s var(--ease), transform .32s var(--ease), opacity .25s var(--ease),
+    background-color .25s var(--ease), scale .3s var(--spring);
   will-change: transform;
-  animation: card-in .45s var(--ease) both;
 }
-.card.span-2 { grid-column: span 2; }
-@media (max-width: 640px) { .card.span-2 { grid-column: auto; } }
+/* The entrance, once, when a card first appears (the class is removed after). */
+.card.enter { animation: card-in .45s var(--ease) both; }
 .card:hover { box-shadow: var(--lift), inset 0 1px 0 var(--glass-line); }
 
-/* Lifted: follows the pointer on transform alone, above everything, no transition
-   (a transition here is exactly what makes dragging feel like wading). */
+/* Lifted, the way an icon lifts on a phone: a little bigger, and turned to clear
+   glass - thin tint, light blur - so the card it passes over shows through it.
+   It follows the pointer on `transform` with NO transition (easing on the follow
+   is exactly what makes a drag feel like wading); `scale` is a separate property,
+   so it can spring up independently of the follow. */
 .card.lifting {
   z-index: 20;
   cursor: grabbing;
-  transition: box-shadow .2s var(--ease);
-  box-shadow: var(--lift), inset 0 1px 0 var(--glass-line);
-  opacity: .96;
+  scale: 1.05;
+  background: var(--clear);
+  backdrop-filter: blur(5px) saturate(1.8);
+  -webkit-backdrop-filter: blur(5px) saturate(1.8);
+  border-color: var(--clear-line);
+  box-shadow: 0 34px 70px -20px rgba(15, 23, 42, .45), inset 0 1px 0 var(--clear-line), inset 0 0 0 1px var(--clear-line);
+  transition: scale .32s var(--spring), box-shadow .25s var(--ease), background-color .25s var(--ease),
+    backdrop-filter .25s var(--ease), border-color .25s var(--ease);
 }
-.card.settling { z-index: 19; transition: transform .28s var(--ease), box-shadow .28s var(--ease); }
+.card.settling { z-index: 19; transition: transform .5s var(--spring), scale .4s var(--spring), box-shadow .3s var(--ease); }
+/* Everything else slides out of the way on a spring - overshoot a touch, settle. */
+.card.spring { transition: transform .52s var(--spring), box-shadow .25s var(--ease); }
+.card.resizing { cursor: nwse-resize; }
+
+/* While rearranging, the rest shiver - the phone's "you are editing" cue. On the
+   `rotate` property, which composes with `transform`, so it never fights the
+   slides. */
+@keyframes shiver { 0%, 100% { rotate: -.35deg; } 50% { rotate: .35deg; } }
+.dash-grid.editing .card:not(.lifting):not(.add) { animation: shiver .3s ease-in-out infinite; }
+.dash-grid.editing .card:nth-child(2n):not(.lifting) { animation-delay: -.15s; animation-duration: .34s; }
+
+/* The resize grip: a corner you can pull. */
+.card .resize {
+  position: absolute; right: 6px; bottom: 6px; width: 16px; height: 16px;
+  cursor: nwse-resize; opacity: 0; transition: opacity .15s var(--ease);
+  background:
+    linear-gradient(135deg, transparent 45%, var(--ink-3) 45% 52%, transparent 52% 64%, var(--ink-3) 64% 71%, transparent 71%);
+}
+.card:hover .resize, .card.resizing .resize { opacity: .7; }
 
 @keyframes card-in {
   from { opacity: 0; transform: translateY(10px) scale(.985); }
@@ -299,3 +333,28 @@
 @media (prefers-reduced-motion: reduce) {
   .dash *, .dash *::before, .dash *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---- what a bigger card has room for ---------------------------------- */
+
+.more { margin-top: 14px; }
+.more[hidden] { display: none; }
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; margin-top: 12px; }
+.strip a { display: block; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: var(--track); }
+.strip img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .3s var(--ease); }
+.strip a:hover img { transform: scale(1.06); }
+.years .cols { height: 90px; }
+.more-list .it .m { max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- the size picker in a card's menu --------------------------------- */
+
+.card-pop .sizes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; }
+.card-pop .sizes button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px; border-radius: 8px; font-size: 11px; text-align: center; }
+.card-pop .sizes button.on { background: var(--track); outline: 1.5px solid var(--mark); }
+.card-pop .sizes i { display: block; border: 1.5px solid currentColor; border-radius: 3px; opacity: .7; }
+.card-pop .sizes .sz-1x1 { width: 12px; height: 12px; }
+.card-pop .sizes .sz-2x1 { width: 24px; height: 12px; }
+.card-pop .sizes .sz-1x2 { width: 12px; height: 24px; }
+.card-pop .sizes .sz-2x2 { width: 24px; height: 24px; }
+.card-pop .sizes .sz-3x1 { width: 34px; height: 12px; }
+.card-pop .sizes .sz-3x2 { width: 34px; height: 24px; }
+.card-pop .pad { padding: 2px 10px 6px; }

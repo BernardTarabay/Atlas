@@ -29,6 +29,7 @@ using Windows.Globalization;
 using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
 using Windows.Storage;
+using Windows.Storage.FileProperties;
 using Windows.Storage.Streams;
 
 static class AtlasWinRT {
@@ -112,6 +113,92 @@ static class AtlasWinRT {
     return mem;
   }
 
+  /// <summary>
+  /// A thumbnail, the way Explorer gets one: ask the shell first. That is the
+  /// same cache and the same handlers Explorer uses, so photos, video frames,
+  /// PDFs and Office documents all come back as pictures wherever Windows can
+  /// draw them. When the shell only has an icon (no handler), images are decoded
+  /// directly instead. Anything else has no thumbnail, and says so.
+  ///
+  /// PNG out only when the picture really has an alpha channel - a JPEG would
+  /// paint the transparent parts black - and JPEG for everything else, which is
+  /// a fraction of the size. Asking the decoder, not the file extension: most
+  /// PNGs on a real disk are screenshots with no transparency at all.
+  /// </summary>
+  static Dictionary<string, object> Thumb(string path, uint size, string outPath) {
+    var file = Wait(StorageFile.GetFileFromPathAsync(Path.GetFullPath(path)));
+    string ext = Path.GetExtension(path).ToLowerInvariant();
+    bool mayHaveAlpha = ext == ".png" || ext == ".gif" || ext == ".webp" || ext == ".ico";
+    string source = "shell";
+    IRandomAccessStream src = null;
+    try {
+      var t = Wait(file.GetThumbnailAsync(ThumbnailMode.SingleItem, size, ThumbnailOptions.ResizeThumbnail));
+      if (t != null && t.Type == ThumbnailType.Image) src = t;
+      else if (t != null) t.Dispose();
+    } catch { /* no shell thumbnail: try decoding it ourselves */ }
+    if (src == null && ext == ".pdf") {
+      // No shell handler for PDFs on a stock Windows (Edge does not register one):
+      // draw the first page ourselves, straight to JPEG, the way OCR renders pages.
+      var doc = Wait(PdfDocument.LoadFromStreamAsync(Wait(file.OpenAsync(FileAccessMode.Read))));
+      if (doc.PageCount == 0) throw new Exception("no thumbnail");
+      var page = doc.GetPage(0);
+      double k = Math.Min(size / page.Size.Width, size / page.Size.Height);
+      var opts = new PdfPageRenderOptions {
+        DestinationWidth = (uint)Math.Max(1, Math.Round(page.Size.Width * k)),
+        DestinationHeight = (uint)Math.Max(1, Math.Round(page.Size.Height * k)),
+        BitmapEncoderId = BitmapEncoder.JpegEncoderId,
+      };
+      using (var mem = new InMemoryRandomAccessStream()) {
+        Wait(page.RenderToStreamAsync(mem, opts));
+        var reader = new DataReader(mem.GetInputStreamAt(0));
+        uint n = (uint)mem.Size;
+        Wait(reader.LoadAsync(n));
+        var bytes = new byte[n];
+        reader.ReadBytes(bytes);
+        File.WriteAllBytes(outPath, bytes);
+        return new Dictionary<string, object> {
+          { "w", (int)opts.DestinationWidth }, { "h", (int)opts.DestinationHeight }, { "source", "pdf" }, { "format", "jpeg" }, { "bytes", (int)n },
+        };
+      }
+    }
+    if (src == null) {
+      bool image = ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".bmp" || ext == ".tif" ||
+        ext == ".tiff" || ext == ".webp" || ext == ".heic" || ext == ".heif" || ext == ".jfif" || ext == ".ico";
+      if (!image) throw new Exception("no thumbnail");
+      src = Wait(file.OpenAsync(FileAccessMode.Read));
+      source = "decode";
+    }
+    using (src) {
+      var decoder = Wait(BitmapDecoder.CreateAsync(src));
+      bool alpha = mayHaveAlpha && decoder.BitmapAlphaMode != BitmapAlphaMode.Ignore;
+      uint w = decoder.OrientedPixelWidth, h = decoder.OrientedPixelHeight;
+      var transform = new BitmapTransform { InterpolationMode = BitmapInterpolationMode.Fant };
+      if (w > size || h > size) {
+        double k = Math.Min((double)size / w, (double)size / h);
+        // BitmapTransform scales the decoded (not the oriented) image.
+        bool turned = decoder.OrientedPixelWidth != decoder.PixelWidth;
+        transform.ScaledWidth = (uint)Math.Max(1, Math.Round((turned ? h : w) * k));
+        transform.ScaledHeight = (uint)Math.Max(1, Math.Round((turned ? w : h) * k));
+      }
+      var bmp = Wait(decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, alpha ? BitmapAlphaMode.Premultiplied : BitmapAlphaMode.Ignore,
+        transform, ExifOrientationMode.RespectExifOrientation, ColorManagementMode.DoNotColorManage));
+      using (var mem = new InMemoryRandomAccessStream()) {
+        var enc = Wait(BitmapEncoder.CreateAsync(alpha ? BitmapEncoder.PngEncoderId : BitmapEncoder.JpegEncoderId, mem));
+        enc.SetSoftwareBitmap(bmp);
+        Wait(enc.FlushAsync());
+        var reader = new DataReader(mem.GetInputStreamAt(0));
+        uint n = (uint)mem.Size;
+        Wait(reader.LoadAsync(n));
+        var bytes = new byte[n];
+        reader.ReadBytes(bytes);
+        File.WriteAllBytes(outPath, bytes);
+        return new Dictionary<string, object> {
+          { "w", bmp.PixelWidth }, { "h", bmp.PixelHeight }, { "source", source }, { "format", alpha ? "png" : "jpeg" }, { "bytes", (int)n },
+        };
+      }
+    }
+  }
+
   static object Handle(Dictionary<string, object> req) {
     string op = (string)req["op"];
     if (op == "langs") {
@@ -120,6 +207,7 @@ static class AtlasWinRT {
       return new Dictionary<string, object> { { "langs", list } };
     }
     string path = (string)req["path"];
+    if (op == "thumb") return Thumb(path, Convert.ToUInt32(req["size"]), (string)req["out"]);
     if (op == "ocr") {
       using (var s = OpenRead(path)) return Recognize(Decode(s), (string)req["lang"]);
     }

@@ -19,6 +19,7 @@
 // spec, and nothing ever again, because the spec is answered by the local
 // database on every refresh. The free Gemini tier is for asking, not for keeping
 // numbers up to date.
+import { thumbUrl } from "./explorer.js";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtNum = (n) => Math.round(n ?? 0).toLocaleString();
 const fmtBytes = (n) => {
@@ -97,6 +98,31 @@ const DEFAULT_LAYOUT = [
   { id: "folders", type: "folders", span: 2 },
 ];
 
+/**
+ * A card's size, in grid cells: w columns by h rows. Bigger is not just bigger -
+ * each card has more to say at more room (see render), so resizing a card is how
+ * you ask it for more detail.
+ */
+const sizeOf = (c) => ({ w: c.w ?? c.span ?? CARDS[c.type].span, h: c.h ?? 1 });
+const MAX_W = 3;
+const MAX_H = 2;
+let gridCols = 3;
+
+/** Spans are set from JS so a 3-wide card on a 2-column screen takes 2, not 3. */
+function applySize(el, c) {
+  const { w, h } = sizeOf(c);
+  el.style.gridColumn = `span ${Math.min(w, gridCols)}`;
+  el.style.gridRow = `span ${h}`;
+  el.dataset.w = String(w);
+  el.dataset.h = String(h);
+}
+
+function measureCols() {
+  const grid = D.root?.querySelector(".dash-grid");
+  if (!grid) return;
+  gridCols = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(" ").filter(Boolean).length);
+}
+
 const STORE = "atlas.dashboard";
 function loadLayout() {
   try {
@@ -167,11 +193,16 @@ const MENU_ICON = '<svg viewBox="0 0 20 20"><circle cx="4" cy="10" r="1.6"/><cir
 function shell(c) {
   const def = CARDS[c.type];
   const el = document.createElement("section");
-  el.className = `card${(c.span ?? def.span) === 2 ? " span-2" : ""}`;
+  el.className = "card enter";
   el.dataset.id = c.id;
   el.innerHTML = `<div class="card-top"><span class="t">${esc(c.spec?.title ?? def.title)}</span><span class="grow"></span>
     <button type="button" class="card-menu" data-menu="${esc(c.id)}" title="Card options">${MENU_ICON}</button></div>
-    <div class="card-body"></div>`;
+    <div class="card-body"></div>
+    <span class="resize" data-resize title="Drag to resize"></span>`;
+  // The entrance plays once. Left in place, it would replay every time another
+  // animation on the card ended - after every drag, every card would rise again.
+  el.addEventListener("animationend", (e) => { if (e.animationName === "card-in") el.classList.remove("enter"); }, { once: false });
+  applySize(el, c);
   return el;
 }
 
@@ -188,10 +219,21 @@ function ensure(el, html) {
 const render = {
   files(c) {
     const b = body(c.id); const d = D.dash; if (!b || !d) return;
-    ensure(b, `<div class="big" data-n></div><div class="sub" data-s></div><div class="fine" data-f></div>`);
+    const { w, h } = sizeOf(c);
+    ensure(b, `<div class="big" data-n></div><div class="sub" data-s></div><div class="fine" data-f></div><div class="more" data-more></div>`);
     tween(b.querySelector("[data-n]"), d.placed);
     b.querySelector("[data-s]").textContent = `in the library · ${fmtBytes(d.placedBytes)}`;
     b.querySelector("[data-f]").textContent = `${fmtNum(d.files)} seen on disk, ${fmtNum(d.unique)} unique by content`;
+    // Given room, it says what the library is made of.
+    const more = b.querySelector("[data-more]");
+    const rows = w * h > 1 ? d.byKind.slice(0, h > 1 ? 9 : 4) : [];
+    more.hidden = !rows.length;
+    if (rows.length) {
+      const max = Math.max(1, ...rows.map((r) => r.n));
+      keyed(more, "rows", rows.map((r) => ({ ...r, key: r.kind })),
+        (r) => `<div class="brow" data-k="${esc(r.key)}"><span class="k">${esc(KIND_LABEL[r.key] ?? r.key)}</span><div class="track thin"><i></i></div><span class="v"></span></div>`,
+        (el, r) => { el.querySelector("i").style.setProperty("--v", String(r.n / max)); el.querySelector(".v").textContent = fmtNum(r.n); });
+    }
   },
   waiting(c) {
     const b = body(c.id); const d = D.dash; if (!b || !d) return;
@@ -212,6 +254,18 @@ const render = {
     const all = d.ocr.read + d.ocr.pending + d.ocr.failed;
     setBar(b.querySelector(".track i"), all ? read / all : 0);
     b.querySelector("[data-f]").textContent = all ? `${Math.round((read / all) * 100)}% of scans and photos read by OCR` : "";
+    // Given room, the newest pictures - as thumbnails, so this costs kilobytes.
+    const { w, h } = sizeOf(c);
+    let strip = b.querySelector(".strip");
+    const want = w * h > 1 ? Math.min(12, w * (h > 1 ? 6 : 3)) : 0;
+    if (!want) { strip?.remove(); return; }
+    if (!strip) { strip = document.createElement("div"); strip.className = "strip"; b.appendChild(strip); }
+    if (strip.dataset.n === String(want) && strip.dataset.at && Date.now() - Number(strip.dataset.at) < 30000) return;
+    strip.dataset.n = String(want);
+    strip.dataset.at = String(Date.now());
+    api(`/api/photos?limit=${want}`).then((r) => {
+      strip.innerHTML = r.files.map((f) => `<a href="#/photos" title="${esc(f.name)}"><img loading="lazy" alt="" src="${thumbUrl(f.id, 72)}"></a>`).join("");
+    }).catch(() => {});
   },
   duplicates(c) {
     const b = body(c.id); const d = D.dash; if (!b || !d) return;
@@ -220,6 +274,9 @@ const render = {
     b.querySelector("[data-s]").textContent = `${fmtBytes(d.duplicates.bytes)} would be freed · ${fmtNum(d.duplicates.groups)} groups`;
     // Said on the card itself, because "resolved" must never be read as "deleted".
     b.querySelector("[data-f]").textContent = "Each group keeps one copy in the library. Nothing has been deleted.";
+    const { w, h } = sizeOf(c);
+    listMore(b, w * h > 1 && d.duplicates.groups ? `/api/duplicates?limit=${h > 1 ? 10 : 4}` : null,
+      (g) => `<div class="it"><span class="p" dir="auto" title="${esc(g.name)}">${esc(g.name)}</span><span class="m">${fmtNum(g.copies)} extra · ${fmtBytes(g.wasted)}</span></div>`);
   },
   failed(c) {
     const b = body(c.id); const d = D.dash; if (!b || !d) return;
@@ -229,6 +286,9 @@ const render = {
     big.className = `big ${d.failed ? "bad" : "good"}`;
     b.querySelector("[data-s]").textContent = d.failed ? "files could not be read" : "every file was readable";
     b.querySelector("[data-f]").textContent = [d.ocr.failed ? `${fmtNum(d.ocr.failed)} OCR failures` : "", d.missing ? `${fmtNum(d.missing)} missing from disk` : "", d.failed ? "retried on the next scan" : ""].filter(Boolean).join(" · ");
+    const { w, h } = sizeOf(c);
+    listMore(b, w * h > 1 && d.failed ? `/api/failed?limit=${h > 1 ? 12 : 4}` : null,
+      (f) => `<div class="it"><span class="p" dir="auto" title="${esc(f.root)} › ${esc(f.path)}">${esc(base(f.path))}</span><span class="m">${esc(f.err ?? "unreadable")}</span></div>`);
   },
   pipeline(c) {
     const b = body(c.id); const a = D.act; if (!b || !a) return;
@@ -289,6 +349,18 @@ const render = {
     b.querySelector("[data-s]").textContent = `${t.label} files · ${fmtBytes(row.bytes)}`;
     setBar(b.querySelector("[data-share]"), row.n / all);
     b.querySelector("[data-f]").textContent = `${((row.n / all) * 100).toFixed(1)}% of the library`;
+    const { w, h } = sizeOf(c);
+    let yrs = b.querySelector(".years");
+    if (w * h < 2) { yrs?.remove(); return; }
+    if (!yrs) { yrs = document.createElement("div"); yrs.className = "years gap-top"; b.querySelector(".type-body").appendChild(yrs); }
+    if (yrs.dataset.kind === kind && Date.now() - Number(yrs.dataset.at || 0) < 30000) return;
+    yrs.dataset.kind = kind;
+    yrs.dataset.at = String(Date.now());
+    api(`/api/stats?by=year&kind=${encodeURIComponent(kind)}&limit=12`).then((st) => {
+      const max = Math.max(1, ...st.rows.map((r) => r.n));
+      keyed(yrs, "cols", st.rows, (r) => `<div class="c" data-k="${esc(r.key)}" title="${esc(r.key)}: ${fmtNum(r.n)}"><b></b><span>${esc(String(r.key).slice(-2))}</span></div>`,
+        (el, r) => el.querySelector("b").style.setProperty("--v", String(r.n / max)));
+    }).catch(() => {});
   },
   breakdown(c) {
     const b = body(c.id); const s = D.stats.get(c.id)?.data; if (!b || !s) return;
@@ -355,6 +427,17 @@ function keyed(host, cls, rows, make, update) {
   }
 }
 
+/** A list that appears below a card's figures when the card is given room for it. */
+function listMore(b, url, row) {
+  let box = b.querySelector(".more-list");
+  if (!url) { box?.remove(); return; }
+  if (!box) { box = document.createElement("div"); box.className = "list more-list gap-top"; b.appendChild(box); }
+  if (box.dataset.url === url && Date.now() - Number(box.dataset.at || 0) < 20000) return;
+  box.dataset.url = url;
+  box.dataset.at = String(Date.now());
+  api(url).then((rows) => { box.innerHTML = rows.map(row).join("") || `<div class="fine">Nothing to list.</div>`; }).catch(() => {});
+}
+
 /** One lane per worker, updated in place: a worker is a place, and places do not reshuffle. */
 function lanes(box, rows, now) {
   while (box.children.length < rows.length) {
@@ -378,17 +461,21 @@ function lanes(box, rows, now) {
 
 /* ---- data ------------------------------------------------------------- */
 
-function statsKey(spec) {
+function statsKey(c) {
+  const spec = c.spec ?? {};
+  const { w, h } = sizeOf(c);
   const p = new URLSearchParams();
-  for (const k of ["by", "metric", "kind", "ext", "dtype", "lang", "folder"]) if (spec?.[k]) p.set(k, spec[k]);
-  p.set("limit", spec?.chart === "columns" ? "16" : "10");
+  for (const k of ["by", "metric", "kind", "ext", "dtype", "lang", "folder"]) if (spec[k]) p.set(k, spec[k]);
+  // More room, more rows: a small card shows the top few, a large one the long tail.
+  const rows = spec.chart === "columns" ? 8 * w : [6, 10, 22][Math.min(2, w * h - 1)] ?? 22;
+  p.set("limit", String(Math.min(60, rows)));
   return p.toString();
 }
 
 async function refreshStats(force = false) {
   const now = Date.now();
   await Promise.all(D.layout.filter((c) => c.type === "breakdown").map(async (c) => {
-    const key = statsKey(c.spec);
+    const key = statsKey(c);
     const have = D.stats.get(c.id);
     if (!force && have && have.key === key && now - have.at < (D.act?.busy ? 15000 : 60000)) return;
     try {
@@ -447,6 +534,7 @@ function schedule() {
 
 function drawGrid() {
   const grid = D.root.querySelector(".dash-grid");
+  measureCols();
   grid.replaceChildren(...D.layout.map(shell), addCard());
   for (const c of D.layout) {
     if (c.type === "breakdown") render.breakdown(c);
@@ -456,8 +544,9 @@ function drawGrid() {
 }
 
 /**
- * FLIP: record where every card is, change the order, then play each card from
- * where it WAS to where it IS. Only `transform` moves, so it stays at 60 fps.
+ * FLIP: record where every card is, change the layout, then play each card from
+ * where it WAS to where it IS - on a spring, so they settle the way icons settle
+ * on a phone. Only `transform` moves, so it stays at 60 fps.
  */
 function flip(except, mutate) {
   const cards = [...D.root.querySelectorAll(".card:not(.add)")].filter((c) => c !== except);
@@ -469,51 +558,98 @@ function flip(except, mutate) {
     const dx = a.left - b.left;
     const dy = a.top - b.top;
     if (!dx && !dy) continue;
+    c.classList.remove("spring");
     c.style.transition = "none";
     c.style.transform = `translate(${dx}px, ${dy}px)`;
     c.getBoundingClientRect();                 // commit the inverted position
     c.style.transition = "";
+    c.classList.add("spring");
     c.style.transform = "";
+    clearTimeout(c._springEnd);
+    c._springEnd = setTimeout(() => c.classList.remove("spring"), 560);
   }
+}
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+/** Re-draw one card after its size changed, so it shows more (or less). */
+function rerender(c) {
+  const b = body(c.id);
+  if (b) { b.innerHTML = ""; b.dataset.built = ""; b.dataset.kind = ""; }
+  if (c.type === "breakdown") refreshStats(true);
+  else if (c.type === "pipeline") render.pipeline(c);
+  else render[c.type]?.(c);
+}
+
+function setSize(c, w, h) {
+  const el = D.root.querySelector(`.card[data-id="${CSS.escape(c.id)}"]`);
+  const now = sizeOf(c);
+  if (!el || (now.w === w && now.h === h)) return;
+  flip(null, () => { c.w = w; c.h = h; delete c.span; applySize(el, c); });
+  rerender(c);
 }
 
 function wireDrag() {
   const grid = D.root.querySelector(".dash-grid");
   let drag = null;
 
-  grid.addEventListener("pointerdown", (e) => {
-    const card = e.target.closest(".card:not(.add)");
-    if (!card || e.button !== 0 || e.target.closest("button, input, select, a, form")) return;
+  /**
+   * Lift, the way an app icon lifts on a phone: it grows a little, turns to
+   * glass you can see the other cards through, and everything else starts to
+   * shiver to say "you are rearranging now". It follows the pointer exactly -
+   * no easing on the follow, because easing there is what makes a drag feel
+   * like wading - and the others spring out of its way.
+   */
+  const lift = (e) => {
+    const { card } = drag;
+    drag.live = true;
+    clearTimeout(drag.hold);
+    try { card.setPointerCapture(drag.pointer); } catch { /* the pointer already left */ }
+    card.classList.add("lifting");
+    grid.classList.add("editing");
+    follow(e);
+  };
+
+  const follow = (e) => {
+    const { card } = drag;
+    // Where the card would be with no offset, and the offset that keeps it under the pointer.
+    card.style.transform = "none";
     const r = card.getBoundingClientRect();
-    drag = { card, id: card.dataset.id, sx: e.clientX, sy: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, live: false, pointer: e.pointerId };
+    card.style.transform = `translate(${e.clientX - drag.ox - r.left}px, ${e.clientY - drag.oy - r.top}px)`;
+  };
+
+  grid.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const card = e.target.closest(".card:not(.add)");
+    if (!card) return;
+    if (e.target.closest("[data-resize]")) { startResize(e, card); return; }
+    if (e.target.closest("button, input, select, a, form")) return;
+    const r = card.getBoundingClientRect();
+    drag = { card, sx: e.clientX, sy: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, live: false, pointer: e.pointerId, last: e };
+    // Hold still for a moment and it lifts in place, like a long-press on a phone.
+    drag.hold = setTimeout(() => { if (drag && !drag.live) lift(drag.last); }, 320);
   });
 
   grid.addEventListener("pointermove", (e) => {
     if (!drag || e.pointerId !== drag.pointer) return;
-    const { card } = drag;
+    drag.last = e;
     if (!drag.live) {
       // A few pixels of intent before lifting, so a click stays a click.
       if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 6) return;
-      drag.live = true;
-      card.setPointerCapture(e.pointerId);
-      card.classList.add("lifting");
+      lift(e);
     }
-    // Where the card would be with no transform, and the offset that keeps it under the pointer.
-    const place = () => {
-      card.style.transform = "none";
-      const r = card.getBoundingClientRect();
-      card.style.transform = `translate(${e.clientX - drag.ox - r.left}px, ${e.clientY - drag.oy - r.top}px) scale(1.02)`;
-    };
-    place();
-    // Which card is under the pointer? Swap into its place.
-    const over = document.elementsFromPoint(e.clientX, e.clientY).find((el) => el.classList?.contains("card") && el !== card && !el.classList.contains("add"));
+    follow(e);
+    const { card } = drag;
+    // The card under the pointer: slide into its place.
+    const over = document.elementsFromPoint(e.clientX, e.clientY)
+      .find((el) => el.classList?.contains("card") && el !== card && !el.classList.contains("add"));
     if (over) {
       const cards = [...grid.querySelectorAll(".card:not(.add)")];
       const from = cards.indexOf(card);
       const to = cards.indexOf(over);
       if (from !== to) {
         flip(card, () => { grid.insertBefore(card, from < to ? over.nextSibling : over); });
-        place();
+        follow(e);
       }
     }
   });
@@ -521,19 +657,53 @@ function wireDrag() {
   const end = (e) => {
     if (!drag || e.pointerId !== drag.pointer) return;
     const { card, live } = drag;
+    clearTimeout(drag.hold);
     drag = null;
     if (!live) return;
-    // Settle: glide from where it was let go into its slot.
+    // Let go: spring from where it was dropped into its slot, and settle.
+    grid.classList.remove("editing");
     card.classList.remove("lifting");
     card.classList.add("settling");
     requestAnimationFrame(() => { card.style.transform = ""; });
-    setTimeout(() => card.classList.remove("settling"), 320);
+    setTimeout(() => card.classList.remove("settling"), 520);
     const order = [...grid.querySelectorAll(".card:not(.add)")].map((c) => c.dataset.id);
     D.layout.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
     saveLayout();
   };
   grid.addEventListener("pointerup", end);
   grid.addEventListener("pointercancel", end);
+
+  /**
+   * Resize from the corner grip, snapping to whole grid cells. Every cell the
+   * card crosses changes what it shows, live, so you can see what the extra
+   * room buys before letting go.
+   */
+  function startResize(e, card) {
+    const c = D.layout.find((x) => x.id === card.dataset.id);
+    if (!c) return;
+    e.preventDefault();
+    const start = sizeOf(c);
+    const rect = card.getBoundingClientRect();
+    const gap = parseFloat(getComputedStyle(grid).columnGap) || 16;
+    const cols = Math.min(start.w, gridCols);
+    const colW = (rect.width - (cols - 1) * gap) / cols;
+    const rowH = (rect.height - (start.h - 1) * gap) / start.h;
+    try { card.setPointerCapture(e.pointerId); } catch { /* released already: the move listeners still work */ }
+    card.classList.add("resizing");
+    const move = (ev) => {
+      const w = clamp(Math.round((rect.width + ev.clientX - e.clientX + gap) / (colW + gap)), 1, Math.min(MAX_W, gridCols));
+      const h = clamp(Math.round((rect.height + ev.clientY - e.clientY + gap) / (rowH + gap)), 1, MAX_H);
+      setSize(c, w, h);
+    };
+    const done = () => {
+      card.removeEventListener("pointermove", move);
+      card.classList.remove("resizing");
+      saveLayout();
+    };
+    card.addEventListener("pointermove", move);
+    card.addEventListener("pointerup", done, { once: true });
+    card.addEventListener("pointercancel", done, { once: true });
+  }
 
   // Inside a card: the type chips, the flipper, the menu.
   grid.addEventListener("click", (e) => {
@@ -563,7 +733,7 @@ function openCardMenu(c, btn) {
   pop = document.createElement("div");
   pop.className = "card-pop";
   const def = CARDS[c.type];
-  const wide = (c.span ?? def.span) === 2;
+  const now = sizeOf(c);
   const spec = c.spec ?? {};
   const editor = c.type === "breakdown" ? `
     <label>Split by <select data-f="by">${Object.entries(BY_LABEL).map(([k, v]) => `<option value="${k}"${spec.by === k ? " selected" : ""}>${v}</option>`).join("")}</select></label>
@@ -571,8 +741,10 @@ function openCardMenu(c, btn) {
     <label>Show as <select data-f="chart">${["bars", "columns", "donut", "list"].map((k) => `<option value="${k}"${(spec.chart ?? "bars") === k ? " selected" : ""}>${k[0].toUpperCase() + k.slice(1)}</option>`).join("")}</select></label>
     <label>Only <select data-f="kind"><option value="">All kinds</option>${TYPES.map((t) => `<option value="${t.kind}"${spec.kind === t.kind ? " selected" : ""}>${t.label}</option>`).join("")}</select></label>
     <label>Title <input data-f="title" value="${esc(spec.title ?? "")}"></label><hr>` : "";
+  const SIZES = [["1x1", "Small"], ["2x1", "Wide"], ["1x2", "Tall"], ["2x2", "Large"], ["3x1", "Full width"], ["3x2", "Full width, tall"]];
   pop.innerHTML = `${editor}
-    <button type="button" data-do="span">${wide ? "Make it narrow" : "Make it wide"}</button>
+    <div class="sizes">${SIZES.map(([k, label]) => `<button type="button" data-size="${k}" class="${`${now.w}x${now.h}` === k ? "on" : ""}" title="${label}"><i class="sz-${k}"></i><span>${label}</span></button>`).join("")}</div>
+    <div class="fine pad">Bigger cards show more. You can also drag a card's bottom-right corner.</div><hr>
     <button type="button" data-do="remove">Remove this card</button>`;
   D.root.appendChild(pop);
   const r = btn.getBoundingClientRect();
@@ -590,16 +762,18 @@ function openCardMenu(c, btn) {
     if (f !== "title") await refreshStats(true);
   });
   pop.addEventListener("click", (e) => {
+    const sz = e.target.closest("[data-size]")?.dataset.size;
+    if (sz) {
+      const [w, h] = sz.split("x").map(Number);
+      closePop();
+      setSize(c, w, h);
+      saveLayout();
+      return;
+    }
     const d = e.target.closest("[data-do]")?.dataset.do;
     if (!d) return;
     closePop();
-    if (d === "span") {
-      flip(null, () => {
-        c.span = wide ? 1 : 2;
-        D.root.querySelector(`.card[data-id="${CSS.escape(c.id)}"]`)?.classList.toggle("span-2", !wide);
-      });
-      saveLayout();
-    } else if (d === "remove") {
+    if (d === "remove") {
       const el = D.root.querySelector(`.card[data-id="${CSS.escape(c.id)}"]`);
       el.style.opacity = "0";
       el.style.transform = "scale(.96)";
@@ -633,7 +807,7 @@ function addCard() {
     if (!b) return;
     const type = b.dataset.add;
     const spec = b.dataset.spec ? JSON.parse(b.dataset.spec) : type === "bytype" ? { kind: "pdf" } : undefined;
-    addToLayout({ id: `${type}-${Date.now().toString(36)}`, type, spec, span: CARDS[type].span });
+    addToLayout({ id: `${type}-${Date.now().toString(36)}`, type, spec, w: CARDS[type].span, h: 1 });
   });
   el.querySelector("[data-ai]")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -694,7 +868,23 @@ export async function mountDashboard(view) {
   });
   document.addEventListener("pointerdown", onOutside, true);
   document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("resize", onResize);
   schedule();
+}
+
+/** A narrower window has fewer columns: a 3-wide card takes what there is. */
+let resizeFrame = 0;
+function onResize() {
+  cancelAnimationFrame(resizeFrame);
+  resizeFrame = requestAnimationFrame(() => {
+    const before = gridCols;
+    measureCols();
+    if (gridCols === before) return;
+    for (const c of D.layout) {
+      const el = D.root?.querySelector(`.card[data-id="${CSS.escape(c.id)}"]`);
+      if (el) applySize(el, c);
+    }
+  });
 }
 
 function onOutside(e) { if (pop && !pop.contains(e.target) && !e.target.closest("[data-menu]")) closePop(); }
@@ -708,5 +898,6 @@ export function unmountDashboard() {
   closePop();
   document.removeEventListener("pointerdown", onOutside, true);
   document.removeEventListener("visibilitychange", onVisible);
+  window.removeEventListener("resize", onResize);
   D.root = null;
 }

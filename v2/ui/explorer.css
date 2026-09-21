@@ -280,6 +280,11 @@
 }
 
 .ex-ico img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A thumbnail is a picture of the whole page or photo: contain it, on a quiet
+   ground, rather than cropping a document to its middle. */
+.ex-ico.thumb { background: var(--bg); }
+.ex-ico.thumb img { object-fit: contain; }
+.ex-ico.thumb img:not([src]) { visibility: hidden; }
 .ex-ico.folder { background: none; color: #dfa000; }
 .ex-ico.folder svg { width: 100%; height: 100%; fill: currentColor; stroke: none; }
 .ex-ico.image { background: #7a5cc4; }
