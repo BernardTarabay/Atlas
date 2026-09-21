@@ -639,25 +639,79 @@ function wireDrag() {
       lift(e);
     }
     follow(e);
-    const { card } = drag;
-    // The card under the pointer: slide into its place.
-    const over = document.elementsFromPoint(e.clientX, e.clientY)
-      .find((el) => el.classList?.contains("card") && el !== card && !el.classList.contains("add"));
-    if (over) {
-      const cards = [...grid.querySelectorAll(".card:not(.add)")];
-      const from = cards.indexOf(card);
-      const to = cards.indexOf(over);
-      if (from !== to) {
-        flip(card, () => { grid.insertBefore(card, from < to ? over.nextSibling : over); });
-        follow(e);
-      }
-    }
+    aim(e);
   });
+
+  /**
+   * Which card the dragged one should take the place of - decided calmly.
+   *
+   * WHY IT USED TO SHAKE
+   *
+   * It hit-tested cards where they were DRAWN. After a swap, the other card
+   * springs away from under the pointer, but for half a second it is still drawn
+   * there - so the next pointer move found it again, swapped it back, and the two
+   * traded places as fast as the mouse moved. Cards of different sizes made it
+   * worse: one swap reflows the grid and slides a third card under the pointer.
+   *
+   * WHAT STOPS IT
+   *
+   *   where it WILL be   cards are hit-tested at their layout slot (offsetLeft/
+   *                      offsetTop ignore transforms), never mid-animation
+   *   firm borders       only the middle 60% of a card counts as "over it"
+   *   dwell              the pointer rests on a card for a beat before anything
+   *                      moves, the way a phone waits before icons shift
+   *   settle             after a swap, nothing else moves for a moment, and the
+   *                      card just swapped with is ignored until you leave it
+   */
+  const DWELL_MS = 130;
+  const SETTLE_MS = 220;
+  const ZONE = 0.2; // the outer 20% on each side is border, not target
+
+  function slotAt(card, x, y) {
+    const g = grid.getBoundingClientRect();
+    for (const el of grid.querySelectorAll(".card:not(.add)")) {
+      if (el === card) continue;
+      const left = g.left + el.offsetLeft;
+      const top = g.top + el.offsetTop;
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      if (x > left + w * ZONE && x < left + w * (1 - ZONE) && y > top + h * ZONE && y < top + h * (1 - ZONE)) return el;
+    }
+    return null;
+  }
+
+  function aim(e) {
+    if (!drag?.live) return;
+    const target = slotAt(drag.card, e.clientX, e.clientY);
+    // Leaving the card we just traded with makes it a valid target again.
+    if (drag.ignore && target !== drag.ignore) drag.ignore = null;
+    if (!target || target === drag.ignore) { clearTimeout(drag.dwell); drag.aimed = null; return; }
+    if (target === drag.aimed) return;              // already waiting on this one
+    drag.aimed = target;
+    clearTimeout(drag.dwell);
+    const wait = Math.max(DWELL_MS, (drag.settleUntil ?? 0) - performance.now());
+    drag.dwell = setTimeout(() => swapInto(target), wait);
+  }
+
+  function swapInto(target) {
+    if (!drag?.live || drag.aimed !== target) return;
+    const { card } = drag;
+    const cards = [...grid.querySelectorAll(".card:not(.add)")];
+    const from = cards.indexOf(card);
+    const to = cards.indexOf(target);
+    if (from < 0 || to < 0 || from === to) return;
+    flip(card, () => { grid.insertBefore(card, from < to ? target.nextSibling : target); });
+    drag.ignore = target;
+    drag.aimed = null;
+    drag.settleUntil = performance.now() + SETTLE_MS;
+    follow(drag.last);
+  }
 
   const end = (e) => {
     if (!drag || e.pointerId !== drag.pointer) return;
     const { card, live } = drag;
     clearTimeout(drag.hold);
+    clearTimeout(drag.dwell);
     drag = null;
     if (!live) return;
     // Let go: spring from where it was dropped into its slot, and settle.

@@ -100,6 +100,9 @@
 /* ---- the grid --------------------------------------------------------- */
 
 .dash-grid {
+  /* Positioned, so a card's offsetLeft/offsetTop - its layout slot, which ignores
+     any transform in flight - is measured from the grid. The drag aims by it. */
+  position: relative;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: 16px;
