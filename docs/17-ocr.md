@@ -118,6 +118,38 @@ Note that `ANALYZER_VERSION` only re-analyzes a content when its file is read
 again, so improving the dictionary does not retroactively re-type an existing
 library. Re-analysis on demand is still to build.
 
+## Real scans: RVL-CDIP
+
+The synthetic set measures OCR against exact ground truth, but it cannot say how
+Atlas types documents it did not write. RVL-CDIP small-200 (Hugging Face
+`vaclavpechtor/rvl_cdip-small-200`) can: 3,200 real grayscale scans of 1980s-90s
+business documents, 200 in each of 16 classes a person labelled. They are
+fetched by `~/AtlasBench/rvl-cdip/fetch.mjs`, renamed `scan-0001.tif...` in a
+shuffled order and the labels kept only in `truth.json`, so nothing about the
+answer reaches Atlas through a name. `npm run bench:rvl` runs the real engine on
+them and scores two things separately: how often a type Atlas has is found, and
+how often a type is stamped on a class Atlas has no type for.
+
+| | recall: invoice, letter, resume, report | typed anyway: adverts, news, handwriting, specs, folders |
+|---|---|---|
+| dictionary only | 22% | 3.1% |
+| + shape (salutations, closings, section headings) | **39%** | **3.4%** |
+
+OCR held up on real, bad scans: 87-99% of most classes gave readable text, at
+~17 scans/s with 4 OCR workers. The typing did not, and reading the misses said
+why. A letter is not identified by its vocabulary - "Dear Fred:" and "Very truly
+yours" identify it, and the dictionary knew only "dear sir". An academic CV calls
+itself a "biographical sketch". Billing paperwork says "amount due" and "please
+remit", not "invoice". So `src/analyze/dtype.ts` now also recognises documents by
+SHAPE: a salutation or closing standing on its own line (EN/FR/AR), and two or
+more section headings of a CV or a research report. Letters went from 12% to 47%,
+resumes from 33% to 64%, at the cost of a few forms and budgets read as letters.
+
+What is left is honest: invoices (23%) and scientific reports (24%) in this set
+are mostly vouchers, estimates, tables and fragments with nothing distinctive to
+read, and many "letter" pages are the second page of a letter, which has neither
+salutation nor closing. Pushing further on them would be tuning to one dataset.
+
 ## Where OCR sits in the pipeline
 
 OCR runs **per unique content**, never per copy, on its own bounded pool so it

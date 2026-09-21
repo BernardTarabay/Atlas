@@ -8,13 +8,21 @@ export type DocType =
   | "report" | "minutes" | "medical" | "tax" | "identity" | "registration" | "quote" | "order" | "insurance";
 
 const RAW: Record<DocType, string[]> = {
-  invoice: ["invoice", "tax invoice", "invoice number", "facture", "numero de facture", "montant ttc", "total ttc", "bill to", "فاتورة", "فاتورة ضريبية", "رقم الفاتورة"],
+  // Real billing paperwork rarely says "invoice" (measured on RVL-CDIP): it says
+  // what is owed and how to pay it.
+  invoice: ["invoice", "tax invoice", "invoice number", "invoice no", "amount due", "balance due", "total due", "please remit",
+    "remit to", "payment due", "payment voucher", "facture", "numero de facture", "montant ttc", "total ttc", "net à payer",
+    "date d’échéance", "bill to", "فاتورة", "فاتورة ضريبية", "رقم الفاتورة", "المبلغ المستحق", "تاريخ الاستحقاق"],
   receipt: ["receipt", "payment received", "recu", "reçu de paiement", "ticket de caisse", "إيصال", "ايصال استلام", "وصل استلام"],
   contract: ["contract", "agreement", "the parties", "hereinafter", "contrat", "convention", "les parties", "ci-apres", "عقد", "اتفاقية", "الطرف الأول", "الطرف الثاني"],
-  statement: ["bank statement", "account statement", "opening balance", "closing balance", "releve de compte", "releve bancaire", "solde", "كشف حساب", "الرصيد"],
+  statement: ["bank statement", "account statement", "statement of account", "opening balance", "closing balance", "previous balance",
+    "releve de compte", "releve bancaire", "solde", "كشف حساب", "الرصيد"],
   payslip: ["payslip", "pay slip", "salary slip", "net pay", "bulletin de paie", "fiche de paie", "bulletin de salaire", "salaire net", "قسيمة الراتب", "كشف راتب", "صافي الراتب"],
   letter: ["letter", "lettre", "courrier", "رسالة", "dear sir", "dear madam", "yours sincerely", "yours faithfully", "madame monsieur", "veuillez agreer", "je vous prie", "cordialement", "المحترم", "تحية طيبة", "وبعد"],
-  cv: ["curriculum vitae", "resume", "work experience", "professional experience", "experience professionnelle", "formation", "السيرة الذاتية", "الخبرات", "المؤهلات"],
+  // "Biographical sketch" is the academic CV (NIH and most grant bodies): it named 60
+  // of the 133 real resumes the first version missed.
+  cv: ["curriculum vitae", "resume", "biographical sketch", "work experience", "professional experience", "employment history",
+    "education and training", "experience professionnelle", "formation", "السيرة الذاتية", "الخبرات", "المؤهلات"],
   certificate: ["certificate", "certify that", "certificat", "attestation", "certifie que", "atteste que", "شهادة", "نشهد بأن", "يشهد"],
   report: ["report", "executive summary", "findings", "rapport", "synthese", "تقرير", "ملخص تنفيذي"],
   minutes: ["minutes of the meeting", "meeting minutes", "proces verbal", "compte rendu de reunion", "ordre du jour", "محضر", "محضر اجتماع", "جدول الأعمال"],
@@ -24,7 +32,8 @@ const RAW: Record<DocType, string[]> = {
   // often than on identity papers (it put 163 school forms under Identity documents).
   identity: ["passport", "identity card", "id card number", "passeport", "carte d’identite", "piece d’identite", "جواز سفر", "بطاقة الهوية", "رقم الهوية"],
   registration: ["registration form", "enrolment form", "demande d’inscription", "fiche d’inscription", "formulaire d’inscription", "طلب تسجيل", "استمارة تسجيل"],
-  quote: ["quotation", "price quote", "devis", "offre de prix", "عرض سعر", "عرض أسعار"],
+  quote: ["quotation", "price quote", "cost estimate", "price estimate", "production estimate", "estimate number", "devis",
+    "offre de prix", "عرض سعر", "عرض أسعار"],
   order: ["purchase order", "order number", "bon de commande", "numero de commande", "أمر شراء", "طلبية"],
   insurance: ["insurance policy", "policy number", "insured", "police d’assurance", "assure", "وثيقة تأمين", "تأمين"],
 };
@@ -50,6 +59,68 @@ export function openingLines(text: string, n = 3, cap = 160): string {
     if (out.length >= n) break;
   }
   return out.join("\n");
+}
+
+/**
+ * Types recognised by their SHAPE rather than their words.
+ *
+ * Measured on RVL-CDIP (3,200 real scanned business documents): only 12% of real
+ * letters were typed, because a letter is not identified by vocabulary - "Dear
+ * Fred:" and "Very truly yours" are - and the dictionary only knew "dear sir".
+ * These signals are lines, matched whole, on the text as read (not normalized),
+ * so a salutation at the start of a line counts and "oh dear" mid-sentence does not.
+ */
+const LINE_SIGNALS: { type: DocType; re: RegExp; score: number; label: string }[] = [
+  // Salutations: a line that opens a letter.
+  { type: "letter", score: 4, label: "salutation", re: /^\s*(dear|to whom it may concern)\b[^\n]{0,60}$/im },
+  { type: "letter", score: 4, label: "salutation", re: /^\s*(cher|chère|chers|chères|madame|monsieur|messieurs|mesdames)\b[^\n]{0,50}[,:]\s*$/im },
+  { type: "letter", score: 4, label: "salutation", re: /^\s*(حضرة|عزيزي|عزيزتي|السيد|السيدة|الأستاذ)\s[^\n]{0,60}(المحترم|المحترمة)?\s*$/m },
+  // Closings: a line that signs one off.
+  { type: "letter", score: 3, label: "closing", re: /^\s*(sincerely|yours (sincerely|truly|faithfully|very truly)|very truly yours|respectfully( yours| submitted)?|(best|kind|warm) regards|cordially)\b[^\n]{0,20}$/im },
+  { type: "letter", score: 3, label: "closing", re: /(veuillez agr[ée]er|je vous prie d.agr[ée]er|salutations distingu[ée]es|bien (à vous|cordialement))/i },
+  { type: "letter", score: 3, label: "closing", re: /(وتفضلوا بقبول|مع فائق الاحترام|مع خالص التحيات|وتقبلوا فائق الاحترام)/ },
+];
+
+/**
+ * Documents made of named sections. Two or more of a type's section headings, each
+ * standing alone on its line, is a strong sign: that is what a CV or a research
+ * report looks like, whatever words it uses in between.
+ */
+const SECTIONS: { type: DocType; heads: string[] }[] = [
+  {
+    type: "cv",
+    heads: ["education", "education and training", "experience", "work experience", "professional experience", "employment",
+      "employment history", "publications", "skills", "qualifications", "certifications", "honors", "awards",
+      "formation", "expérience", "expérience professionnelle", "compétences", "diplômes",
+      "التعليم", "الخبرات", "الخبرة العملية", "المهارات", "المؤهلات"],
+  },
+  {
+    type: "report",
+    heads: ["abstract", "introduction", "methods", "materials and methods", "methodology", "results", "discussion",
+      "conclusion", "conclusions", "findings", "recommendations",
+      "résumé", "méthodes", "résultats", "conclusions et recommandations",
+      "الملخص", "المقدمة", "المنهجية", "النتائج", "الخلاصة", "التوصيات"],
+  },
+];
+const SECTION_SCORE = 4;
+
+function sectionHits(text: string): Map<DocType, string[]> {
+  const found = new Map<DocType, Set<string>>();
+  for (const raw of text.split(/\r?\n/)) {
+    // "3. RESULTS:", "II. Education" -> "results", "education"
+    const line = raw.trim().replace(/^([0-9ivx]+[.)]|[-•*])\s*/i, "").replace(/[:.]\s*$/, "").toLowerCase();
+    if (!line || line.length > 40) continue;
+    for (const s of SECTIONS) {
+      if (s.heads.includes(line)) {
+        const set = found.get(s.type) ?? new Set<string>();
+        set.add(line);
+        found.set(s.type, set);
+      }
+    }
+  }
+  const out = new Map<DocType, string[]>();
+  for (const [type, set] of found) if (set.size >= 2) out.set(type, [...set]);
+  return out;
 }
 
 /**
@@ -85,6 +156,22 @@ export function detectDocType(name: string, head: string, body: string): { type:
     s.at = Math.min(s.at, at);
     scores.set(type, s);
   }
+  // Shape: salutations, closings and section headings, on the text as it reads.
+  const all = `${name}\n${head}\n${body.length > 8000 ? body.slice(0, 8000) : body}`;
+  const add = (type: DocType, score: number, label: string) => {
+    const s = scores.get(type) ?? { score: 0, matched: [], at: Infinity };
+    s.score += score;
+    s.matched.push(label);
+    scores.set(type, s);
+  };
+  const seen = new Set<string>();
+  for (const sig of LINE_SIGNALS) {
+    const key = `${sig.type}:${sig.label}`;
+    if (seen.has(key) || !sig.re.test(all)) continue;   // a salutation counts once, in whichever language
+    seen.add(key);
+    add(sig.type, sig.score, sig.label);
+  }
+  for (const [type, heads] of sectionHits(all)) add(type, SECTION_SCORE, `sections: ${heads.join(", ")}`);
   // Equal scores are broken by position: a document announces what it is at the
   // top. Then by name, so the outcome never depends on dictionary order.
   let best: { type: DocType; score: number; matched: string[]; at: number } | null = null;

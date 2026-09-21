@@ -20,7 +20,7 @@ const ole = require("./ole/oleCfbExtractor.cjs") as {
 };
 
 /** Bump when extraction improves, so older content rows can be re-analyzed. */
-export const ANALYZER_VERSION = 2; // 2: document types (French elisions fixed, registration split from identity)
+export const ANALYZER_VERSION = 3; // 3: document types by shape - salutations, closings, section headings (measured on RVL-CDIP)
 
 export interface Analysis {
   kind: Kind;

@@ -80,6 +80,8 @@ npm run bench:crash               # 7 hard kills, then proves the result equals 
 npm run bench:scan -- "C:\Some\Big\Folder"
 npm run bench:ocr:corpus          # render the ground-truth OCR set with Edge (~7 min)
 npm run bench:ocr                 # OCR engines vs ground truth, in 3 languages
+npm run bench:rvl                 # document typing on 3,200 real labelled scans
+npm run bench:robust -- <dir>     # what breaks on real files, and how fast the rest goes
 ```
 
 Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB):
@@ -94,6 +96,7 @@ Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB)
 | search (EN/AR/FR) | 9–18 ms |
 | OCR (Windows OCR, 4 in parallel) | ~20 images/s; 97–99% word recall on Latin, 66–97% on Arabic ([docs/17](../docs/17-ocr.md)) |
 | PDF text layers | Arabic recall 94%, French/English 100% |
+| document typing, real scans (RVL-CDIP) | 39% of invoices/letters/resumes/reports found; 3% false typing on the rest ([docs/17](../docs/17-ocr.md)) |
 
 The synthetic corpus measures the machinery. Representative numbers (real PDFs,
 photos, scans, OCR) come from the real corpus in the next milestone.

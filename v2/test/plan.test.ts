@@ -106,6 +106,42 @@ test("a form asking for a date of birth is a registration form, not an identity 
   assert.equal(detectDocType("Registration Form", mention, mention)?.type, "registration");
 });
 
+// Measured on RVL-CDIP: real letters, CVs and reports are recognised by their
+// SHAPE far more than by their words. These are the shapes, and the near-misses
+// that must not count.
+test("a letter is known by its salutation and closing, in three languages", () => {
+  const en = "Hall, Dickler & Kent\n460 Park Avenue\n\nMay 12, 1979\n\nDear Fred:\n\nYou have requested our evaluation of the regulations.\n\nVery truly yours,\nJ. Smith";
+  assert.equal(detectDocType("", en.slice(0, 600), en)?.type, "letter");
+  assert.equal(detectDocType("", "", "Some text.\n\nSincerely,\nMary")?.type, "letter", "a closing alone is enough");
+  const fr = "École Saint-Joseph\n\nCher Monsieur,\n\nNous avons le plaisir de vous informer.\n\nVeuillez agréer nos salutations distinguées.";
+  assert.equal(detectDocType("", fr.slice(0, 600), fr)?.type, "letter");
+  const ar = "مدرسة مار يوسف\nحضرة الأستاذ جورج خوري المحترم\nتحية طيبة وبعد،\nيسرنا إعلامكم بموعد الاجتماع.\nوتفضلوا بقبول فائق الاحترام";
+  assert.equal(detectDocType("", ar.slice(0, 600), ar)?.type, "letter");
+});
+
+test("'dear' in the middle of a sentence is not a salutation", () => {
+  const news = "Prices rose again this quarter, and oh dear, the forecast is worse.\nAnalysts expect further increases.";
+  assert.equal(detectDocType("", news, news)?.type ?? null, null);
+});
+
+test("a CV and a research report are known by their section headings", () => {
+  const cv = "Stephen A. Fahrig, M.D.\n\nEDUCATION\nUniversity of Grenoble, Ph.D. 1972\n\nPROFESSIONAL EXPERIENCE\nAssistant Professor of Medicine\n\nPUBLICATIONS\n1. On cell growth.";
+  assert.equal(detectDocType("", cv.slice(0, 600), cv)?.type, "cv");
+  assert.equal(detectDocType("BIOGRAPHICAL SKETCH", "", "Position title: Assistant Professor")?.type, "cv");
+  const report = "Effects of filter ventilation\n\n1. Introduction\nThis study measures...\n\n2. Methods\nSamples were...\n\n3. Results\nThe data show...\n\nConclusions:\nFurther work is needed.";
+  assert.equal(detectDocType("", report.slice(0, 600), report)?.type, "report");
+  // One heading is not a structure: a letter that says "Results" once stays a letter.
+  const one = "Dear Ann,\n\nResults\nThe numbers are in.\n\nBest regards,\nTom";
+  assert.equal(detectDocType("", one, one)?.type, "letter");
+});
+
+test("real billing paperwork is an invoice without ever saying 'invoice'", () => {
+  const voucher = "PHILIP MORRIS U.S.A.\nPAYMENT VOUCHER\nPayee: Third Avenue Services\nAmount due: 863,848.00";
+  assert.equal(detectDocType("", voucher, voucher)?.type, "invoice");
+  assert.equal(detectDocType("", "", "Please remit to: P.O. Box 7566\nBalance due 11,486.00")?.type, "invoice");
+  assert.equal(detectDocType("PRINT PRODUCTION ESTIMATE", "", "Job 776031517")?.type, "quote");
+});
+
 test("every keyword survives normalization, so it can actually be matched", () => {
   // A keyword is compared against normalized text, so it must BE normalized text.
   // "carte d identite" is not: real French writes "carte d’identite", which

@@ -17,7 +17,9 @@
     "bench:scan": "node --disable-warning=ExperimentalWarning bench/scan.ts",
     "bench:crash": "node --disable-warning=ExperimentalWarning bench/crash.ts",
     "bench:ocr:corpus": "node --disable-warning=ExperimentalWarning bench/ocr-corpus.ts",
-    "bench:ocr": "node --disable-warning=ExperimentalWarning bench/ocr-bench.ts"
+    "bench:ocr": "node --disable-warning=ExperimentalWarning bench/ocr-bench.ts",
+    "bench:rvl": "node --disable-warning=ExperimentalWarning bench/rvl-bench.ts",
+    "bench:robust": "node --disable-warning=ExperimentalWarning bench/robust-bench.ts"
   },
   "dependencies": {
     "exifr": "7.1.3",
