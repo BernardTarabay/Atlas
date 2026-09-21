@@ -16,8 +16,8 @@ import type { Engine } from "../pipeline/engine.ts";
 import { config } from "../config.ts";
 import { log } from "../log.ts";
 import * as auth from "./auth.ts";
-import { listFolder, fileDetail, counts, photos, find } from "../library.ts";
-import { chat, READ_ONLY } from "../ai/assistant.ts";
+import { listFolder, fileDetail, counts, photos, find, dashboard, stats, type StatsQuery } from "../library.ts";
+import { chat, READ_ONLY, designCard } from "../ai/assistant.ts";
 import { aiAvailable, AiError } from "../ai/gemini.ts";
 import { search } from "../search/search.ts";
 import { addRoot, removeRoot, resolveFile, RootError } from "../roots.ts";
@@ -95,7 +95,8 @@ const APP_HEADERS = {
 };
 
 const STATIC: Record<string, string> = {
-  "/": "index.html", "/app.js": "app.js", "/app.css": "app.css", "/explorer.js": "explorer.js", "/assistant.js": "assistant.js",
+  "/": "index.html", "/app.js": "app.js", "/app.css": "app.css", "/explorer.js": "explorer.js", "/assistant.js": "assistant.js", "/dashboard.js": "dashboard.js",
+  "/dashboard.css": "dashboard.css", "/motion.css": "motion.css",
   "/explorer.css": "explorer.css", "/icon.svg": "icon.svg", "/manifest.webmanifest": "manifest.webmanifest",
 };
 const STATIC_TYPE: Record<string, string> = { html: "text/html; charset=utf-8", js: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8", svg: "image/svg+xml", webmanifest: "application/manifest+json" };
@@ -167,6 +168,7 @@ function browse(p: string | null) {
 
 export function startServer(db: Db, engine: Engine): http.Server {
   let statesCache: { at: number; value: ReturnType<typeof counts> } | null = null;
+  let dashCache: { at: number; value: ReturnType<typeof dashboard> } | null = null;
   const routes: [string, RegExp, Handler, { public?: boolean; local?: boolean }?][] = [
     ["GET", /^\/api\/health$/, () => ({ ok: true }), { public: true }],
     ["GET", /^\/api\/session$/, (req) => ({
@@ -248,6 +250,38 @@ export function startServer(db: Db, engine: Engine): http.Server {
         limit: Number(u.searchParams.get("limit") ?? 50),
         path: u.searchParams.get("in") ?? undefined,
       });
+    }],
+    // The status page. Headline numbers are cached for a second - they are GROUP
+    // BYs, and the page polls - while activity is read straight from memory.
+    ["GET", /^\/api\/dashboard$/, () => {
+      if (!dashCache || Date.now() - dashCache.at > 1000) dashCache = { at: Date.now(), value: dashboard(db) };
+      return { ...dashCache.value, busy: engine.isBusy, uptime: Math.round((Date.now() - engine.startedAt) / 1000), scan: engine.scanState };
+    }],
+    ["GET", /^\/api\/activity$/, () => {
+      const waiting = db.get<{ n: number }>("SELECT count(*) AS n FROM files WHERE state < 50")!.n;
+      const ocrPending = db.get<{ n: number }>("SELECT count(*) AS n FROM contents WHERE ocr = 1")!.n;
+      const total = db.get<{ n: number }>("SELECT count(*) AS n FROM files WHERE state <> 70")!.n;
+      return { ...engine.activity(), busy: engine.isBusy, scan: engine.scanState, waiting, ocrPending, total, counters: engine.counters };
+    }],
+    ["GET", /^\/api\/stats$/, (req) => {
+      const u = new URL(req.url, "http://x");
+      const t = (k: string) => u.searchParams.get(k) || undefined;
+      try {
+        return stats(db, {
+          by: (t("by") ?? "kind") as StatsQuery["by"], metric: t("metric") as StatsQuery["metric"],
+          kind: t("kind"), ext: t("ext"), dtype: t("dtype"), lang: t("lang"), folder: t("folder"),
+          limit: u.searchParams.has("limit") ? Number(u.searchParams.get("limit")) : undefined,
+        });
+      } catch (e) { throw new HttpError(400, (e as Error).message); }
+    }],
+    ["POST", /^\/api\/ai\/card$/, async (_req, _res, _m, b) => {
+      if (!aiAvailable()) throw new HttpError(503, "the assistant is off: no GEMINI_API_KEY");
+      const request = String(b.request ?? "").trim();
+      if (!request) throw new HttpError(400, "describe the card");
+      try { return await designCard(request); } catch (e) {
+        if (e instanceof AiError) throw new HttpError(502, e.message);
+        throw e;
+      }
     }],
     ["GET", /^\/api\/find$/, (req) => {
       const u = new URL(req.url, "http://x");

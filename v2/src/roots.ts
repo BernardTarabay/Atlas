@@ -52,6 +52,14 @@ export function removeRoot(db: Db, id: number) {
     db.run("DELETE FROM fts_name WHERE rowid IN (SELECT id FROM files WHERE root = ?)", id);
     db.run("DELETE FROM files WHERE root = ?", id);
     db.run("DELETE FROM roots WHERE id = ?", id);
+    // Content that no remaining file points at goes too: its text, its index
+    // entry and its row. Without this, forgetting a folder left every unique
+    // content it had ever contributed behind - searchable by text, counted as
+    // "unique", and attached to nothing.
+    const orphans = "SELECT id FROM contents WHERE NOT EXISTS (SELECT 1 FROM files WHERE files.content = contents.id)";
+    db.run(`DELETE FROM fts_text WHERE rowid IN (${orphans})`);
+    db.run(`DELETE FROM texts WHERE content IN (${orphans})`);
+    db.run(`DELETE FROM contents WHERE id IN (${orphans})`);
   });
 }
 

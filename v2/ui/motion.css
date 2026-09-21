@@ -1,0 +1,77 @@
+/* Motion, for the whole app, in one place.
+ *
+ * WHAT "SMOOTH" MEANS HERE
+ *
+ * Things that APPEAR ease in: menus, dialogs, the viewer, the assistant, a page
+ * you navigate to. Things you POINT AT respond at once and settle quickly. Only
+ * transform and opacity are ever animated, so the compositor does the work and
+ * nothing re-lays-out mid-motion.
+ *
+ * And, just as deliberately, what does NOT move: the rows of a 2,000-file list.
+ * Animating each row as a folder opens is the opposite of smooth - it is 2,000
+ * animations competing for the same frame. Lists appear at once; the pane they
+ * are in is what eases.
+ *
+ * Everything here switches off for people who have asked their system for less
+ * motion.
+ */
+
+:root {
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --t-fast: 120ms;
+  --t-mid: 180ms;
+  --t-slow: 280ms;
+}
+
+/* ---- responding to the pointer ---------------------------------------- */
+
+.ex-item, .ex-node, .ex-btn, .ex-menu button, .ex-crumbs a, .ex-head button,
+.ex-status .views button, .ex-crumbs .tab, .ai .launch, .ai .card button, .ex-viewer .tools button {
+  transition: background-color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out), opacity var(--t-fast) var(--ease-out), transform var(--t-fast) var(--ease-out);
+}
+.ex-btn:active:not(:disabled), .ai .launch:active, .ex-viewer .tools button:active { transform: scale(.96); }
+
+/* ---- things that appear ----------------------------------------------- */
+
+@keyframes m-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes m-rise { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes m-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes m-zoom { from { opacity: 0; transform: scale(.97); } to { opacity: 1; transform: none; } }
+
+.ex-menu { animation: m-pop var(--t-mid) var(--ease-out); transform-origin: top left; }
+.ex-dialog[open] { animation: m-rise var(--t-slow) var(--ease-out); }
+.ex-dialog::backdrop { animation: m-fade var(--t-slow) var(--ease-out); }
+.ex-viewer:not([hidden]) { animation: m-fade var(--t-mid) var(--ease-out); }
+.ex-viewer:not([hidden]) figure img { animation: m-zoom var(--t-slow) var(--ease-out); }
+.ai .panel:not([hidden]) { animation: m-rise var(--t-slow) var(--ease-out); transform-origin: bottom right; }
+.ai .launch:not([hidden]) { animation: m-zoom var(--t-mid) var(--ease-out); }
+.ai .msg { animation: m-rise var(--t-mid) var(--ease-out); }
+.ex-preview > * { animation: m-fade var(--t-mid) var(--ease-out); }
+
+/* The items pane eases in when a folder opens - the pane, never the rows. */
+.ex-items > .items, .ex-items > .ex-empty { animation: m-fade var(--t-fast) var(--ease-out); }
+
+/* ---- moving between pages --------------------------------------------- */
+
+/* Sections (Library, Photos, Status, Folders) cross-fade through the View
+   Transitions API; the header is named so it stays put instead of fading with
+   the page. Folder-to-folder navigation is not a section change and does not
+   transition - browsing must stay instant. */
+#bar { view-transition-name: app-bar; }
+::view-transition-old(root) { animation: var(--t-mid) var(--ease-in-out) both m-fade-out; }
+::view-transition-new(root) { animation: var(--t-slow) var(--ease-out) both m-enter; }
+@keyframes m-fade-out { to { opacity: 0; } }
+@keyframes m-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* Programmatic scrolls (walking search matches, revealing a file) glide. */
+.ex-items, .ex-tree, .ai .log { scroll-behavior: smooth; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after, ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

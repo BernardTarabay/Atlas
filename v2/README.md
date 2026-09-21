@@ -165,6 +165,34 @@ and hashing, and its state lives on the content row: a crash leaves it PENDING a
 it runs again. `ATLAS_OCR_WORKERS=0` turns it off; without the helper, contents
 simply stay "waiting for OCR".
 
+## The status page
+
+Cards, and they are yours: drag one by holding the left button and the others
+slide out of its way; change what a breakdown splits by from its menu; make it
+wide or narrow; remove it; add one from the presets. The headline cards are
+files in the library, waiting, photos, duplicates resolved (with what would be
+freed - and a line saying nothing was deleted), and files that could not be
+read. One "By type" card turns through PDF, Word, Excel, PowerPoint, images and
+the rest instead of taking a card each.
+
+The **live pipeline** card shows every reader and OCR slot and the file each is
+on, how long it has been on it, files/s and MB/s over the last minute, an ETA,
+and what finished in the last minute - which lingers so a fast file does not
+flash past unseen.
+
+A card is data - what to count, split how, narrowed how - so the assistant can
+design one from a sentence ("Arabic invoices by year"). That costs **one**
+request, once; the card then keeps itself current from the local database for
+free. The free Gemini tier is for asking, not for keeping numbers up to date.
+
+Every figure is a `GROUP BY`, true at any size. The page polls fast only while
+something is happening and stops when the tab is hidden.
+
+**Motion** is one policy in `ui/motion.css`: what appears eases in, what you
+point at responds at once, only `transform` and `opacity` ever animate, sections
+cross-fade and folder-to-folder browsing stays instant. Long lists never
+animate row by row. All of it turns off under "reduce motion".
+
 ## The assistant
 
 A panel in the bottom-right corner that does what the toolbar does, by

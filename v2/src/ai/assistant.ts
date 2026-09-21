@@ -147,3 +147,43 @@ export async function chat(message: string, history: { role: string; text: strin
   const actions = Array.isArray(out.actions) ? out.actions.filter((a) => a && typeof a.type === "string" && (ACTIONS as readonly string[]).includes(a.type)) : [];
   return { reply: String(out.reply ?? ""), actions };
 }
+
+/**
+ * A status-page card from a sentence. ONE call, and the result is a small
+ * description (what to count, split how, narrowed how) that the page then keeps
+ * current from the local database for ever - so a card costs a single request on
+ * the free tier when it is made, and nothing at all after that.
+ */
+const CARD_SCHEMA = {
+  type: "object",
+  properties: {
+    title: { type: "string", description: "A short card title in the user's language, e.g. 'PDFs by year'." },
+    by: { type: "string", enum: ["kind", "ext", "dtype", "lang", "year", "month", "folder", "rule", "state"], description: "What to split by. kind=file kind, ext=extension, dtype=document type (invoice, receipt...), lang=language, year/month=the document's date, folder=top library folder, rule=the filing rule, state=pipeline state." },
+    metric: { type: "string", enum: ["count", "bytes"], description: "Count files, or add up their size." },
+    chart: { type: "string", enum: ["bars", "columns", "donut", "list"], description: "bars for ranked categories, columns for years/months, donut only for 2 to 5 parts of a whole, list when names matter more than sizes." },
+    kind: { type: ["string", "null"], description: "Only this kind: image, video, audio, pdf, doc, sheet, slides, text, archive." },
+    ext: { type: ["string", "null"], description: "Only this extension, without the dot." },
+    dtype: { type: ["string", "null"], description: "Only this document type." },
+    lang: { type: ["string", "null"], description: "Only this language: en, ar, fr." },
+    folder: { type: ["string", "null"], description: "Only inside this library folder." },
+    reply: { type: "string", description: "One short sentence to the user. If the request cannot be a card (it asks for something Atlas does not track), say so here and set by to kind." },
+  },
+  required: ["title", "by", "metric", "chart", "reply"],
+};
+
+const CARD_SYSTEM = `You design one card for the status page of Atlas, a local file organizer.
+A card is a single breakdown: count files (or add up their size), split by one property,
+optionally narrowed to a kind, extension, document type, language or folder. Turn the
+user's request into that. Pick the chart that reads best. Keep the title short. Answer in
+the user's language. Never promise data Atlas does not have: it knows kinds, extensions,
+document types, languages, document dates, library folders, filing rules and pipeline
+states - not authors, tags, owners or who opened what.`;
+
+export interface CardSpec {
+  title: string; by: string; metric: string; chart: string; reply: string;
+  kind?: string | null; ext?: string | null; dtype?: string | null; lang?: string | null; folder?: string | null;
+}
+
+export async function designCard(request: string): Promise<CardSpec> {
+  return await ask(CARD_SYSTEM, `The user asked for: ${request.slice(0, 600)}`, CARD_SCHEMA) as CardSpec;
+}

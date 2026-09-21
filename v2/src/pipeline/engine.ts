@@ -60,6 +60,17 @@ export class Engine {
   };
   ocr: OcrService | null = null;
   private ocrInflight = new Set<number>();
+  /** What each OCR slot is reading, for the live view: content id -> file and start time. */
+  private ocrActive = new Map<number, { file: string; since: number }>();
+  /**
+   * The last few files finished, so the live view can show them for a moment.
+   * A fast file would otherwise flash past with nobody able to see that it went
+   * through - V1 learned that in its jobs dock.
+   */
+  private recent: { file: string; at: number; outcome: "new" | "copy" | "ocr" | "failed" }[] = [];
+  /** One sample a second of the hashed counter, for files/s over the last minute. */
+  private samples: { t: number; n: number; bytes: number }[] = [];
+  private sampler: NodeJS.Timeout | null = null;
   private ocrOut: OcrOutcome[] = [];
   readonly startedAt = Date.now();
   onBusyChange: (busy: boolean) => void = () => {};
@@ -84,6 +95,11 @@ export class Engine {
     );
     // OCR is optional: without an engine, contents simply stay "waiting for OCR".
     if (config.ocrWorkers > 0 && OcrService.available()) this.ocr = new OcrService(config.ocrWorkers);
+    this.sampler = setInterval(() => {
+      this.samples.push({ t: Date.now(), n: this.counters.hashed, bytes: this.counters.bytes });
+      if (this.samples.length > 61) this.samples.shift();
+    }, 1000);
+    this.sampler.unref();
     this.tick();
     log.info("engine started", { workers: config.analyzeWorkers, ocrWorkers: this.ocr ? config.ocrWorkers : 0, roots: this.roots.size });
   }
@@ -91,11 +107,38 @@ export class Engine {
   async stop() {
     this.running = false;
     if (this.timer) clearTimeout(this.timer);
+    if (this.sampler) clearInterval(this.sampler);
     await this.pool?.stop();
     this.flush(); // results that finished before the pool stopped are not lost
     this.flushOcr();
     this.ocr?.close();
     log.info("engine stopped");
+  }
+
+  private remember(file: string, outcome: "new" | "copy" | "ocr" | "failed") {
+    this.recent.push({ file, at: Date.now(), outcome });
+    if (this.recent.length > 24) this.recent.shift();
+  }
+
+  /**
+   * What the pipeline is doing right now: every worker and the file it is on,
+   * every OCR slot, what just finished, and the rate over the last minute.
+   * Read-only and cheap - it touches memory, never the database.
+   */
+  activity() {
+    const now = Date.now();
+    const first = this.samples[0];
+    const last = this.samples[this.samples.length - 1];
+    const span = first && last ? (last.t - first.t) / 1000 : 0;
+    return {
+      now,
+      workers: this.pool?.activity() ?? [],
+      ocr: [...this.ocrActive.values()].map((a, i) => ({ worker: i + 1, file: a.file, since: a.since })),
+      ocrSlots: this.ocr ? config.ocrWorkers : 0,
+      recent: this.recent.filter((r) => now - r.at < 60_000).slice(-12).reverse(),
+      rate: span > 0 ? { files: (last.n - first.n) / span, bytes: (last.bytes - first.bytes) / span, over: Math.round(span) } : { files: 0, bytes: 0, over: 0 },
+      queued: this.queue.length,
+    };
   }
 
   /** Something outside the engine changed a row's state: look again now. */
@@ -281,6 +324,7 @@ export class Engine {
       if (!root) continue;
       this.ocrInflight.add(r.cid);
       const abs = path.join(root, ...r.path.split("/"));
+      this.ocrActive.set(r.cid, { file: abs, since: Date.now() });
       ocr.recognize(abs, r.kind === "pdf" ? "pdf" : "image")
         .then((result) => this.ocrOut.push({ cid: r.cid, result }))
         .catch((e: Error) => this.ocrOut.push({ cid: r.cid, error: e.message.slice(0, 300) }))
@@ -299,6 +343,9 @@ export class Engine {
     db.tx(() => {
       for (const o of out) {
         this.ocrInflight.delete(o.cid);
+        const act = this.ocrActive.get(o.cid);
+        this.ocrActive.delete(o.cid);
+        if (act) this.remember(act.file, o.error ? "failed" : "ocr");
         const c = db.get<{ title: string | null; dtype: string | null; lang: string | null; meta: string | null; quality: string | null; kind: string }>(
           "SELECT title, dtype, lang, meta, quality, kind FROM contents WHERE id = ?", o.cid);
         if (!c) continue;
@@ -376,6 +423,7 @@ export class Engine {
 
     db.tx(() => {
       for (const r of done) {
+        this.remember(r.job.abs, r.a ? "new" : "copy");
         const j = r.job as Job & { mtime: number };
         this.inflight.delete(j.id);
         this.counters.bytes += j.size;
@@ -399,6 +447,7 @@ export class Engine {
         this.retryAt.delete(j.id);
       }
       for (const f of failed) {
+        this.remember(f.job.abs, "failed");
         this.inflight.delete(f.job.id);
         this.counters.errors++;
         // A crashed/timed-out analysis must not leave its duplicates waiting forever.

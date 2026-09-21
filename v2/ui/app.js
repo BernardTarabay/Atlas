@@ -5,6 +5,7 @@
 // Browsing the library itself is explorer.js, which is a file manager.
 import { showExplorer, showSearchResults, showPhotos, explorerFind, currentScope } from "./explorer.js";
 import { mountAssistant } from "./assistant.js";
+import { mountDashboard, unmountDashboard } from "./dashboard.js";
 const $ = (sel, el = document) => el.querySelector(sel);
 const view = $("#view");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -106,26 +107,8 @@ async function showFile(id) {
 }
 
 async function showStatus() {
-  const s = await api("/api/status");
-  const by = Object.fromEntries(s.states.map((x) => [x.state, x]));
-  const total = s.states.reduce((a, x) => a + x.n, 0);
-  const done = by[50]?.n ?? 0, pending = (by[0]?.n ?? 0) + (by[20]?.n ?? 0);
-  const pct = total ? Math.round((done / total) * 100) : 100;
-  const scanning = s.scan.scanning != null ? s.roots.find((r) => r.id === s.scan.scanning)?.path : null;
-  view.innerHTML = `<h1>Status</h1>
-    <div class="panel"><div class="row" style="justify-content:space-between"><b>${s.busy ? "Working" : "Idle — everything processed"}</b><span class="muted small">up ${Math.round(s.uptime / 60)} min · ${s.workers.busy}/${s.workers.total} workers busy</span></div>
-      <div class="bar-track" style="margin-top:10px"><div class="bar-fill" style="width:${pct}%"></div></div>
-      <p class="muted small">${fmtNum(done)} of ${fmtNum(total)} files processed (${pct}%)${scanning ? ` · scanning ${esc(scanning)}` : ""}</p></div>
-    <div class="grid">
-      <div class="stat"><span class="muted">Files</span><b>${fmtNum(total)}</b><span class="muted small">${fmtBytes(s.states.reduce((a, x) => a + (x.bytes || 0), 0))}</span></div>
-      <div class="stat"><span class="muted">Waiting</span><b>${fmtNum(pending)}</b></div>
-      <div class="stat"><span class="muted">Duplicate copies</span><b>${fmtNum(s.duplicates.copies)}</b><span class="muted small">${fmtBytes(s.duplicates.bytes)} reclaimable later</span></div>
-      <div class="stat"><span class="muted">Waiting for OCR</span><b>${fmtNum(s.ocrPending)}</b></div>
-      <div class="stat"><span class="muted">Missing</span><b>${fmtNum(by[70]?.n ?? 0)}</b></div>
-      <div class="stat"><span class="muted">Could not read</span><b class="${by[90] ? "err" : ""}">${fmtNum(by[90]?.n ?? 0)}</b></div>
-    </div>
-    <div class="panel" style="margin-top:16px"><h2>Folders</h2><ul class="list">${s.roots.map((r) => `<li><span class="name" dir="auto">${esc(r.path)}</span><span class="meta">${esc(r.role)} · ${r.online ? '<span class="ok">online</span>' : '<span class="err">offline</span>'}${r.scan_at ? ` · scanned ${fmtDate(r.scan_at)} (${fmtNum(r.scan_files)} files, ${(r.scan_ms / 1000).toFixed(1)} s)` : ""}${r.scan_error ? ` · <span class="warn">${esc(r.scan_error)}</span>` : ""}</span></li>`).join("") || '<li class="muted">No folders yet.</li>'}</ul></div>`;
-  refreshTimer = setTimeout(() => location.hash === "#/status" && route(), 2000);
+  document.body.classList.remove("explorer");
+  await mountDashboard(view);
 }
 
 async function showRoots() {
@@ -185,6 +168,7 @@ async function showLogin() {
 
 async function route() {
   clearTimeout(refreshTimer);
+  if (location.hash !== "#/status") unmountDashboard();
   const h = location.hash || "#/lib/";
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("on", h.startsWith(`#/${a.dataset.nav}`)));
   try {
@@ -230,7 +214,27 @@ function syncSearchScope() {
   box.placeholder = scope ? `Search in ${scope.split("/").pop()}` : "Search names and contents — English, العربية, français";
 }
 
-window.addEventListener("hashchange", () => { route().then(syncSearchScope); });
+/**
+ * Which part of the app a hash belongs to. Moving between parts cross-fades;
+ * moving WITHIN one (folder to folder, search to search) does not, because
+ * browsing has to stay instant.
+ */
+const section = (h) => (h.startsWith("#/lib/") || h.startsWith("#/search") ? "library" : h.split(/[/?]/)[1] || "library");
+let currentSection = section(location.hash || "#/lib/");
+
+window.addEventListener("hashchange", () => {
+  const next = section(location.hash);
+  const go = () => route().then(syncSearchScope);
+  const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (next !== currentSection && document.startViewTransition && !calm) {
+    // A transition is abandoned (and its promises reject) if another navigation
+    // starts first or the tab is hidden. That is fine - the page still renders -
+    // so the rejections are caught rather than reported as errors.
+    const t = document.startViewTransition(go);
+    for (const p of [t.ready, t.finished, t.updateCallbackDone]) p.catch(() => {});
+  } else go();
+  currentSection = next;
+});
 api("/api/session").then((s) => {
   if (!s.authenticated) { location.hash = "#/login"; route(); return; }
   route().then(syncSearchScope);
