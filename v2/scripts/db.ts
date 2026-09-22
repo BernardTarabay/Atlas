@@ -3,6 +3,7 @@
 //   npm run db -- check              full integrity check (Atlas may be running)
 //   npm run db -- backup             a verified backup now (Atlas may be running)
 //   npm run db -- list               backups, newest first
+//   npm run db -- sanity             the report-only sanity check (Atlas may be running)
 //   npm run db -- restore [file]     replace the database with a backup (newest by
 //                                    default). Atlas must be stopped. The current
 //                                    database is moved aside, never deleted.
@@ -10,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "../src/config.ts";
 import { checkDatabase, listBackups, makeBackup, restoreBackup } from "../src/db/maintenance.ts";
+import { runSanity, saveReport, formatReport } from "../src/db/sanity.ts";
 import { readIntent } from "../src/intent.ts";
 import { engineRunning } from "./_engine.ts";
 
@@ -28,6 +30,13 @@ if (cmd === "check") {
   if (r.ok) console.log(`backed up and verified: ${r.backup.file} (${mb(r.backup.bytes)}, ${r.ms} ms)${r.removed.length ? `; ${r.removed.length} old backup(s) rotated out` : ""}`);
   else console.error(`backup failed (${r.stage}):\n  ${r.detail.join("\n  ")}`);
   process.exit(r.ok ? 0 : 2);
+} else if (cmd === "sanity") {
+  if (!fs.existsSync(live)) { console.error(`No database at ${live}`); process.exit(1); }
+  const r = await runSanity(live);
+  const file = saveReport(r);
+  console.log(formatReport(r));
+  console.log(`\nsaved: ${file}`);
+  process.exit(r.errors ? 2 : 0);
 } else if (cmd === "list") {
   const all = listBackups();
   if (!all.length) console.log(`no backups yet in ${config.backupDir}`);
@@ -60,6 +69,6 @@ if (cmd === "check") {
     process.exit(2);
   }
 } else {
-  console.log("usage: npm run db -- check | backup | list | restore [file]");
+  console.log("usage: npm run db -- check | backup | list | sanity | restore [file]");
   process.exit(cmd ? 1 : 0);
 }

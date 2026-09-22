@@ -1,6 +1,6 @@
 // A worker that misbehaves on purpose, for the pool's clocks (test/retry.test.ts).
 // The job's `abs` names the behaviour:
-//   moving  reads slowly but steadily (progress every 100 ms), then finishes
+//   moving  reads slowly but steadily (progress every 100 ms for 2.5 s), then finishes
 //   stall   reports a little progress, then goes silent while "reading"
 //   hang    hashes at once, then never finishes analysing
 import { parentPort } from "node:worker_threads";
@@ -20,7 +20,7 @@ port.on("message", (m: { t: string; id: number; abs: string }) => {
   if (m.abs === "moving") {
     const t = setInterval(() => {
       port.postMessage({ t: "progress", id: m.id, bytes: ++n });
-      if (n === 7) { clearInterval(t); port.postMessage({ t: "hash", id: m.id, sha }); }
+      if (n === 25) { clearInterval(t); port.postMessage({ t: "hash", id: m.id, sha }); }
     }, 100);
   } else if (m.abs === "stall") {
     const t = setInterval(() => {

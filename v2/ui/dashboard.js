@@ -507,6 +507,40 @@ async function refreshDash() {
 }
 
 /**
+ * The sanity check's report, opened from the header: what disagrees, how much,
+ * and what a person can do. Nothing here repairs anything.
+ */
+async function toggleHealth() {
+  const box = D.root?.querySelector("[data-health]");
+  if (!box) return;
+  if (!box.hidden) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `<div class="fine">Loading the last report…</div>`;
+  try { renderHealth(box, await api("/api/sanity")); } catch (e) { box.innerHTML = `<div class="fine">${esc(e.message)}</div>`; }
+}
+
+function renderHealth(box, r) {
+  const order = { error: 0, warn: 1, info: 2 };
+  const label = { error: "Problem", warn: "Look at", info: "Note" };
+  const rows = [...(r.findings ?? [])].sort((a, b) => order[a.level] - order[b.level]);
+  box.innerHTML = `<div class="health-top"><b>Health check</b>
+      <span class="fine">${r.at ? `${esc(new Date(r.at).toLocaleString())} · ${r.checked.length} checks · ${r.rehash.sampled} files read again (${r.rehash.mb} MB), ${r.rehash.verified} match` : "not run yet"}</span>
+      <span class="grow"></span><button type="button" class="act" data-health-run>Check now</button></div>
+    ${rows.length ? rows.map((f) => `<div class="finding ${f.level}"><span class="lvl">${label[f.level]}</span>
+      <div><div class="ft">${esc(f.title)}: <b>${fmtNum(f.count)}</b></div><div class="fine">${esc(f.fix)}</div>
+      ${f.samples.slice(0, 3).map((x) => `<div class="smp" dir="auto">${esc(x)}</div>`).join("")}</div></div>`).join("")
+      : `<div class="fine">${r.at ? "Everything agrees: the database, the disk and the rules." : "The first check runs a few minutes after startup, then daily."}</div>`}
+    <div class="fine">Report only: nothing is repaired automatically.</div>`;
+  box.querySelector("[data-health-run]").addEventListener("click", async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true;
+    b.textContent = "Checking…";
+    try { renderHealth(box, await api("/api/sanity", {})); await refreshDash(); }
+    catch (err) { b.textContent = err.message; }
+  });
+}
+
+/**
  * The database itself: checked at startup, backed up daily. One quiet line while
  * all is well; a banner that cannot be missed when the check fails - Atlas has
  * stopped changing the database, and the way back is a restore.
@@ -522,11 +556,18 @@ function paintSafety() {
     : b.error ? `last backup failed: ${b.error}`
     : b.at ? `backed up ${fmtDur(Math.max(60, (Date.now() - b.at) / 1000))} ago (${fmtBytes(b.bytes)}, ${b.count} kept)`
     : "first backup in a few minutes";
-  line.textContent = s.integrity === "checking" ? "Checking the database…"
-    : s.integrity === "ok" ? `Database checked · ${backup}` : "Database damaged";
+  const sc = s.sanity;
+  const health = !sc ? "" : sc.running ? "health check running…"
+    : sc.at == null ? "no health check yet"
+    : sc.errors ? `health check: ${sc.errors} problem${sc.errors > 1 ? "s" : ""}`
+    : sc.warnings ? `health check: ${sc.warnings} to look at` : "health check: all agrees";
+  line.innerHTML = esc(s.integrity === "checking" ? "Checking the database…"
+    : s.integrity === "ok" ? `Database checked · ${backup}` : "Database damaged")
+    + (health && s.integrity === "ok" ? ` · <button type="button" class="linkish${sc.errors ? " bad" : sc.warnings ? " warn" : ""}" data-health-open>${esc(health)}</button>` : "");
   line.className = `safety ${s.integrity === "failed" ? "bad" : b.error ? "warn" : ""}`;
   line.title = b.dir ? `Backups: ${b.dir}` : "";
   alarm.hidden = s.integrity !== "failed";
+  line.querySelector("[data-health-open]")?.addEventListener("click", toggleHealth);
   if (s.integrity === "failed") {
     alarm.innerHTML = `<b>The database failed its integrity check.</b> Atlas has stopped changing it, and no file on disk is
       affected. To recover: stop Atlas, run <code>npm run db -- restore</code>, and follow what it prints.
@@ -958,6 +999,7 @@ export async function mountDashboard(view) {
     <span class="safety" data-safety></span><span class="grow"></span>
     <button type="button" class="dash-btn" data-reset>Reset layout</button></div>
     <div class="alarm" data-alarm role="alert" hidden></div>
+    <div class="health" data-health hidden></div>
     <div class="dash-grid"></div>`;
   view.replaceChildren(page);
   D.root = page;

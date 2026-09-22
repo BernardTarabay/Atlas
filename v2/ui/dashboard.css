@@ -85,6 +85,21 @@
 .alarm { margin: -6px 0 18px; padding: 12px 16px; border-radius: 14px; border: 1px solid var(--bad); color: var(--ink);
   background: color-mix(in srgb, var(--bad) 10%, transparent); font-size: 13.5px; line-height: 1.5; }
 .alarm[hidden] { display: none; }
+.dash-head .safety .linkish { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline dotted; cursor: pointer; }
+.dash-head .safety .linkish.warn { color: var(--warn); }
+.dash-head .safety .linkish.bad { color: var(--bad); font-weight: 600; }
+.health { margin: -6px 0 18px; padding: 12px 16px; border-radius: 14px; border: 1px solid var(--edge); background: var(--glass); font-size: 13px; }
+.health[hidden] { display: none; }
+.health-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.health-top .grow { flex: 1; }
+.health .act { padding: 4px 12px; border: 1px solid var(--edge); border-radius: 99px; background: none; color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; }
+.health .act:disabled { opacity: .6; cursor: default; }
+.finding { display: flex; gap: 10px; padding: 8px 0; border-top: 1px solid var(--edge); }
+.finding .lvl { flex: none; width: 58px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-3); padding-top: 2px; }
+.finding.error .lvl { color: var(--bad); }
+.finding.warn .lvl { color: var(--warn); }
+.finding .ft { color: var(--ink); }
+.finding .smp { font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
 .alarm code { font-size: 12.5px; padding: 1px 5px; border-radius: 5px; background: var(--track); }
 .alarm .fine { display: block; margin-top: 6px; }
 .dash-head .live.on i { background: var(--good); animation: dash-pulse 1.6s var(--ease) infinite; }

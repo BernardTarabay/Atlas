@@ -504,7 +504,7 @@ Covers changes #10, #11 and #12 in §9.
 - No automatic repair and no automatic restore. Both replace data, so a person runs the command. The page and the log say exactly which one.
 - The intent export is not rotated alongside the backups: its own history already keeps every version that dropped or changed a decision.
 
-### Phase 4: the filesystem model (done 2026-09-22, not yet committed)
+### Phase 4: the filesystem model (done 2026-09-22, commit `ff4d80f`)
 
 Covers changes #13–#20 in §9, plus the fallback-walker fixes in §5.
 
@@ -550,3 +550,36 @@ Covers changes #13–#20 in §9, plus the fallback-walker fixes in §5.
 - Relocation to another drive letter is automatic only on a unique match of serial and folder. Accepting a *different* disk is always a person's decision.
 - There is no screen yet to resolve an ambiguous carry by hand. It's counted on the Status page, and the choice stays on the missing row (and in the export) until then.
 - The scan watchdog could not be tested automatically (it needs a listing that hangs). It shares its stop path with the volume refusal, which is tested. A real hanging-share test belongs to Phase 8.
+
+### Phase 5: the sanity checker (done 2026-09-22, not yet committed)
+
+Covers change #21 in §9, with the §10 inventory extended by what Phases 1–4 introduced.
+
+| Change | Where |
+|---|---|
+| **29 checks** in three levels, run on a worker thread with a **read-only** connection. It cannot write: a test asserts SQLite's `data_version` is unchanged | `db/sanity-worker.ts` |
+| **error** (a contradiction: a bug or damage): `quick_check`; files of an unregistered root; links to missing content; MISSING rows with a plan; files filed unread; DONE with no place and no reason; two files in one place; content groups without exactly one representative; ops left STARTED; and **bytes changed while size and mtime did not**, from a bounded re-hash sample (100 files, 512 MB) | `db/sanity-worker.ts` |
+| **warn** (a person should look): FAILED without a kind; orphan search entries or text; names colliding case-insensitively; folders offline, on a different disk, or not scanned in 3 rescan intervals; files suspect for over a day; the intent export missing or out of date; no verified backup in two backup intervals | `db/sanity-worker.ts` |
+| **info** (housekeeping): content nothing uses any more; contents never analysed; OCR with no readable copy; choices waiting on missing files; temp-file litter; `replaced-*` databases kept by a restore; thumbnails that aren't pictures; sampled files gone since the last scan | `db/sanity-worker.ts` |
+| **Report-only.** Each finding carries a count, up to 10 examples, and what to do. Nothing is repaired | `db/sanity.ts` |
+| **When it runs.** Daily after the backup (`Maintenance.maybeSanity`), never while the integrity check hasn't passed; on demand with `POST /api/sanity`, the Status page's **Check now**, or `npm run db -- sanity` (exit code 2 on errors). The newest 30 reports are kept in `<home>/sanity/` | `db/maintenance.ts`, `server/http.ts`, `scripts/db.ts` |
+| **Status page.** The header adds "health check: …" (warning or problem colour); clicking it opens the report, with a **Check now** button | `ui/dashboard.js`, `ui/dashboard.css` |
+
+**Verified:**
+
+- **On the live dev database: 0 errors, 1 warning.** The warning is the one real issue the audit found (`WWL DATA POINT ANALYSIS.txt` / `WWL Data Point Analysis.txt`): no false positives. 100 files were re-read and all 100 matched. It took 33 s from cold caches (the 280 MB read once, plus antivirus on first opens) and 2.5 s warm. Every SQL check is ≤ 14 ms.
+- `npm test`: 88/88 (3 new in `test/sanity.test.ts`), stable over three consecutive full runs:
+  - a clean processed library: no errors and no warnings, every re-read file matches, nothing written;
+  - a database with 20 different planted contradictions: every one found at its level, the changed-bytes file named, nothing written or deleted;
+  - report rotation, and the daily schedule (not before integrity passes, not twice a day unless asked).
+- With the hash comparison removed, the planted-contradiction test fails.
+- `tsc` is clean.
+- `bench:crash`: 11/11.
+- Live in the browser: the header link, the report panel, and **Check now** running a new check.
+
+**Found while doing this:** the Phase 1 pool test used a 250 ms stall window, and under the full, now larger, parallel suite a replacement worker couldn't boot in time. It failed consistently. The design was fine (the real window is 60 s) but the test's margin wasn't; it now uses 1.5 s against 2.5 s of steady reading.
+
+**Decisions:**
+
+- The re-hash is a sample, not a full pass: 100 files and 512 MB a day is seconds. Over months it covers a meaningful share of an archive without ever becoming a job of its own.
+- There is still no repair tool. The findings that would need one (orphan index entries, unused content) are all derived data and harmless; a pruning command can come later if the counts grow.

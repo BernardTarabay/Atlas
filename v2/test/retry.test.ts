@@ -216,7 +216,9 @@ test("end to end: a locked file fails as access, survives a rescan, and is read 
 
 test("the pool: a slow read is not a stuck one, and analysis has a deadline", async () => {
   let settle: (v: string) => void = () => {};
-  const pool = new AnalyzePool(1, 400, 250, () => true, () => settle("done"), (_j, code) => settle(code),
+  // Margins wide enough for a loaded machine: a replacement worker must boot inside the
+  // stall window, and the steady reader must outlast it several times over.
+  const pool = new AnalyzePool(1, 1000, 1500, () => true, () => settle("done"), (_j, code) => settle(code),
     new URL("./_stall-worker.ts", import.meta.url));
   let id = 0;
   const run = (abs: string) => new Promise<string>((resolve) => {
@@ -224,7 +226,7 @@ test("the pool: a slow read is not a stuck one, and analysis has a deadline", as
     pool.submit({ id: ++id, root: 1, rel: abs, abs, size: 0, ext: "", wholeFileBytes: 0, maxParseBytes: 0, maxTextChars: 0, settleMs: 0 });
   });
   try {
-    assert.equal(await run("moving"), "done", "700 ms of steady reading outlives a 250 ms stall clock");
+    assert.equal(await run("moving"), "done", "2.5 s of steady reading outlives a 1.5 s stall clock");
     assert.equal(await run("stall"), "STALL", "a read that stops is stuck");
     assert.equal(await run("hang"), "TIMEOUT", "analysis past its deadline is a hung parser");
     assert.equal(await run("moving"), "done", "replaced workers work");

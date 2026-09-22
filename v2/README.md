@@ -163,6 +163,19 @@ Measured on the development database (280 MB):
 | Verified backup | 2.3 s |
 | Restore | 1.8 s |
 
+**The sanity check** (`npm run db -- sanity`, or **health check** in the Status page header) asks the database whether it agrees with itself, with the disk, and with the rules of this code. It runs daily after the backup, on a background thread with a read-only connection, so it can change nothing. It checks:
+
+- **Rows that point at nothing:** files of an unregistered folder, links to missing content, search entries for nothing.
+- **States that can't happen:** a missing file still in the library, a file filed without being read, two files in one place, a group of identical files with no copy (or two) in the library.
+- **Names that would collide on disk:** names that differ only in capitals.
+- **Folders:** offline, a different disk found, or not scanned for long; files suspected gone for over a day.
+- **Your decisions:** whether the export is up to date, and choices waiting on missing files.
+- **Backups:** whether a recent verified one exists.
+- **Leftovers:** temporary files, and thumbnails that aren't pictures.
+- **A sample of files read again:** up to 100 files and 512 MB are re-hashed, which catches bytes that changed while size and date didn't. That's the one change Atlas's scans can't see.
+
+It **repairs nothing**: each finding says what it means and what a person can do. The newest 30 reports are kept in `<home>/sanity/`. On the development database it takes 2.5 s warm, 33 s from cold caches.
+
 ## Tests and benchmarks
 
 ```bash
@@ -178,6 +191,7 @@ npm run bench:rvl                 # document typing on 3,200 real labelled scans
 npm run bench:robust -- <dir>     # what breaks on real files, and how fast the rest goes
 npm run intent -- list            # your decisions, exported (see above)
 npm run db -- check               # the database's integrity, backups, restore (see above)
+npm run db -- sanity              # the report-only sanity check (see above)
 ```
 
 Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB):

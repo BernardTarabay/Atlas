@@ -29,6 +29,7 @@ import { config } from "../config.ts";
 import { log } from "../log.ts";
 import { Db } from "./db.ts";
 import { MIGRATIONS } from "./schema.ts";
+import { runSanity, saveReport, latestReport, type SanityReport } from "./sanity.ts";
 
 export interface CheckResult { ok: boolean; detail: string[]; ms: number }
 export interface BackupInfo { file: string; at: number; bytes: number }
@@ -102,6 +103,8 @@ export interface Health {
   detail: string[];
   checkedAt: number;
   backup: { last: BackupInfo | null; count: number; running: boolean; error: string | null; dir: string };
+  /** The last sanity check (db/sanity.ts): its headline counts. */
+  sanity: { at: number | null; running: boolean; errors: number; warnings: number; infos: number; error: string | null };
 }
 
 export class Maintenance {
@@ -115,9 +118,11 @@ export class Maintenance {
     this.file = file;
     this.onCorrupt = onCorrupt;
     const all = listBackups();
+    const last = latestReport();
     this.health = {
       integrity: "checking", detail: [], checkedAt: 0,
       backup: { last: all[0] ?? null, count: all.length, running: false, error: null, dir: config.backupDir },
+      sanity: { at: last?.at ?? null, running: false, errors: last?.errors ?? 0, warnings: last?.warnings ?? 0, infos: last?.infos ?? 0, error: null },
     };
   }
 
@@ -128,8 +133,10 @@ export class Maintenance {
       for (const n of fs.readdirSync(config.backupDir)) if (/^atlas-.*\.db\.part$/.test(n)) fs.rmSync(path.join(config.backupDir, n), { force: true });
     } catch { /* no backup folder yet */ }
     void this.check();
-    const first = setTimeout(() => void this.maybeBackup(), 3 * 60_000);
-    const every = setInterval(() => void this.maybeBackup(), 10 * 60_000);
+    // Backup, then the sanity check, each when due: a day since the last one.
+    const due = () => void this.maybeBackup().then(() => this.maybeSanity());
+    const first = setTimeout(due, 3 * 60_000);
+    const every = setInterval(due, 10 * 60_000);
     first.unref();
     every.unref();
     this.timers.push(first, every);
@@ -181,6 +188,33 @@ export class Maintenance {
       return r;
     } finally {
       b.running = false;
+    }
+  }
+
+  /**
+   * The sanity check if one is due (a day since the last) or `force`d. Report-only;
+   * skipped while the database is not known to be sound (the integrity alarm is
+   * already the finding that matters).
+   */
+  async maybeSanity(force = false): Promise<SanityReport | null> {
+    const h = this.health.sanity;
+    if (h.running || this.health.integrity !== "ok") return null;
+    if (!force && h.at && Date.now() - h.at < 24 * 3_600_000) return null;
+    h.running = true;
+    try {
+      const r = await runSanity(this.file);
+      saveReport(r);
+      Object.assign(h, { at: r.at, errors: r.errors, warnings: r.warnings, infos: r.infos, error: null });
+      const log_ = r.errors ? log.error : r.warnings ? log.warn : log.info;
+      log_("sanity check", { ms: r.ms, errors: r.errors, warnings: r.warnings, notes: r.infos,
+        findings: r.findings.filter((f) => f.level !== "info").map((f) => `${f.id}: ${f.count}`) });
+      return r;
+    } catch (e) {
+      h.error = (e as Error).message;
+      log.error("sanity check could not run", { error: h.error });
+      return null;
+    } finally {
+      h.running = false;
     }
   }
 }

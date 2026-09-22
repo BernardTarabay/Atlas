@@ -27,6 +27,7 @@ import { Thumbs, bucket, THUMB_V } from "../thumbs.ts";
 import { S as STATE } from "../pipeline/states.ts";
 import type { IntentExport } from "../intent.ts";
 import type { Maintenance } from "../db/maintenance.ts";
+import { latestReport } from "../db/sanity.ts";
 
 type Req = http.IncomingMessage & { remote: boolean; https: boolean; url: string };
 type Res = http.ServerResponse;
@@ -239,6 +240,7 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport, maint
     return {
       integrity: h.integrity, detail: h.detail.slice(0, 5), checkedAt: h.checkedAt,
       backup: { at: h.backup.last?.at ?? null, bytes: h.backup.last?.bytes ?? null, count: h.backup.count, running: h.backup.running, error: h.backup.error, dir: h.backup.dir },
+      sanity: h.sanity,
     };
   };
   let statesCache: { at: number; value: ReturnType<typeof counts> } | null = null;
@@ -476,6 +478,16 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport, maint
       if (!ids.length) throw new HttpError(400, "no files given");
       if (ids.length > 5000) throw new HttpError(413, "too many files in one retry");
       return engine.retry(ids);
+    }],
+    // The sanity check (db/sanity.ts): the latest report, or a new one now. Report-only.
+    ["GET", /^\/api\/sanity$/, () => latestReport() ?? { findings: [], checked: [], at: null }],
+    ["POST", /^\/api\/sanity$/, async () => {
+      if (!maint) throw new HttpError(503, "maintenance is not running");
+      if (maint.health.sanity.running) throw new HttpError(409, "a check is already running");
+      if (maint.health.integrity !== "ok") throw new HttpError(409, "the database has not passed its integrity check");
+      const r = await maint.maybeSanity(true);
+      if (!r) throw new HttpError(500, maint.health.sanity.error ?? "the check could not run");
+      return r;
     }],
     ["GET", /^\/api\/browse$/, (req) => browse(new URL(req.url, "http://x").searchParams.get("path")), { local: true }],
   ];
