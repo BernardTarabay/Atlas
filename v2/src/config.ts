@@ -52,8 +52,14 @@ export const config = {
   maxTextChars: num(env.ATLAS_MAX_TEXT_CHARS, 1_000_000),
   /** Concurrent OCR engines (Windows OCR helpers). 0 disables OCR. */
   ocrWorkers: num(env.ATLAS_OCR_WORKERS, 2),
-  /** A worker job that runs longer than this is killed (hung parser) and the file is retried. */
+  /**
+   * Analysis (parsing) of one file longer than this is a hung parser: the worker is
+   * killed and the failure counts against the CONTENT. Reading and hashing have no
+   * such deadline - a 40 GB video on a USB 2 disk takes as long as it takes.
+   */
   jobTimeoutMs: num(env.ATLAS_JOB_TIMEOUT_S, 180) * 1000,
+  /** A read that makes no progress for this long is stuck (dead share, failing disk): an ACCESS failure. */
+  stallTimeoutMs: num(env.ATLAS_STALL_S, 60) * 1000,
   maxTries: 3,
 
   rescanMinutes: num(env.ATLAS_RESCAN_MINUTES, 60),

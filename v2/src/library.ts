@@ -184,12 +184,16 @@ export function dashboard(db: Db) {
   const placed = one<{ n: number; bytes: number }>("SELECT count(*) AS n, coalesce(sum(size), 0) AS bytes FROM files WHERE plan IS NOT NULL");
   const waiting = one<{ n: number }>("SELECT count(*) AS n FROM files WHERE state < 50").n;
   const failed = one<{ n: number }>("SELECT count(*) AS n FROM files WHERE state = 90").n;
+  // Of those: set aside until the file changes (content), or tried again later (access).
+  const failedAccess = one<{ n: number }>("SELECT count(*) AS n FROM files WHERE state = 90 AND fclass = 'access'").n;
   const missing = one<{ n: number }>("SELECT count(*) AS n FROM files WHERE state = 70").n;
   const photos = one<{ n: number; bytes: number }>(
     `SELECT count(*) AS n, coalesce(sum(f.size), 0) AS bytes FROM files f JOIN contents c ON c.id = f.content
      WHERE f.plan IS NOT NULL AND c.kind = 'image'`);
   const ocr = db.all<{ ocr: number; n: number }>("SELECT ocr, count(*) AS n FROM contents GROUP BY ocr");
   const ocrBy = (v: number) => ocr.find((r) => r.ocr === v)?.n ?? 0;
+  // Readings that failed for a passing reason wait out a backoff: not "queued" in the meantime.
+  const ocrDeferred = one<{ n: number }>("SELECT count(*) AS n FROM contents WHERE ocr = 1 AND onext > ?", Date.now()).n;
   // A duplicate is a second file with the same bytes. It is RESOLVED when the
   // plan places only one of them - which is every group, by construction. Nothing
   // has been deleted: the bytes are what would be reclaimed if they were.
@@ -207,9 +211,9 @@ export function dashboard(db: Db) {
   return {
     files: all.n, bytes: all.bytes, placed: placed.n, placedBytes: placed.bytes,
     unique: unique.n, uniqueBytes: unique.bytes,
-    waiting, failed, missing, manual,
+    waiting, failed, failedAccess, missing, manual,
     photos: photos.n, photoBytes: photos.bytes,
-    ocr: { pending: ocrBy(1), read: ocrBy(2), failed: ocrBy(3), noEngine: ocrBy(4) },
+    ocr: { pending: ocrBy(1) - ocrDeferred, deferred: ocrDeferred, read: ocrBy(2), failed: ocrBy(3), noEngine: ocrBy(4) },
     duplicates: { ...dups, aliases },
     byKind, roots,
   };
@@ -288,10 +292,10 @@ export function duplicateGroups(db: Db, limit = 8) {
     .map((r) => ({ ...r, name: (r.name ?? "").slice((r.name ?? "").lastIndexOf("/") + 1) }));
 }
 
-/** Files that could not be read, newest first, with the reason. */
+/** Files that could not be read, newest first, with the reason and when (if ever) they are tried again. */
 export function failedFiles(db: Db, limit = 10) {
-  return db.all<{ id: number; path: string; err: string | null; tries: number; root: string }>(
-    `SELECT f.id, f.path, f.err, f.tries, r.path AS root FROM files f JOIN roots r ON r.id = f.root
+  return db.all<{ id: number; path: string; err: string | null; tries: number; root: string; fclass: string | null; fnext: number | null }>(
+    `SELECT f.id, f.path, f.err, f.tries, f.fclass, f.fnext, r.path AS root FROM files f JOIN roots r ON r.id = f.root
      WHERE f.state = 90 ORDER BY f.id DESC LIMIT ?`, Math.min(limit, 100));
 }
 

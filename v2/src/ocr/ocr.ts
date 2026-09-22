@@ -8,6 +8,12 @@ import { assessText } from "../analyze/quality.ts";
 
 export interface OcrResult { text: string; lang: string | null; engine: string; pages: number; ms: number }
 
+/**
+ * Bump when what OCR can read changes (engine, routing, page limit, deadline): a
+ * content that genuinely failed OCR is only read again by a different OCR.
+ */
+export const OCR_VERSION = 1;
+
 /** Share of the output that looks like real words in one script (garbage from the wrong model scores low). */
 export function plausibility(text: string): number {
   const n = normalize(text).length;

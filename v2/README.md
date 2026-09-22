@@ -64,10 +64,20 @@ Setup and host-folder browsing are refused through the tunnel.
 | `IDENT` (20) | linked to its content (cloud placeholders skip reading entirely) |
 | `DONE` (50) | placed in the library, or recognized as a copy/alias of a placed file |
 | `MISSING` (70) | not found by the last complete scan of its folder |
-| `FAILED` (90) | unreadable after 3 attempts; retried on the next scan |
+| `FAILED` (90) | unreadable after 3 attempts; kept, **not** retried by scans (below) |
 
 There is no job table: in-flight work lives in memory, and after a crash every
 row below `DONE` is simply picked up again. Everything is idempotent.
+
+**When a failed file is tried again.** A failure has a kind (`files.fclass`):
+
+- **content**: the bytes defeat the reader. A parser ran past `ATLAS_JOB_TIMEOUT_S` (180 s), or a worker crashed. It stays failed until:
+  - the file changes (size, modified time or file ID);
+  - the analyzer or its limits change (`fsig`, checked at startup);
+  - someone presses **Try again now** on the Status page (`POST /api/retry`).
+- **access**: the file couldn't be reached. It was locked, access was denied, it was still being written, or a read stopped making progress for `ATLAS_STALL_S` (60 s). It's tried again at `fnext`: after 1 h, then 6 h, then daily. A change to the file, or the button, also brings it back sooner.
+
+Reading has no deadline, only a stall clock: a 40 GB video on a USB 2 disk reads for as long as it takes. OCR follows the same split, per content. If the file it read from has since changed or become unreachable, the reading is deferred (`onext`). Otherwise the content is marked as failed OCR until `OCR_VERSION` changes or someone retries.
 
 ## Tests and benchmarks
 

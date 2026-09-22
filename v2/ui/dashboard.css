@@ -200,6 +200,12 @@
 .big.bad { color: var(--bad); }
 .sub { margin-top: 6px; color: var(--ink-2); font-size: 13px; }
 .fine { margin-top: 8px; color: var(--ink-3); font-size: 12px; }
+.card-actions { margin-top: 10px; }
+.card-actions[hidden] { display: none; }
+.card-actions .act { padding: 5px 12px; border: 1px solid var(--edge); border-radius: 99px; background: none; color: var(--ink);
+  font: inherit; font-size: 12.5px; cursor: pointer; transition: background .15s; }
+.card-actions .act:hover { background: var(--track); }
+.card-actions .act:disabled { opacity: .6; cursor: default; }
 
 /* ---- bars: scaleX, never width ---------------------------------------- */
 

@@ -37,10 +37,15 @@ ON CONFLICT(root, path) DO UPDATE SET
     WHEN files.size <> excluded.size OR files.mtime <> excluded.mtime
       OR (files.attrs & ${PLACEHOLDER_ATTRS}) <> (excluded.attrs & ${PLACEHOLDER_ATTRS}) THEN excluded.state
     WHEN files.state = ${S.MISSING} THEN CASE WHEN files.content IS NOT NULL OR excluded.state = ${S.IDENT} THEN ${S.IDENT} ELSE ${S.NEW} END
-    WHEN files.state = ${S.FAILED} THEN ${S.NEW}
+    -- A failed file stays failed while it is the same file. Another physical file
+    -- under the same name (a new file ID) is a new chance.
+    WHEN files.state = ${S.FAILED} AND files.fid IS NOT excluded.fid THEN ${S.NEW}
     ELSE files.state END,
   content = CASE WHEN files.size <> excluded.size OR files.mtime <> excluded.mtime THEN NULL ELSE files.content END,
-  tries   = CASE WHEN files.size <> excluded.size OR files.mtime <> excluded.mtime OR files.state = ${S.FAILED} THEN 0 ELSE files.tries END,
+  tries   = CASE WHEN files.size <> excluded.size OR files.mtime <> excluded.mtime
+                   OR (files.state = ${S.FAILED} AND files.fid IS NOT excluded.fid) THEN 0 ELSE files.tries END,
+  frounds = CASE WHEN files.size <> excluded.size OR files.mtime <> excluded.mtime
+                   OR (files.state = ${S.FAILED} AND files.fid IS NOT excluded.fid) THEN 0 ELSE files.frounds END,
   size  = excluded.size,
   mtime = excluded.mtime`;
 
@@ -62,8 +67,9 @@ export async function scanRoot(db: Db, rootId: number): Promise<ScanStats> {
     db.tx(() => {
       for (const e of entries) {
         const k = firstScan ? undefined : (lookup.get(rootId, e.path) as Known | undefined);
+        // Unchanged includes FAILED: a failure is not retried just because a scan came by.
         if (k && k.size === e.size && k.mtime === e.mtime && k.attrs === e.attrs && k.fid === e.fid
-            && k.state !== S.MISSING && k.state !== S.FAILED) {
+            && k.state !== S.MISSING) {
           seen.add(k.id);
           continue;
         }

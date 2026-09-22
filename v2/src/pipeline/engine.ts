@@ -9,25 +9,51 @@
 // Each tick: fill idle workers with NEW files -> write finished results in one
 // transaction -> plan a bounded batch of IDENT files. Ticks are short so the
 // HTTP server on the same thread stays responsive.
+import fsp from "node:fs/promises";
 import path from "node:path";
+import type { StatementSync } from "node:sqlite";
 import type { Db } from "../db/db.ts";
 import { config } from "../config.ts";
 import { log } from "../log.ts";
 import { AnalyzePool, type JobResult } from "./pool.ts";
 import type { Job } from "./worker.ts";
-import { S, C, OCR } from "./states.ts";
+import { S, C, OCR, failureClass, backoffMs } from "./states.ts";
 import { scanRoot, type ScanStats } from "../scan/scanner.ts";
 import { planBatch } from "../plan/planner.ts";
 import { ANALYZER_VERSION } from "../analyze/analyze.ts";
 import { extOf } from "../analyze/sniff.ts";
-import { OcrService, type OcrResult } from "../ocr/ocr.ts";
+import { OcrService, OCR_VERSION, type OcrResult } from "../ocr/ocr.ts";
 import { assessText } from "../analyze/quality.ts";
 import { detectDocType, openingLines } from "../analyze/dtype.ts";
 import { headingFrom } from "../analyze/title.ts";
 import { indexText } from "../search/text.ts";
 
 interface Failure { job: Job; code: string; message: string }
-interface OcrOutcome { cid: number; result?: OcrResult; error?: string }
+/** `same`: after a failure, whether the file read from is still the one the database describes. */
+interface OcrOutcome { cid: number; result?: OcrResult; error?: string; same?: boolean }
+
+/**
+ * What a content failure was measured against. A file whose bytes defeated the
+ * reader gets another chance when any of these change - a new analyzer, a longer
+ * deadline, larger limits - and not before (see pipeline/states.ts).
+ */
+export const FAILURE_SIG = `a${ANALYZER_VERSION}.t${config.jobTimeoutMs / 1000}.p${config.maxParseBytes}.w${config.wholeFileBytes}`;
+/** Likewise for OCR: a content that failed OCR is read again only by a changed OCR. */
+export const OCR_SIG = `o${OCR_VERSION}`;
+
+/**
+ * Is the file at `abs` still the one the database describes? Asynchronous on
+ * purpose: a stat on a share that just died can take many seconds, and the main
+ * thread (the one writing the database) must never wait for a disk.
+ */
+async function unchanged(abs: string, size: number, mtime: number): Promise<boolean> {
+  try {
+    const s = await fsp.stat(abs);
+    return s.size === size && Math.floor(s.mtimeMs) === mtime;
+  } catch {
+    return false;
+  }
+}
 
 export interface Counters {
   hashed: number; analyzed: number; duplicates: number; bytes: number; errors: number; planned: number;
@@ -72,6 +98,9 @@ export class Engine {
   private samples: { t: number; n: number; bytes: number }[] = [];
   private sampler: NodeJS.Timeout | null = null;
   private ocrOut: OcrOutcome[] = [];
+  private lastRevive = 0;
+  /** After a failed write to the database, new work waits: redoing it into a broken database only burns it. */
+  private holdUntil = 0;
   readonly startedAt = Date.now();
   onBusyChange: (busy: boolean) => void = () => {};
   private busy = false;
@@ -86,8 +115,9 @@ export class Engine {
   start() {
     this.running = true;
     this.reloadRoots();
+    this.reviveFailures(true);
     this.pool = new AnalyzePool(
-      config.analyzeWorkers, config.jobTimeoutMs,
+      config.analyzeWorkers, config.jobTimeoutMs, config.stallTimeoutMs,
       (job, sha) => this.decide(job, sha),
       // A finished worker is idle NOW: wake the loop so it gets its next file immediately.
       (r) => { this.done.push(r); this.kick(); },
@@ -144,6 +174,56 @@ export class Engine {
   /** Something outside the engine changed a row's state: look again now. */
   wake() { this.kick(); }
 
+  /**
+   * Give failures their next chance, and only then. At startup: content failures
+   * recorded under a different FAILURE_SIG, OCR failures under a different OCR_SIG.
+   * Every minute: access failures whose `fnext` has come.
+   */
+  private reviveFailures(startup: boolean) {
+    const db = this.db;
+    const now = Date.now();
+    this.lastRevive = now;
+    let files = 0;
+    let ocr = 0;
+    db.tx(() => {
+      files += Number(db.run(
+        `UPDATE files SET state = ${S.NEW}, tries = 0
+         WHERE state = ${S.FAILED} AND fclass = 'access' AND (fnext IS NULL OR fnext <= ?)`, now).changes);
+      if (!startup) return;
+      files += Number(db.run(
+        `UPDATE files SET state = ${S.NEW}, tries = 0
+         WHERE state = ${S.FAILED} AND fclass IS NOT 'access' AND fsig IS NOT ?`, FAILURE_SIG).changes);
+      ocr = Number(db.run(`UPDATE contents SET ocr = ${OCR.PENDING} WHERE ocr = ${OCR.FAILED} AND osig IS NOT ?`, OCR_SIG).changes);
+    });
+    if (files) log.info("failed files due for another try", { files });
+    if (ocr) log.info("OCR failures read again: the OCR engine changed since", { contents: ocr });
+    if (files || ocr) this.kick();
+  }
+
+  /**
+   * Try again now, because someone asked. `ids` = these files (and their OCR);
+   * omitted = everything that failed, and every OCR reading waiting out a backoff.
+   */
+  retry(ids?: number[]): { files: number; ocr: number } {
+    const db = this.db;
+    const scope = ids ? " AND id IN (SELECT value FROM json_each(?))" : "";
+    const cscope = ids ? " AND id IN (SELECT content FROM files WHERE id IN (SELECT value FROM json_each(?)))" : "";
+    const args = ids ? [JSON.stringify(ids)] : [];
+    const out = db.tx(() => ({
+      files: Number(db.run(
+        `UPDATE files SET state = ${S.NEW}, tries = 0, frounds = 0, fnext = NULL WHERE state = ${S.FAILED}${scope}`, ...args).changes),
+      ocr: Number(db.run(
+        `UPDATE contents SET ocr = ${OCR.PENDING}, onext = NULL, orounds = 0
+         WHERE (ocr = ${OCR.FAILED} OR (ocr = ${OCR.PENDING} AND onext IS NOT NULL))${cscope}`, ...args).changes),
+    }));
+    if (ids) for (const id of ids) this.retryAt.delete(id);
+    else this.retryAt.clear();
+    this.holdUntil = 0;
+    this.kick();
+    log.info("retry requested", { ...out, scope: ids ? ids.length : "all" });
+    return out;
+  }
+
   reloadRoots() {
     this.roots.clear();
     for (const r of this.db.all<{ id: number; path: string }>("SELECT id, path FROM roots WHERE enabled = 1")) this.roots.set(r.id, r.path);
@@ -179,6 +259,7 @@ export class Engine {
     let worked = false;
     try {
       this.maybeScan();
+      if (Date.now() - this.lastRevive >= 60_000) this.reviveFailures(false);
       let t = performance.now();
       worked = this.dispatch() || worked;
       this.counters.msDispatch += performance.now() - t;
@@ -261,7 +342,7 @@ export class Engine {
   /** Fill idle workers from the queue. */
   private dispatch(): boolean {
     let idle = this.pool.idle;
-    if (idle === 0) return false;
+    if (idle === 0 || Date.now() < this.holdUntil) return false;
     if (this.queue.length === 0) this.refill();
     let sent = false;
     while (idle > 0 && this.queue.length) {
@@ -311,11 +392,14 @@ export class Engine {
    */
   private dispatchOcr(): boolean {
     const ocr = this.ocr;
-    if (!ocr || ocr.idle === 0) return false;
-    const rows = this.db.all<{ cid: number; kind: string; root: number; path: string }>(
-      `SELECT c.id AS cid, c.kind, f.root, f.path FROM contents c
-       JOIN files f ON f.id = (SELECT id FROM files WHERE content = c.id AND state IN (${S.IDENT}, ${S.DONE}) LIMIT 1)
-       WHERE c.ocr = ${OCR.PENDING} LIMIT ?`, ocr.idle + this.ocrInflight.size);
+    if (!ocr || ocr.idle === 0 || Date.now() < this.holdUntil) return false;
+    // Read from a copy on a root that is online; a content whose reading was deferred
+    // (onext) waits for its time. Neither is attempted just to fail again.
+    const rows = this.db.all<{ cid: number; kind: string; root: number; path: string; size: number; mtime: number }>(
+      `SELECT c.id AS cid, c.kind, f.root, f.path, f.size, f.mtime FROM contents c
+       JOIN files f ON f.id = (SELECT x.id FROM files x JOIN roots r ON r.id = x.root
+                               WHERE x.content = c.id AND x.state IN (${S.IDENT}, ${S.DONE}) AND r.online = 1 LIMIT 1)
+       WHERE c.ocr = ${OCR.PENDING} AND (c.onext IS NULL OR c.onext <= ?) LIMIT ?`, Date.now(), ocr.idle + this.ocrInflight.size);
     let sent = false;
     for (const r of rows) {
       if (ocr.idle === 0) break;
@@ -327,7 +411,7 @@ export class Engine {
       this.ocrActive.set(r.cid, { file: abs, since: Date.now() });
       ocr.recognize(abs, r.kind === "pdf" ? "pdf" : "image")
         .then((result) => this.ocrOut.push({ cid: r.cid, result }))
-        .catch((e: Error) => this.ocrOut.push({ cid: r.cid, error: e.message.slice(0, 300) }))
+        .catch(async (e: Error) => this.ocrOut.push({ cid: r.cid, error: e.message.slice(0, 300), same: await unchanged(abs, r.size, r.mtime) }))
         .finally(() => this.kick());
       sent = true;
     }
@@ -339,51 +423,70 @@ export class Engine {
     const out = this.ocrOut;
     this.ocrOut = [];
     if (!out.length) return;
+    const now = Date.now();
+    try {
+      this.db.tx(() => this.writeOcr(out, now));
+    } catch (e) {
+      // Nothing was written: every one of these is still PENDING and will be read again.
+      for (const o of out) { this.ocrInflight.delete(o.cid); this.ocrActive.delete(o.cid); }
+      this.holdUntil = Date.now() + 60_000;
+      throw e;
+    }
+  }
+
+  private writeOcr(out: OcrOutcome[], now: number) {
     const db = this.db;
-    db.tx(() => {
-      for (const o of out) {
-        this.ocrInflight.delete(o.cid);
-        const act = this.ocrActive.get(o.cid);
-        this.ocrActive.delete(o.cid);
-        if (act) this.remember(act.file, o.error ? "failed" : "ocr");
-        const c = db.get<{ title: string | null; dtype: string | null; lang: string | null; meta: string | null; quality: string | null; kind: string }>(
-          "SELECT title, dtype, lang, meta, quality, kind FROM contents WHERE id = ?", o.cid);
-        if (!c) continue;
-        const meta = c.meta ? (JSON.parse(c.meta) as Record<string, unknown>) : {};
-        if (!o.result) {
-          this.counters.ocrFailed++;
-          meta.ocrError = o.error;
-          db.run(`UPDATE contents SET ocr = ${OCR.FAILED}, meta = ? WHERE id = ?`, JSON.stringify(meta), o.cid);
+    for (const o of out) {
+      this.ocrInflight.delete(o.cid);
+      const act = this.ocrActive.get(o.cid);
+      this.ocrActive.delete(o.cid);
+      if (act) this.remember(act.file, o.error ? "failed" : "ocr");
+      const c = db.get<{ title: string | null; dtype: string | null; lang: string | null; meta: string | null; quality: string | null; kind: string; orounds: number }>(
+        "SELECT title, dtype, lang, meta, quality, kind, orounds FROM contents WHERE id = ?", o.cid);
+      if (!c) continue;
+      const meta = c.meta ? (JSON.parse(c.meta) as Record<string, unknown>) : {};
+      if (!o.result) {
+        meta.ocrError = o.error;
+        // The file or the content? If the copy it was read from is gone, changed or
+        // unreachable now, the failure says nothing about the content: it stays
+        // PENDING and is tried again later (1 h, 6 h, then daily). Otherwise the
+        // content defeated OCR, and it waits for a changed OCR or a person.
+        if (!o.same) {
+          db.run("UPDATE contents SET onext = ?, orounds = orounds + 1, meta = ? WHERE id = ?",
+            now + backoffMs(c.orounds), JSON.stringify(meta), o.cid);
           continue;
         }
-        const r = o.result;
-        this.counters.ocrDone++;
-        this.counters.ocrPages += r.pages;
-        this.counters.msOcr += r.ms;
-        const text = r.text.slice(0, config.maxTextChars);
-        const quality = assessText(text);
-        if (text) db.run("INSERT INTO texts(content, src, body) VALUES (?, 'o', ?) ON CONFLICT(content, src) DO UPDATE SET body = excluded.body", o.cid, text);
-        // The index holds everything readable about the content: any text layer, plus OCR
-        // unless the OCR came back as noise.
-        const extracted = c.quality === "ok" ? db.get<{ body: string }>("SELECT body FROM texts WHERE content = ? AND src = 'x'", o.cid)?.body ?? "" : "";
-        const heading = (meta.heading as string | undefined) ?? (quality === "ok" ? headingFrom(text) ?? undefined : undefined);
-        const useful = quality === "ok" || quality === "too_short";
-        const body = indexText([c.title ?? "", heading ?? "", extracted, useful ? text : ""].join("\n"));
-        db.run("DELETE FROM fts_text WHERE rowid = ?", o.cid);
-        if (body.trim()) db.run("INSERT INTO fts_text(rowid, body) VALUES (?, ?)", o.cid, body);
-        let dtype = c.dtype;
-        if (!dtype && quality === "ok" && c.kind !== "sheet") {
-          const dt = detectDocType(`${heading ?? ""}\n${openingLines(text)}`, text.slice(0, 600), text);
-          if (dt) { dtype = dt.type; meta.dtypeMatched = dt.matched.slice(0, 6); }
-        }
-        if (heading) meta.heading = heading;
-        meta.ocr = { engine: r.engine, lang: r.lang, pages: r.pages, chars: text.length, quality, ms: r.ms };
-        db.run(`UPDATE contents SET ocr = ${OCR.DONE}, dtype = ?, lang = coalesce(lang, ?), meta = ? WHERE id = ?`,
-          dtype, r.lang, JSON.stringify(meta), o.cid);
-        // What the file is may have changed (a photo turned out to be an invoice): re-plan its copies.
-        db.run(`UPDATE files SET state = ${S.IDENT} WHERE content = ? AND state = ${S.DONE}`, o.cid);
+        this.counters.ocrFailed++;
+        db.run(`UPDATE contents SET ocr = ${OCR.FAILED}, osig = ?, onext = NULL, meta = ? WHERE id = ?`, OCR_SIG, JSON.stringify(meta), o.cid);
+        continue;
       }
-    });
+      const r = o.result;
+      this.counters.ocrDone++;
+      this.counters.ocrPages += r.pages;
+      this.counters.msOcr += r.ms;
+      const text = r.text.slice(0, config.maxTextChars);
+      const quality = assessText(text);
+      if (text) db.run("INSERT INTO texts(content, src, body) VALUES (?, 'o', ?) ON CONFLICT(content, src) DO UPDATE SET body = excluded.body", o.cid, text);
+      // The index holds everything readable about the content: any text layer, plus OCR
+      // unless the OCR came back as noise.
+      const extracted = c.quality === "ok" ? db.get<{ body: string }>("SELECT body FROM texts WHERE content = ? AND src = 'x'", o.cid)?.body ?? "" : "";
+      const heading = (meta.heading as string | undefined) ?? (quality === "ok" ? headingFrom(text) ?? undefined : undefined);
+      const useful = quality === "ok" || quality === "too_short";
+      const body = indexText([c.title ?? "", heading ?? "", extracted, useful ? text : ""].join("\n"));
+      db.run("DELETE FROM fts_text WHERE rowid = ?", o.cid);
+      if (body.trim()) db.run("INSERT INTO fts_text(rowid, body) VALUES (?, ?)", o.cid, body);
+      let dtype = c.dtype;
+      if (!dtype && quality === "ok" && c.kind !== "sheet") {
+        const dt = detectDocType(`${heading ?? ""}\n${openingLines(text)}`, text.slice(0, 600), text);
+        if (dt) { dtype = dt.type; meta.dtypeMatched = dt.matched.slice(0, 6); }
+      }
+      if (heading) meta.heading = heading;
+      meta.ocr = { engine: r.engine, lang: r.lang, pages: r.pages, chars: text.length, quality, ms: r.ms };
+      db.run(`UPDATE contents SET ocr = ${OCR.DONE}, onext = NULL, orounds = 0, dtype = ?, lang = coalesce(lang, ?), meta = ? WHERE id = ?`,
+        dtype, r.lang, JSON.stringify(meta), o.cid);
+      // What the file is may have changed (a photo turned out to be an invoice): re-plan its copies.
+      db.run(`UPDATE files SET state = ${S.IDENT} WHERE content = ? AND state = ${S.DONE}`, o.cid);
+    }
   }
 
   /** Write every finished result in one transaction. */
@@ -410,8 +513,12 @@ export class Engine {
     const addFts = db.q("INSERT INTO fts_text(rowid, body) VALUES (?, ?)");
     // Recorded with the size/mtime the worker actually read, which is what the hash describes.
     // If the file changes again later, the next scan sees the difference and it is re-read.
-    const link = db.q(`UPDATE files SET content = ?, state = ${S.IDENT}, tries = 0, err = NULL, size = ?, mtime = ? WHERE id = ? AND state = ${S.NEW}`);
-    const fail = db.q(`UPDATE files SET tries = tries + 1, err = ?, state = CASE WHEN tries + 1 >= ? THEN ${S.FAILED} ELSE state END WHERE id = ? AND state = ${S.NEW}`);
+    const link = db.q(
+      `UPDATE files SET content = ?, state = ${S.IDENT}, tries = 0, err = NULL, fclass = NULL, fsig = NULL, fnext = NULL, frounds = 0,
+         size = ?, mtime = ? WHERE id = ? AND state = ${S.NEW}`);
+    const failRow = db.q(`SELECT tries, frounds FROM files WHERE id = ? AND state = ${S.NEW}`);
+    const fail = db.q("UPDATE files SET tries = ?, err = ?, state = ?, fclass = ?, fsig = ?, fnext = ?, frounds = ? WHERE id = ?");
+    const now = Date.now();
     const gone = db.q(`UPDATE files SET state = ${S.MISSING}, err = ? WHERE id = ?`);
     // Copies planned while this content was still unanalyzed get re-planned with the real analysis.
     const replanGroup = db.q(`UPDATE files SET state = ${S.IDENT} WHERE content = ? AND state = ${S.DONE}`);
@@ -421,48 +528,72 @@ export class Engine {
     const titleCount = db.q("SELECT count(*) AS n FROM (SELECT 1 FROM contents WHERE title = ? LIMIT 6)");
     const replanTitle = db.q(`UPDATE files SET state = ${S.IDENT} WHERE state = ${S.DONE} AND content IN (SELECT id FROM contents WHERE title = ?)`);
 
-    db.tx(() => {
-      for (const r of done) {
-        this.remember(r.job.abs, r.a ? "new" : "copy");
-        const j = r.job as Job & { mtime: number };
-        this.inflight.delete(j.id);
-        this.counters.bytes += j.size;
-        if (r.a) {
-          const a = r.a;
-          this.counters.analyzed++;
-          upsertFull.run(r.sha, j.size, a.kind, a.mime, a.ocr ?? OCR.NA, a.quality, a.lang, a.dtype, a.title, a.ddate, a.dsrc,
-            a.width, a.height, a.pages, a.meta ? JSON.stringify(a.error ? { ...a.meta, error: a.error } : a.meta) : null,
-            a.text.length, ANALYZER_VERSION);
-          const cid = (contentId.get(r.sha) as { id: number }).id;
-          if (a.text) putText.run(cid, a.text);
-          if (r.index) { delFts.run(cid); addFts.run(cid, r.index); }
-          replanGroup.run(cid);
-          if (a.title && (titleCount.get(a.title) as { n: number }).n === 5) replanTitle.run(a.title);
-          this.releaseSha(j.id);
-        } else {
-          insertStub.run(r.sha, j.size);
-        }
-        const cid = (contentId.get(r.sha) as { id: number }).id;
-        link.run(cid, r.actual.size, r.actual.mtime, j.id);
-        this.retryAt.delete(j.id);
+    try {
+      db.tx(() => this.writeResults(done, failed, now,
+        { upsertFull, insertStub, contentId, putText, delFts, addFts, link, failRow, fail, gone, replanGroup, titleCount, replanTitle }));
+    } catch (e) {
+      // Nothing was written: every file here is still NEW in the database. Release what
+      // memory holds for them, so they are read again rather than stuck until a restart.
+      for (const x of [...done.map((r) => r.job), ...failed.map((f) => f.job)]) {
+        this.inflight.delete(x.id);
+        this.releaseSha(x.id);
+        this.retryAt.set(x.id, Date.now() + 60_000);
       }
-      for (const f of failed) {
-        this.remember(f.job.abs, "failed");
-        this.inflight.delete(f.job.id);
-        this.counters.errors++;
-        // A crashed/timed-out analysis must not leave its duplicates waiting forever.
-        this.releaseSha(f.job.id);
-        if (f.code === "ENOENT") gone.run("file disappeared before it could be read", f.job.id);
-        else if (f.code === "UNSTABLE") this.retryAt.set(f.job.id, Date.now() + 60_000); // still being written: let it settle
-        else {
-          fail.run(`${f.code}: ${f.message}`.slice(0, 300), config.maxTries, f.job.id);
-          const tries = (this.db.get<{ tries: number }>("SELECT tries FROM files WHERE id = ?", f.job.id)?.tries) ?? 1;
-          this.retryAt.set(f.job.id, Date.now() + 30_000 * tries);
-        }
-      }
-    });
+      this.holdUntil = Date.now() + 60_000;
+      throw e;
+    }
     if (failed.length) {
       log.warn("files could not be read", { count: failed.length, sample: failed.slice(0, 5).map((f) => ({ id: f.job.id, code: f.code, msg: f.message })) });
+    }
+  }
+
+  private writeResults(done: JobResult[], failed: Failure[], now: number, q: Record<string, StatementSync>) {
+    const { upsertFull, insertStub, contentId, putText, delFts, addFts, link, failRow, fail, gone, replanGroup, titleCount, replanTitle } = q;
+    for (const r of done) {
+      this.remember(r.job.abs, r.a ? "new" : "copy");
+      const j = r.job as Job & { mtime: number };
+      this.inflight.delete(j.id);
+      this.counters.bytes += j.size;
+      if (r.a) {
+        const a = r.a;
+        this.counters.analyzed++;
+        upsertFull.run(r.sha, j.size, a.kind, a.mime, a.ocr ?? OCR.NA, a.quality, a.lang, a.dtype, a.title, a.ddate, a.dsrc,
+          a.width, a.height, a.pages, a.meta ? JSON.stringify(a.error ? { ...a.meta, error: a.error } : a.meta) : null,
+          a.text.length, ANALYZER_VERSION);
+        const cid = (contentId.get(r.sha) as { id: number }).id;
+        if (a.text) putText.run(cid, a.text);
+        if (r.index) { delFts.run(cid); addFts.run(cid, r.index); }
+        replanGroup.run(cid);
+        if (a.title && (titleCount.get(a.title) as { n: number }).n === 5) replanTitle.run(a.title);
+        this.releaseSha(j.id);
+      } else {
+        insertStub.run(r.sha, j.size);
+      }
+      const cid = (contentId.get(r.sha) as { id: number }).id;
+      link.run(cid, r.actual.size, r.actual.mtime, j.id);
+      this.retryAt.delete(j.id);
+    }
+    for (const f of failed) {
+      this.remember(f.job.abs, "failed");
+      this.inflight.delete(f.job.id);
+      this.counters.errors++;
+      // A crashed/timed-out analysis must not leave its duplicates waiting forever.
+      this.releaseSha(f.job.id);
+      if (f.code === "ENOENT") { gone.run("file disappeared before it could be read", f.job.id); continue; }
+      const row = failRow.get(f.job.id) as { tries: number; frounds: number } | undefined;
+      if (!row) continue; // rescanned, removed or settled meanwhile: this failure is about nothing current
+      // A few tries close together (a lock, a write in progress), then the failure is
+      // recorded with its kind. Content: kept until the file or FAILURE_SIG changes.
+      // Access: tried again at `fnext`, 1 h, 6 h, then daily (pipeline/states.ts).
+      const tries = row.tries + 1;
+      const kind = failureClass(f.code);
+      const final = tries >= config.maxTries;
+      fail.run(tries, `${f.code}: ${f.message}`.slice(0, 300), final ? S.FAILED : S.NEW, kind,
+        kind === "content" ? FAILURE_SIG : null, final && kind === "access" ? now + backoffMs(row.frounds) : null,
+        final ? row.frounds + 1 : row.frounds, f.job.id);
+      if (final) this.retryAt.delete(f.job.id);
+      // Still being written: give it minutes, not seconds.
+      else this.retryAt.set(f.job.id, now + (f.code === "UNSTABLE" ? 60_000 : 30_000) * tries);
     }
   }
 }

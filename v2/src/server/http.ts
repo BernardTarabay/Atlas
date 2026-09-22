@@ -296,7 +296,7 @@ export function startServer(db: Db, engine: Engine): http.Server {
     }],
     ["GET", /^\/api\/activity$/, () => {
       const waiting = db.get<{ n: number }>("SELECT count(*) AS n FROM files WHERE state < 50")!.n;
-      const ocrPending = db.get<{ n: number }>("SELECT count(*) AS n FROM contents WHERE ocr = 1")!.n;
+      const ocrPending = db.get<{ n: number }>("SELECT count(*) AS n FROM contents WHERE ocr = 1 AND (onext IS NULL OR onext <= ?)", Date.now())!.n;
       const total = db.get<{ n: number }>("SELECT count(*) AS n FROM files WHERE state <> 70")!.n;
       return { ...engine.activity(), busy: engine.isBusy, scan: engine.scanState, waiting, ocrPending, total, counters: engine.counters };
     }],
@@ -399,6 +399,15 @@ export function startServer(db: Db, engine: Engine): http.Server {
     }],
     ["DELETE", /^\/api\/roots\/(\d+)$/, (_req, _res, m) => { removeRoot(db, Number(m[1])); engine.reloadRoots(); return { ok: true }; }],
     ["POST", /^\/api\/scan$/, (_req, _res, _m, b) => { engine.requestScan(b.root != null ? Number(b.root) : undefined); return { ok: true }; }],
+    // "Try again": failures are otherwise kept until the file changes (content) or
+    // their backoff runs out (access). `ids` = these files; none = everything that failed.
+    ["POST", /^\/api\/retry$/, (_req, _res, _m, b) => {
+      if (b.ids == null) return engine.retry();
+      const ids = Array.isArray(b.ids) ? b.ids.map(Number).filter(Number.isInteger) : [];
+      if (!ids.length) throw new HttpError(400, "no files given");
+      if (ids.length > 5000) throw new HttpError(413, "too many files in one retry");
+      return engine.retry(ids);
+    }],
     ["GET", /^\/api\/browse$/, (req) => browse(new URL(req.url, "http://x").searchParams.get("path")), { local: true }],
   ];
 

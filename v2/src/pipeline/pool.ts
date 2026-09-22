@@ -1,6 +1,15 @@
 // A fixed set of analysis worker threads, one job each. The pool is where the
-// "a hung parser must not hang Atlas" guarantee lives: every job has a deadline,
-// and a worker that misses it is terminated and replaced.
+// "a hung parser must not hang Atlas" guarantee lives, with two different clocks:
+//
+//   reading    no deadline, because size is not a fault: a 40 GB file on a USB 2
+//              disk legitimately reads for twenty minutes. The worker reports
+//              progress; a read that makes NONE for `stallMs` is stuck (a dead share,
+//              a failing disk) and is killed as STALL - an access failure.
+//   analyzing  a fixed deadline, `timeoutMs`, from the moment the hash is known. A
+//              parser that runs past it is hung on these bytes: TIMEOUT, a content
+//              failure.
+//
+// A worker that misses either is terminated and replaced.
 import { Worker } from "node:worker_threads";
 import type { Analysis } from "../analyze/analyze.ts";
 import type { Job } from "./worker.ts";
@@ -8,16 +17,18 @@ import type { Job } from "./worker.ts";
 /** `actual` is the size/mtime of the file as it was read -- what the hash describes. */
 export interface JobResult { job: Job; sha: Buffer; actual: { size: number; mtime: number }; a?: Analysis; index?: string }
 
-interface Slot { w: Worker; job: Job | null; timer: NodeJS.Timeout | null; since: number; stage: Stage }
+interface Slot { w: Worker; job: Job | null; timer: NodeJS.Timeout | null; since: number; stage: Stage; read: number }
 
 /** What a worker is doing right now, for the live pipeline view. */
 export type Stage = "idle" | "reading" | "analyzing" | "linking";
-export interface WorkerActivity { worker: number; file: string | null; size: number; since: number; stage: Stage }
+export interface WorkerActivity { worker: number; file: string | null; size: number; since: number; stage: Stage; read: number }
 
 export class AnalyzePool {
   private slots: Slot[] = [];
   private stopped = false;
   private timeoutMs: number;
+  private stallMs: number;
+  private workerUrl: URL;
   /** Called after hashing; return true if this content must be analyzed (it is new). */
   private onHash: (job: Job, sha: Buffer) => boolean;
   private onDone: (r: JobResult) => void;
@@ -26,11 +37,16 @@ export class AnalyzePool {
   constructor(
     size: number,
     timeoutMs: number,
+    stallMs: number,
     onHash: (job: Job, sha: Buffer) => boolean,
     onDone: (r: JobResult) => void,
     onError: (job: Job, code: string, message: string) => void,
+    /** The worker script; tests substitute one that misbehaves on purpose. */
+    workerUrl = new URL("./worker.ts", import.meta.url),
   ) {
     this.timeoutMs = timeoutMs;
+    this.stallMs = stallMs;
+    this.workerUrl = workerUrl;
     this.onHash = onHash;
     this.onDone = onDone;
     this.onError = onError;
@@ -48,7 +64,7 @@ export class AnalyzePool {
   /** One row per worker. Cheap: it only reads the slots. */
   activity(): WorkerActivity[] {
     return this.slots.map((s, i) => ({
-      worker: i + 1, file: s.job?.abs ?? null, size: s.job?.size ?? 0, since: s.since, stage: s.job ? s.stage : "idle",
+      worker: i + 1, file: s.job?.abs ?? null, size: s.job?.size ?? 0, since: s.since, stage: s.job ? s.stage : "idle", read: s.job ? s.read : 0,
     }));
   }
 
@@ -58,9 +74,16 @@ export class AnalyzePool {
     slot.job = job;
     slot.since = Date.now();
     slot.stage = "reading";                 // read + hash, until the worker reports the hash
-    slot.timer = setTimeout(() => this.kill(slot, "TIMEOUT", `analysis exceeded ${Math.round(this.timeoutMs / 1000)}s`), this.timeoutMs);
+    slot.read = 0;
+    this.watchRead(slot);
     slot.w.postMessage({ t: "job", ...job });
     return true;
+  }
+
+  /** (Re)arm the stall clock: it only runs out if the read stops moving. */
+  private watchRead(slot: Slot) {
+    if (slot.timer) clearTimeout(slot.timer);
+    slot.timer = setTimeout(() => this.kill(slot, "STALL", `no progress reading the file for ${Math.round(this.stallMs / 1000)}s`), this.stallMs);
   }
 
   async stop() {
@@ -69,12 +92,20 @@ export class AnalyzePool {
   }
 
   private spawn(): Slot {
-    const w = new Worker(new URL("./worker.ts", import.meta.url));
-    const slot: Slot = { w, job: null, timer: null, since: 0, stage: "idle" };
-    w.on("message", (m: { t: string; id: number; sha: Uint8Array; actual: { size: number; mtime: number }; a?: Analysis; index?: string; code?: string; message?: string }) => {
+    const w = new Worker(this.workerUrl);
+    const slot: Slot = { w, job: null, timer: null, since: 0, stage: "idle", read: 0 };
+    w.on("message", (m: { t: string; id: number; sha: Uint8Array; bytes?: number; actual: { size: number; mtime: number }; a?: Analysis; index?: string; code?: string; message?: string }) => {
       const job = slot.job;
       if (!job || job.id !== m.id) return;
+      if (m.t === "progress") {
+        if (slot.stage === "reading") { slot.read = m.bytes ?? slot.read; this.watchRead(slot); }
+        return;
+      }
       if (m.t === "hash") {
+        // The bytes are read; from here a fixed deadline applies to analysis.
+        if (slot.timer) clearTimeout(slot.timer);
+        slot.read = job.size;
+        slot.timer = setTimeout(() => this.kill(slot, "TIMEOUT", `analysis exceeded ${Math.round(this.timeoutMs / 1000)}s`), this.timeoutMs);
         const extract = this.onHash(job, Buffer.from(m.sha));
         // New content is analyzed; a copy of known content is only linked to it.
         slot.stage = extract ? "analyzing" : "linking";

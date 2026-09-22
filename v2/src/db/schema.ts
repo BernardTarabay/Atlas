@@ -115,4 +115,25 @@ export const MIGRATIONS: string[] = [
   // 3: the same idea for the name. Renaming in Atlas renames the file in the
   // PLAN; the bytes on disk keep the name they have until apply exists.
   `ALTER TABLE files ADD COLUMN pinname TEXT;`,
+  // 4: a failure is kept, not retried every scan. Two kinds (pipeline/states.ts):
+  //   content  the bytes themselves defeat the reader (hung parser, crash). Terminal
+  //            until the file changes, `fsig` (analyzer version + limits) changes,
+  //            or someone asks for a retry.
+  //   access   the file could not be reached (locked, denied, still being written,
+  //            too slow). Tried again at `fnext`, backing off 1 h -> 6 h -> 24 h.
+  // The same for OCR, per content: `onext`/`orounds` defer a reading that failed
+  // for a passing reason; `osig` is the OCR version a real failure was seen with.
+  `
+  ALTER TABLE files ADD COLUMN fclass TEXT;
+  ALTER TABLE files ADD COLUMN fsig TEXT;
+  ALTER TABLE files ADD COLUMN fnext INTEGER;
+  ALTER TABLE files ADD COLUMN frounds INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE contents ADD COLUMN osig TEXT;
+  ALTER TABLE contents ADD COLUMN onext INTEGER;
+  ALTER TABLE contents ADD COLUMN orounds INTEGER NOT NULL DEFAULT 0;
+  CREATE INDEX files_failed ON files(fnext) WHERE state = 90;
+  -- Failures recorded before failures had a kind: one fresh attempt each, to classify them.
+  UPDATE files SET state = 0, tries = 0 WHERE state = 90;
+  UPDATE contents SET ocr = 1 WHERE ocr = 3;
+  `,
 ];

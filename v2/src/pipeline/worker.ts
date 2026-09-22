@@ -2,6 +2,7 @@
 // thread says the content is new -- analyze it from the same buffer.
 //
 //   main -> worker  { t: "job", ...Job }
+//   worker -> main  { t: "progress", id, bytes }    while reading, at most once a second
 //   worker -> main  { t: "hash", id, sha }          after the full read
 //   main -> worker  { t: "go", id, extract }        extract=false for known content
 //   worker -> main  { t: "done", id, sha, a?, index? } | { t: "err", id, code, message }
@@ -37,12 +38,26 @@ port.on("message", (m: { t: string; id: number; extract?: boolean } & Job) => {
   }
 });
 
-function readInto(fd: number, buf: Buffer, len: number): number {
+/**
+ * Tell the pool the read is still moving. Reading has no deadline (a big file on a
+ * slow disk is not a hung parser); what the pool watches for is a read that STOPS.
+ */
+let lastProgress = 0;
+function progress(id: number, bytes: number) {
+  const now = Date.now();
+  if (now - lastProgress < 1000) return;
+  lastProgress = now;
+  port.postMessage({ t: "progress", id, bytes });
+}
+
+/** Fill `buf` from the file, in CHUNK-sized reads so a slow disk still shows progress. */
+function readInto(fd: number, buf: Buffer, len: number, onRead: (n: number) => void): number {
   let off = 0;
   while (off < len) {
-    const n = fs.readSync(fd, buf, off, len - off, null);
+    const n = fs.readSync(fd, buf, off, Math.min(CHUNK, len - off), null);
     if (n === 0) break;
     off += n;
+    onRead(n);
   }
   return off;
 }
@@ -57,10 +72,12 @@ async function run(job: Job) {
   // stale (NTFS updates only the entry of the hard link that was written through).
   const before = fs.fstatSync(fd);
   const size = before.size;
+  let read = 0;
+  const onRead = (n: number) => { read += n; progress(job.id, read); };
   try {
     if (size <= job.wholeFileBytes) {
       whole = Buffer.allocUnsafeSlow(size);
-      const n = readInto(fd, whole, size);
+      const n = readInto(fd, whole, size, onRead);
       if (n !== size) whole = whole.subarray(0, n);
       hash.update(whole);
       head = whole.subarray(0, HEAD);
@@ -68,7 +85,7 @@ async function run(job: Job) {
       chunk ??= Buffer.allocUnsafeSlow(CHUNK);
       head = Buffer.alloc(0);
       for (;;) {
-        const n = readInto(fd, chunk, CHUNK);
+        const n = readInto(fd, chunk, CHUNK, onRead);
         if (n === 0) break;
         if (head.length === 0) head = Buffer.from(chunk.subarray(0, Math.min(n, HEAD)));
         hash.update(n === CHUNK ? chunk : chunk.subarray(0, n));

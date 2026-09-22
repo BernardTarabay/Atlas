@@ -280,15 +280,26 @@ const render = {
   },
   failed(c) {
     const b = body(c.id); const d = D.dash; if (!b || !d) return;
-    ensure(b, `<div class="big" data-n></div><div class="sub" data-s></div><div class="fine" data-f></div>`);
+    ensure(b, `<div class="big" data-n></div><div class="sub" data-s></div><div class="fine" data-f></div>
+      <div class="card-actions" data-actions hidden><button type="button" class="act" data-retry>Try again now</button></div>`);
     const big = b.querySelector("[data-n]");
     tween(big, d.failed);
     big.className = `big ${d.failed ? "bad" : "good"}`;
     b.querySelector("[data-s]").textContent = d.failed ? "files could not be read" : "every file was readable";
-    b.querySelector("[data-f]").textContent = [d.ocr.failed ? `${fmtNum(d.ocr.failed)} OCR failures` : "", d.missing ? `${fmtNum(d.missing)} missing from disk` : "", d.failed ? "retried on the next scan" : ""].filter(Boolean).join(" · ");
+    // Failures are kept, not retried on every scan: say which wait for what.
+    const aside = d.failed - (d.failedAccess ?? 0);
+    b.querySelector("[data-f]").textContent = [
+      aside ? `${fmtNum(aside)} set aside until they change` : "",
+      d.failedAccess ? `${fmtNum(d.failedAccess)} tried again later` : "",
+      d.ocr.failed ? `${fmtNum(d.ocr.failed)} OCR failures` : "",
+      d.ocr.deferred ? `${fmtNum(d.ocr.deferred)} OCR readings waiting to try again` : "",
+      d.missing ? `${fmtNum(d.missing)} missing from disk` : "",
+    ].filter(Boolean).join(" · ");
+    b.querySelector("[data-actions]").hidden = !(d.failed || d.ocr.failed || d.ocr.deferred);
     const { w, h } = sizeOf(c);
+    const when = (f) => (f.fnext ? ` · again in ${fmtDur(Math.max(60, (f.fnext - Date.now()) / 1000))}` : "");
     listMore(b, w * h > 1 && d.failed ? `/api/failed?limit=${h > 1 ? 12 : 4}` : null,
-      (f) => `<div class="it"><span class="p" dir="auto" title="${esc(f.root)} › ${esc(f.path)}">${esc(base(f.path))}</span><span class="m">${esc(f.err ?? "unreadable")}</span></div>`);
+      (f) => `<div class="it"><span class="p" dir="auto" title="${esc(f.root)} › ${esc(f.path)}">${esc(base(f.path))}</span><span class="m">${esc((f.err ?? "unreadable") + when(f))}</span></div>`);
   },
   pipeline(c) {
     const b = body(c.id); const a = D.act; if (!b || !a) return;
@@ -776,6 +787,15 @@ function wireDrag() {
     }
     const m = e.target.closest("[data-menu]");
     if (c && m) openCardMenu(c, m);
+    const retry = e.target.closest("[data-retry]");
+    if (retry) {
+      retry.disabled = true;
+      retry.textContent = "Trying again…";
+      api("/api/retry", {}).then(() => refreshDash()).catch(() => {}).finally(() => {
+        retry.disabled = false;
+        retry.textContent = "Try again now";
+      });
+    }
   });
 }
 
