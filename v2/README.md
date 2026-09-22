@@ -188,6 +188,8 @@ npm run apply -- plan --to <root id> [--limit N]   # writes a batch to the journ
 npm run apply -- run <batch> --yes             # moves that batch's files
 npm run apply -- undo <batch> --yes            # puts them back (as a new batch)
 npm run apply -- list | show <batch> | cancel <batch>
+npm run apply -- recover [--yes]               # settle what a crash interrupted
+npm run apply -- settle <op> --yes             # "I have looked": stop waiting for me
 ```
 
 **Planning** writes one journal row per file (the `ops` table) with everything the move must prove: the file's ID, size, date and SHA-256, and its creation time. It leaves out, and says why:
@@ -219,7 +221,18 @@ If anything fails before the disk changed, the op is *failed* and there's nothin
 
 **One writer.** The engine, Apply, `intent import` and `db restore` all take `<home>/atlas.lock`, a file held open without sharing. So Apply refuses to start while Atlas runs, and Atlas refuses to start while Apply runs. Windows releases the lock however the process ends, so a crash never leaves a stale one.
 
-**Not yet:** after a crash mid-file, the op stays *started*. Atlas warns at startup, and Apply refuses to run or plan anything else until it's reconciled. Reconciling at startup, and a way to settle a *for review* op, are the next step (Phase 7 in [docs/18](../docs/18-v2-reliability-audit.md)).
+**After a crash.** A file operation that was in flight stays *started*, and nothing else moves until it's settled. Because Apply wrote down what had to be true before it touched anything, the disk itself answers what happened:
+
+| What the disk says | What happens |
+|---|---|
+| The file is still at its source, unchanged | it simply runs again |
+| The file is at its destination (same file ID), or a copy is there and its SHA-256 matches | the operation is completed: the index follows, and a copy's original is deleted last, exactly as the move would have |
+| The file is still at its source but changed | abandoned; nothing moved, so plan again |
+| Anything else - a stranger's file at the destination, the file at neither end, an original edited since it was copied | **for review**: nothing is touched, and you decide |
+
+`npm run apply -- recover` prints that verdict for every interrupted operation and changes nothing until you add `--yes`. When you've looked at one marked *for review*, `settle <op> --yes` stops it holding up the rest; the next scan puts the index right.
+
+Atlas itself says the same at startup, from the same reading of the disk, but never acts on it: the engine doesn't move, delete or finish anything - Apply does, when you run it.
 
 ## Tests and benchmarks
 
@@ -387,7 +400,7 @@ file contents).
 
 ## Not built yet
 
-Thumbnails, local semantic search, mirror mode (links), recovery of an interrupted
-Apply at startup, the AI gateway, the control plane (updates, heartbeat, logs), and
+Thumbnails, local semantic search, mirror mode (links), fault injection against Apply
+(Phase 8), the AI gateway, the control plane (updates, heartbeat, logs), and
 re-analysis on demand (today a better extractor or dictionary only applies to files
 that are read again).

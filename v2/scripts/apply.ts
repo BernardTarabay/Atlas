@@ -7,6 +7,8 @@
 //   npm run apply -- undo <batch> --yes                 put a batch's files back
 //   npm run apply -- cancel <batch>                     drop what has not run (nothing on disk)
 //   npm run apply -- show <batch>                       every operation of a batch, with its outcome
+//   npm run apply -- recover [--yes]                    settle operations a crash interrupted
+//   npm run apply -- settle <op> --yes                  "I have looked": stop holding up the rest
 //
 // Everything here writes to the database, and `run`/`undo` move real files, so it
 // runs with Atlas stopped (the lock in src/lock.ts enforces it) and moving anything
@@ -16,6 +18,7 @@ import { config } from "../src/config.ts";
 import { Db } from "../src/db/db.ts";
 import { acquireLock } from "../src/lock.ts";
 import { planApply, runBatch, planUndo, cancelBatch, listBatches, ApplyError } from "../src/apply/apply.ts";
+import { inspect, recover, settle, type Verdict } from "../src/apply/recover.ts";
 import { nativeFsOps } from "../src/apply/fsops.ts";
 import { OP } from "../src/pipeline/states.ts";
 
@@ -26,9 +29,14 @@ const cmd = args[0];
 const num = (s: string | undefined) => (s != null && /^\d+$/.test(s) ? Number(s) : null);
 const mb = (n: number) => `${(n / 1048576).toFixed(1)} MB`;
 const STATE: Record<number, string> = { [OP.PLANNED]: "planned", [OP.STARTED]: "INTERRUPTED", [OP.DONE]: "done", [OP.FAILED]: "failed", [OP.UNDONE]: "undone", [OP.REVIEW]: "REVIEW" };
+const WOULD: Record<Verdict, string> = {
+  planned: "runs again", failed: "is abandoned (nothing had changed on disk)", finish: "is completed",
+  review: "waits for a person", check: "must be read before it can be decided",
+};
 
-if (!cmd || !["list", "preview", "plan", "run", "undo", "cancel", "show"].includes(cmd)) {
-  console.log("usage: npm run apply -- list | preview --to <root> | plan --to <root> | run <batch> --yes | undo <batch> --yes | cancel <batch> | show <batch>");
+if (!cmd || !["list", "preview", "plan", "run", "undo", "cancel", "show", "recover", "settle"].includes(cmd)) {
+  console.log("usage: npm run apply -- list | preview --to <root> | plan --to <root> | run <batch> --yes | undo <batch> --yes"
+    + " | cancel <batch> | show <batch> | recover [--yes] | settle <op> --yes");
   process.exit(cmd ? 1 : 0);
 }
 const lock = acquireLock(`apply ${cmd}`);
@@ -80,6 +88,35 @@ try {
     const batch = num(args[1]);
     if (batch == null) throw new ApplyError("Which batch? npm run apply -- cancel <batch>");
     console.log(`${cancelBatch(db, batch)} planned operation(s) cancelled. Nothing on disk was involved.`);
+  } else if (cmd === "recover") {
+    const fx = nativeFsOps();
+    try {
+      if (!flag("--yes")) {
+        const findings = await inspect(db, fx, { hash: true });
+        if (!findings.length) console.log("Nothing was interrupted: no operation is in flight.");
+        for (const f of findings) {
+          console.log(`#${f.op} (${f.mode}) ${WOULD[f.verdict]}\n    ${f.src}\n -> ${f.dst}\n    because ${f.why}`
+            + (f.removeSource ? "\n    the original is deleted last, as the move would have" : ""));
+        }
+        if (findings.length) console.log(`\nNothing has been changed. To settle these: npm run apply -- recover --yes`);
+      } else {
+        const r = await recover(db, fx);
+        console.log(`${r.findings.length} interrupted operation(s): ${r.finished} completed, ${r.planned} to run again, ${r.failed} abandoned (nothing had changed), ${r.review} for review.`);
+        for (const f of r.findings) console.log(`  #${f.op} ${WOULD[f.verdict]}: ${f.why}`);
+        for (const n of r.notes) console.log(`  ${n}`);
+        if (r.review) { console.log("A person decides the rest: npm run apply -- list, then settle <op> --yes once you have looked."); code = 2; }
+      }
+    } finally {
+      fx.close();
+    }
+  } else if (cmd === "settle") {
+    const op = num(args[1]);
+    if (op == null) throw new ApplyError("Which operation? npm run apply -- settle <op> --yes (the number npm run apply -- show prints)");
+    if (!flag("--yes")) throw new ApplyError(`This says you have looked at operation ${op} and Atlas should stop waiting for you. Add --yes.`);
+    const n = settle(db, op, value("--note") ?? "checked by hand");
+    console.log(n ? `Operation ${op} settled. Nothing on disk was touched; the next scan puts the index right.`
+      : `Operation ${op} is not waiting for a person (only an operation marked REVIEW can be settled).`);
+    if (!n) code = 1;
   } else if (cmd === "show") {
     const batch = num(args[1]);
     if (batch == null) throw new ApplyError("Which batch? npm run apply -- show <batch>");

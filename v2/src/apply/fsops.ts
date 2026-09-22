@@ -57,6 +57,21 @@ function normalise(e: unknown): FsError {
   return new FsError(code, err.message ?? String(e));
 }
 
+/**
+ * The facts a move is proven against. Used on its own by the engine, which only ever
+ * LOOKS at interrupted operations (main.ts) and must not spawn a helper to do it.
+ */
+export async function statFacts(file: string): Promise<FileFacts | null> {
+  try {
+    const s = await fsp.stat(file, { bigint: true });
+    if (!s.isFile()) return null;
+    return { fid: `${serialOf(s.dev)}:${s.ino.toString(16)}`, size: Number(s.size), mtime: Number(s.mtimeMs), birth: Number(s.birthtimeMs) };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw normalise(e);
+  }
+}
+
 /** One hashing thread, reused for every file of a batch. */
 class Hasher {
   private w: Worker | null = null;
@@ -93,16 +108,7 @@ export function nativeFsOps(): FsOps {
   const hasher = new Hasher();
   const wrap = async <T>(f: () => Promise<T>): Promise<T> => { try { return await f(); } catch (e) { throw normalise(e); } };
   return {
-    async stat(file) {
-      try {
-        const s = await fsp.stat(file, { bigint: true });
-        if (!s.isFile()) return null;
-        return { fid: `${serialOf(s.dev)}:${s.ino.toString(16)}`, size: Number(s.size), mtime: Number(s.mtimeMs), birth: Number(s.birthtimeMs) };
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
-        throw normalise(e);
-      }
-    },
+    stat: statFacts,
     mkdirp: (dir) => wrap(async () => { await fsp.mkdir(dir, { recursive: true }); }),
     move: (from, to) => wrap(() => helper.move(from, to)),
     copy: (from, to) => wrap(() => fsp.copyFile(from, to, fs.constants.COPYFILE_EXCL)),

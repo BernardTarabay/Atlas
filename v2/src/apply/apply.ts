@@ -42,7 +42,7 @@ export interface ApplyPlan {
   batch: number | null; ops: number; renames: number; copies: number; bytes: number; inPlace: number; skipped: Skip[];
 }
 
-interface Op {
+export interface Op {
   id: number; batch: number; file: number; src: string; dst: string; fid: string | null; size: number; mtime: number;
   sha: Uint8Array; birth: number | null; mode: "rename" | "copy"; tmp: string | null;
   sroot: number; spath: string; droot: number; dpath: string; undoes: number | null;
@@ -50,6 +50,31 @@ interface Op {
 
 const abs = (root: string, rel: string) => path.join(root, ...rel.split("/"));
 const stableFs = (fs: string | null) => fs === "NTFS" || fs === "ReFS";
+
+/**
+ * Step 4 of a move, shared with recovery (apply/recover.ts): the file's row, its name
+ * in the index, and the op marked DONE - one durable transaction, so the database
+ * never says a move happened without the row that proves where the file now is.
+ *
+ * `placed` is what is actually at the destination now. A file ID is kept only where
+ * the file system has stable ones; elsewhere the next scan identifies the file.
+ */
+export function commitMove(db: Db, op: Op, placed: FileFacts, note: string | null): void {
+  const destFs = db.get<{ fs: string | null }>("SELECT fs FROM roots WHERE id = ?", op.droot)?.fs ?? null;
+  const fid = stableFs(destFs) ? placed.fid : null;
+  db.durable(() => {
+    const moved = db.run(
+      "UPDATE files SET root = ?, path = ?, fid = ?, missed = NULL, seenat = NULL WHERE id = ? AND root = ? AND path = ?",
+      op.droot, op.dpath, fid, op.file, op.sroot, op.spath).changes;
+    if (moved) {
+      db.run("DELETE FROM fts_name WHERE rowid = ?", op.file);
+      db.run("INSERT INTO fts_name(rowid, name) VALUES (?, ?)", op.file, nameText(op.dpath.replaceAll("/", " ")));
+    }
+    db.run(`UPDATE ops SET state = ${OP.DONE}, step = 'done', err = ?, t1 = ? WHERE id = ?`,
+      note ?? (moved ? null : "The index had changed meanwhile; the next scan reconciles it."), Date.now(), op.id);
+    if (op.undoes) db.run(`UPDATE ops SET state = ${OP.UNDONE} WHERE id = ? AND state = ${OP.DONE}`, op.undoes);
+  });
+}
 
 /** Is a batch still open (anything planned, in flight, or waiting for a person)? */
 function openBatch(db: Db): { batch: number; planned: number; started: number; review: number } | undefined {
@@ -73,7 +98,11 @@ export async function planApply(db: Db, destRootId: number, opts: { limit?: numb
   if (!v) throw new ApplyError(`"${dest.path}" cannot be reached.`);
   if (dest.volume && v !== dest.volume) throw new ApplyError(`A different disk is at "${dest.path}" (volume ${v}, expected ${dest.volume}).`);
   const open = openBatch(db);
-  if (open) throw new ApplyError(`Batch ${open.batch} is not finished (${open.planned} planned, ${open.started} in progress, ${open.review} for review). Run it, cancel it, or resolve it first.`);
+  if (open) {
+    throw new ApplyError(`Batch ${open.batch} is not finished (${open.planned} planned, ${open.started} interrupted, ${open.review} for review).`
+      + ` Run it (run ${open.batch} --yes), drop what has not run (cancel ${open.batch})`
+      + `${open.started ? ", settle what was interrupted (recover)" : ""}${open.review ? ", or look at what is waiting (show + settle <op> --yes)" : ""}.`);
+  }
 
   const skipped = new Map<string, Skip>();
   const skip = (reason: string, what: string) => {
@@ -154,8 +183,7 @@ export interface RunReport { batch: number; done: number; failed: number; review
  */
 export async function runBatch(db: Db, batch: number, fx: FsOps, opts: { stop?: () => boolean } = {}): Promise<RunReport> {
   const stuck = db.get<{ n: number }>(`SELECT count(*) AS n FROM ops WHERE state = ${OP.STARTED}`)!.n;
-  if (stuck) throw new ApplyError(`${stuck} operation(s) were interrupted and must be reconciled before anything else is moved.`);
-  const destFs = new Map(db.all<{ id: number; fs: string | null }>("SELECT id, fs FROM roots").map((r) => [r.id, r.fs]));
+  if (stuck) throw new ApplyError(`${stuck} operation(s) were interrupted and are settled first: npm run apply -- recover`);
   const report: RunReport = { batch, done: 0, failed: 0, review: 0, notes: [] };
   let pending = db.all<Op>(`SELECT * FROM ops WHERE batch = ? AND state = ${OP.PLANNED} ORDER BY id`, batch);
   // Sources of ops still to run: a destination held by one of them is not a conflict,
@@ -259,19 +287,7 @@ export async function runBatch(db: Db, batch: number, fx: FsOps, opts: { stop?: 
       }
 
       // 4. The index follows the file, in the same durable transaction that says DONE.
-      const fid = stableFs(destFs.get(op.droot) ?? null) ? placed.fid : null;
-      db.durable(() => {
-        const moved = db.run(
-          "UPDATE files SET root = ?, path = ?, fid = ?, missed = NULL, seenat = NULL WHERE id = ? AND root = ? AND path = ?",
-          op.droot, op.dpath, fid, op.file, op.sroot, op.spath).changes;
-        if (moved) {
-          db.run("DELETE FROM fts_name WHERE rowid = ?", op.file);
-          db.run("INSERT INTO fts_name(rowid, name) VALUES (?, ?)", op.file, nameText(op.dpath.replaceAll("/", " ")));
-        }
-        db.run(`UPDATE ops SET state = ${OP.DONE}, step = 'done', err = ?, t1 = ? WHERE id = ?`,
-          note ?? (moved ? null : "The index had changed meanwhile; the next scan reconciles it."), Date.now(), op.id);
-        if (op.undoes) db.run(`UPDATE ops SET state = ${OP.UNDONE} WHERE id = ? AND state = ${OP.DONE}`, op.undoes);
-      });
+      commitMove(db, op, placed, note);
       return "done";
     } catch (e) {
       return fail(`Unexpected: ${(e as Error).message}`);
@@ -310,7 +326,7 @@ export async function runBatch(db: Db, batch: number, fx: FsOps, opts: { stop?: 
 /** The reverse of a batch's DONE ops, as a new batch (run it with runBatch). */
 export function planUndo(db: Db, batch: number): { batch: number; ops: number; skipped: string[] } {
   const open = openBatch(db);
-  if (open) throw new ApplyError(`Batch ${open.batch} is not finished. Run it, cancel it, or resolve it first.`);
+  if (open) throw new ApplyError(`Batch ${open.batch} is not finished (${open.planned} planned, ${open.started} interrupted, ${open.review} for review). Finish it before undoing anything.`);
   const done = db.all<Op>(`SELECT * FROM ops WHERE batch = ? AND state = ${OP.DONE} ORDER BY id DESC`, batch);
   const skipped: string[] = [];
   const next = (db.get<{ b: number | null }>("SELECT max(batch) AS b FROM ops")!.b ?? 0) + 1;

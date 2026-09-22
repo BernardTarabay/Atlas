@@ -16,6 +16,8 @@ import { IntentExport } from "./intent.ts";
 import { Maintenance } from "./db/maintenance.ts";
 import { acquireLock } from "./lock.ts";
 import { OP } from "./pipeline/states.ts";
+import { inspect } from "./apply/recover.ts";
+import { statFacts } from "./apply/fsops.ts";
 
 fs.mkdirSync(config.home, { recursive: true });
 // One writer (src/lock.ts): not while another engine, or a maintenance command that
@@ -43,7 +45,16 @@ const pending = db.get<{ n: number }>(`SELECT count(*) AS n FROM files WHERE sta
 const unsettled = db.get<{ started: number; review: number }>(
   `SELECT sum(state = ${OP.STARTED}) AS started, sum(state = ${OP.REVIEW}) AS review FROM ops`)!;
 if (unsettled.started || unsettled.review) {
-  log.warn("file operations need attention (npm run apply -- list)", { interrupted: unsettled.started ?? 0, review: unsettled.review ?? 0 });
+  log.warn("file operations need attention", {
+    interrupted: unsettled.started ?? 0, review: unsettled.review ?? 0,
+    fix: "stop Atlas, then `npm run apply -- recover` (it says what it would do before it does anything)",
+  });
+  // What each interrupted operation needs, from the disk itself. The engine only LOOKS:
+  // moving, deleting and finishing are Apply's, and Apply runs when a person says so.
+  // Statting a handful of files must not hold up the engine, so it happens alongside it.
+  void inspect(db, { stat: statFacts }).then((findings) => {
+    for (const f of findings) log.warn("an interrupted file operation", { op: f.op, of: f.src, to: f.dst, verdict: f.verdict, because: f.why });
+  }).catch((e: Error) => log.warn("interrupted operations could not be looked at", { error: e.message }));
 }
 const engine = new Engine(db);
 // What a person decided, exported beside the database (src/intent.ts): now, after

@@ -314,7 +314,7 @@ Atlas works with these identifiers:
 
 ### 8b. Apply specification (no code yet)
 
-*Built in Phase 6, including the four prerequisites at the end of this section; where the code differs from this specification, §11 Phase 6 says how and why. Reconciliation at startup (the "Recovery at startup" column) is Phase 7.*
+*Built in Phase 6, including the four prerequisites at the end of this section; where the code differs from this specification, §11 Phase 6 says how and why. The "Recovery at startup" column is Phase 7 (`src/apply/recover.ts`): the engine performs that reading at startup and reports it, and Apply's `recover` is what acts on it.*
 
 Apply does not exist yet, so this is the behaviour its code must produce. The protocol:
 
@@ -588,7 +588,7 @@ Covers change #21 in §9, with the §10 inventory extended by what Phases 1–4 
 - The re-hash is a sample, not a full pass: 100 files and 512 MB a day is seconds. Over months it covers a meaningful share of an archive without ever becoming a job of its own.
 - There is still no repair tool. The findings that would need one (orphan index entries, unused content) are all derived data and harmless; a pruning command can come later if the counts grow.
 
-### Phase 6: Apply (done 2026-09-22, not yet committed)
+### Phase 6: Apply (done 2026-09-22, commit `61051e3`)
 
 Covers changes #22 and #23 in §9, except recovery at startup (Phase 7). Built and tested **only on throwaway folders**: Apply has never run on a real folder, and it runs only when a person types the command.
 
@@ -642,3 +642,39 @@ Covers changes #22 and #23 in §9, except recovery at startup (Phase 7). Built a
 - Only the **representative** of a set of identical files moves; its copies stay where they are. The same bytes are not the same document.
 - **REVIEW is not something the code resolves.** FAILED means "nothing changed, plan again"; REVIEW means a person looks. Phase 7 gives them the command to settle it.
 - The index takes a **file ID from the destination only on NTFS/ReFS**; on anything else it keeps none, rather than a number that means nothing after a move.
+
+### Phase 7: recovery of interrupted operations (done 2026-09-22, not yet committed)
+
+Covers the "Recovery at startup" column of §8b, the last part of change #23 in §9.
+
+**Who recovers.** The engine is what starts at boot, but the engine never moves, renames or deletes a file - that is the rule the whole design rests on, and finishing an interrupted move would break it. So recovery is split:
+
+- **the engine looks**: at startup it reads the two ends of every interrupted operation (file ID, size, date - no hashing, so a handful of stats) and logs one line per operation saying what it needs. It changes nothing, on disk or in the journal;
+- **Apply acts**: `npm run apply -- recover` prints the same verdicts and changes nothing until `--yes`. It holds the single-writer lock while it runs, so the engine cannot be running at the same time.
+
+| Change | Where |
+|---|---|
+| **The verdict is a pure function of the facts** (`classify`): what is at the source, what is at the destination, and, for a copy, its own temporary file. Five outcomes: *planned* (nothing happened; run it again), *failed* (nothing happened but the file changed; plan again), *finish* (the move happened; complete the index and the journal), *review* (anything else; a person decides), *check* (only reachable when looking without reading a destination - the engine's cheap look) | `apply/recover.ts` |
+| **`inspect`** stats the two ends and hashes a copy's destination only when asked; **`recover`** is the only part that changes anything, and only three things: it removes a temporary file of that operation's own name, deletes an original that is provably still the file that was copied, and writes the journal and index rows | `apply/recover.ts` |
+| **Completing a move** goes through the same durable transaction a normal move uses - the files row, `fts_name` and DONE together (`commitMove`, shared with `runBatch`, not a second copy of the rules) | `apply/apply.ts` |
+| **Deleting an original is re-checked immediately before it happens.** The decision and the act cannot be one instant; if the original changed in between, both files are kept and the operation goes to REVIEW | `apply/recover.ts` |
+| **`settle <op> --yes`**: once a person has looked at a REVIEW operation, this stops it holding everything up. It touches no file; the next scan puts the index right | `apply/recover.ts`, `scripts/apply.ts` |
+| **Refusals now name the command that fixes them**: an interrupted operation says `recover`, an open batch says which of run/cancel/recover/settle applies | `apply/apply.ts` |
+| **The engine's startup warning** gained the per-operation verdicts and the exact command; the sanity check's `ops-open` and `ops-review` say the same | `main.ts`, `db/sanity-worker.ts` |
+
+**Verified:**
+
+- `npm test`: **109/109** across three consecutive runs (9 new in `test/recover.test.ts`). `tsc` clean. `bench:crash`: 3 runs, 11/11 each.
+- **The whole matrix as a decision on facts alone** - same-disk and cross-disk, each of the five outcomes, including a disk with no file IDs (size and date, and only when the source is gone) and a destination whose content is not this file's.
+- **For real, on throwaway folders**: interrupted before the move (runs again, then completes); interrupted after a same-disk move (the index and name index follow, DONE); interrupted after a copy was placed (the original is deleted last, exactly as the move would have); interrupted mid-copy (the half-written copy is removed, and the copy is made properly afterwards); a destination holding someone else's file (REVIEW, nothing touched, then `settle` releases planning).
+- **A process killed outright mid-batch** (`process.kill(pid, "SIGKILL")` after the first file moved): exactly the one file in flight is left interrupted, nothing else moves until it is settled, `recover` settles it without a single REVIEW, the rest of the batch runs, and the end state equals a batch that was never interrupted - every file in the library, every op DONE, nothing left in the source folder.
+- **Looking writes nothing**: `inspect` leaves the operation STARTED and SQLite's `data_version` unchanged.
+- **Each guard was checked by breaking it**: trusting a destination without reading it fails the "someone else's file" test (and the matrix); skipping the re-check before deleting an original fails "an original that changes between the decision and the deletion is kept".
+- **Live**: a real engine started on a home holding one interrupted operation logged the summary and the per-operation verdict, and left both the journal row and the file exactly as they were. On the development database, `recover` says "Nothing was interrupted", and `settle` on an operation that is not waiting refuses.
+
+**Decisions:**
+
+- **The engine reads, Apply writes.** "Recovery at startup" is a report at startup, not an automatic repair: the machine that boots unattended never moves a person's files on its own.
+- **`recover` is a dry run by default.** Every other Apply command that changes files needs `--yes`; this one does too, and prints exactly what it would do first.
+- **A REVIEW operation is never resolved by code.** `settle` records that a person looked; it does not decide which file is right, and it touches nothing on disk.
+- **The index is not repaired by recovery beyond the operation's own row.** A settled REVIEW leaves the next scan to reconcile paths - it already carries choices across moves by file ID and content (Phase 4), and that is one mechanism, not two.

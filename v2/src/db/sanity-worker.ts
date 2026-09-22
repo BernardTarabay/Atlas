@@ -92,11 +92,11 @@ check("failed-unclassified", "warn", "Failed files without a kind of failure (co
   "They will not be retried automatically. Press \"Try again now\" on the Status page.",
   n(`SELECT count(*) AS n FROM files WHERE state = ${S.FAILED} AND fclass IS NULL`));
 check("ops-open", "error", "File operations that were interrupted (Apply stopped mid-file)",
-  "Do not move those files by hand. Stop Atlas and look: npm run apply -- list. They are reconciled before anything else is moved.",
+  "Do not move those files by hand. Stop Atlas and run: npm run apply -- recover (it says what it would do before it does anything).",
   n("SELECT count(*) AS n FROM ops WHERE state = 1"),
   () => paths("SELECT src || ' → ' || dst AS p FROM ops WHERE state = 1 LIMIT 10"));
 check("ops-review", "warn", "File operations waiting for a person (something changed on disk while they ran)",
-  "See npm run apply -- show <batch>: each says what happened and where the files are. Nothing was deleted.",
+  "See npm run apply -- show <batch>: each says what happened and where the files are. Nothing was deleted. Once you have looked: npm run apply -- settle <op> --yes.",
   n("SELECT count(*) AS n FROM ops WHERE state = 5"),
   () => paths("SELECT 'batch ' || batch || ': ' || src || ' → ' || dst || coalesce(' (' || err || ')', '') AS p FROM ops WHERE state = 5 LIMIT 10"));
 
