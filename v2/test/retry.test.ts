@@ -250,6 +250,37 @@ test("a stopped pool is silent: no clock left running, nothing reported after it
   assert.deepEqual(reported, [], "no TIMEOUT for a job of a pool that has stopped");
 });
 
+test("OCR falling over is not the page's fault: it comes back, until it keeps happening", async () => {
+  const { db } = fixture("ocr-engine", { "scan.png": "pretend these are pixels" });
+  await scanRoot(db, 1);
+  const cid = Number(db.run("INSERT INTO contents(sha, size, kind, ocr) VALUES (?, 24, 'image', 1)", crypto.randomBytes(32)).lastInsertRowid);
+  db.run(`UPDATE files SET content = ?, state = ${S.DONE} WHERE path = 'scan.png'`, cid);
+  const eng = new Engine(db);
+  eng.reloadRoots();
+  // What a helper killed mid-page looks like: the machine slept, or the process was killed.
+  (eng as unknown as { ocr: unknown }).ocr = {
+    idle: 1, busy: 0, close() {},
+    recognize: async () => { throw new Error("OCR helper exited"); },
+  };
+  const c = () => db.get<{ ocr: number; onext: number | null; orounds: number }>("SELECT ocr, onext, orounds FROM contents WHERE id = ?", cid)!;
+  const attempt = async () => {
+    db.run("UPDATE contents SET onext = NULL WHERE id = ?", cid); // its time has come round again
+    assert.equal(inner(eng).dispatchOcr(), true);
+    await until("OCR outcome", () => inner(eng).ocrOut.length > 0);
+    inner(eng).flushOcr();
+  };
+
+  for (let round = 1; round <= 3; round++) {
+    await attempt();
+    assert.equal(c().ocr, OCR.PENDING, `round ${round}: still to be read, not written off`);
+    assert.equal(c().orounds, round);
+    assert.ok(c().onext! > Date.now(), "and it waits before trying again");
+  }
+  // OCR keeps falling over on this one page: now the page is the suspect.
+  await attempt();
+  assert.equal(c().ocr, OCR.FAILED, "after enough rounds, the content is doubted");
+});
+
 test("an OCR outcome is not lost when others are written while its file is being checked", async () => {
   const { db } = fixture("ocrrace", { "scan.png": "pretend these are pixels" });
   await scanRoot(db, 1);
@@ -280,9 +311,10 @@ test("OCR: the file's fault waits and comes back; the content's fault is kept", 
   const eng = new Engine(db);
   eng.reloadRoots();
   let calls = 0;
+  let fault = "this page defeats OCR";
   (eng as unknown as { ocr: unknown }).ocr = {
     idle: 1, busy: 0, close() {},
-    recognize: async () => { calls++; throw new Error("OCR helper exited"); },
+    recognize: async () => { calls++; throw new Error(fault); },
   };
   const c = () => db.get<{ ocr: number; osig: string | null; onext: number | null; orounds: number }>("SELECT ocr, osig, onext, orounds FROM contents WHERE id = ?", cid)!;
   const attempt = async () => {

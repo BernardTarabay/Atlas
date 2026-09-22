@@ -41,7 +41,12 @@ export const config = {
   bindHost: "127.0.0.1",
   /** Started by bin/AtlasService.exe, which speaks the @@alive/@@awake protocol on stdout. */
   hosted: env.ATLAS_HOSTED === "1",
-  walkerExe: path.join(appDir, "bin", "atlas-walk.exe"),
+  /**
+   * The directory lister. ATLAS_WALKER puts another one in its place - a .ts/.mjs file
+   * is run with Node - which is how a listing that hangs, or a disk that answers wrongly,
+   * is tested (test/faults.test.ts); nothing else should set it.
+   */
+  walkerExe: env.ATLAS_WALKER || path.join(appDir, "bin", "atlas-walk.exe"),
   uiDir: path.join(appDir, "ui"),
 
   /** Read-and-hash workers. Each holds at most `wholeFileBytes` in memory. */

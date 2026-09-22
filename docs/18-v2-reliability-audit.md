@@ -643,7 +643,7 @@ Covers changes #22 and #23 in §9, except recovery at startup (Phase 7). Built a
 - **REVIEW is not something the code resolves.** FAILED means "nothing changed, plan again"; REVIEW means a person looks. Phase 7 gives them the command to settle it.
 - The index takes a **file ID from the destination only on NTFS/ReFS**; on anything else it keeps none, rather than a number that means nothing after a move.
 
-### Phase 7: recovery of interrupted operations (done 2026-09-22, not yet committed)
+### Phase 7: recovery of interrupted operations (done 2026-09-22, commit `4266b46`)
 
 Covers the "Recovery at startup" column of §8b, the last part of change #23 in §9.
 
@@ -678,3 +678,33 @@ Covers the "Recovery at startup" column of §8b, the last part of change #23 in 
 - **`recover` is a dry run by default.** Every other Apply command that changes files needs `--yes`; this one does too, and prints exactly what it would do first.
 - **A REVIEW operation is never resolved by code.** `settle` records that a person looked; it does not decide which file is right, and it touches nothing on disk.
 - **The index is not repaired by recovery beyond the operation's own row.** A settled REVIEW leaves the next scan to reconcile paths - it already carries choices across moves by file ID and content (Phase 4), and that is one mechanism, not two.
+
+### Phase 8: fault injection (done 2026-09-22, not yet committed)
+
+Covers change #24 in §9: the kill points of §8b, and the faults the earlier phases could describe but not produce on demand.
+
+| What is injected | Where |
+|---|---|
+| **Apply killed at every point of a move**: before it, after a same-disk rename, after the copy exists, after the copy is proven, after it is in place, after the original is deleted. A real child process, killed with SIGKILL, in both protocols. Each round then runs `recover` and finishes the batch, and checks five things: nothing lost (every file's bytes still hash to what was recorded), nothing overwritten (a file already in the library is untouched), nothing left over (no temporary file, no operation still open), the index true (every row points at a file that is really there), and the end state equal to an uninterrupted run | `bench/apply-crash.ts`, `test/_apply-kill.ts` |
+| **Every step of a move made to fail**: the disk filling up mid-copy, a copy that cannot be flushed, a copy that cannot be read back, a creation date that cannot be restored, an original that cannot be deleted, a file locked by another program, and the destination disk disappearing mid-batch. Each asserts the same three things - the file still exists with its content, nothing was overwritten, nothing of Atlas's was left behind - plus that the operation says something true | `test/faults.test.ts` |
+| **A folder listing that goes wrong**: a share that stops answering mid-listing, one that never answers at all, and one that ends early as if all were well. `ATLAS_WALKER` puts a stand-in lister in the real one's place; it speaks the same line protocol and can be told to fail in those ways | `test/walk-faults.test.ts`, `test/_walker-faults.ts`, `config.ts`, `scan/walker.ts` |
+| **OCR falling over**: the helper killed or timed out mid-page | `test/retry.test.ts` |
+
+**Found while doing this** (each reproduced by an injected fault that failed before the fix):
+
+- **A copy that could not be flushed or read back left its temporary file behind.** Both steps were outside the part that cleans up; a failure meant an unproven copy sat in the library folder until something else noticed it. Now both are handled where they happen: the copy is thrown away and the operation fails with nothing changed.
+- **A creation date that could not be restored threw away a proven copy.** The bytes were copied and verified; the date is cosmetic. It is now recorded as a note on the operation, and the move completes. An operation can carry more than one note (the original that could not be deleted already did).
+- **OCR falling over wrote the content off for good.** Any OCR error where the file was unchanged was treated as "this page defeats OCR" - including *the helper exited*, which is what a crash, a shutdown or the machine going to sleep mid-page looks like. That content would never be read again until OCR's version changed. Now a fault of OCR's own (the helper exited, timed out, or had no free slot) waits and comes back on the usual backoff (1 h, 6 h, daily); only after it has happened `OCR_ENGINE_ROUNDS` (3) times on the same content is the content itself doubted - which is what a page that truly defeats OCR looks like. This is the same distinction Phase 1 drew for files (a fault of the file versus of its content), which OCR had only half of.
+
+**Verified:**
+
+- `npm test`: **120/120** across three consecutive runs (11 new: 7 injected faults, 3 listing faults, 1 OCR fault). `tsc` clean.
+- `npm run bench:apply-crash`: **7/7 kill points**. Every one is killed for real, leaves exactly one operation in flight, is settled by `recover` without a single REVIEW, and ends where an uninterrupted run ends. The verdicts are the ones §8b predicts: *planned* before the move and while copying, *finish* once the file or its proven copy is at the destination.
+- `npm run bench:crash`: 11/11 invariants, unchanged.
+- The listing faults were the gap Phase 4 left open ("a real hanging-share test belongs to Phase 8"): a share that stops answering is given up on after `ATLAS_SCAN_STALL_S`, and **nothing is concluded from it** - no file suspected, none marked missing. A listing that ends early without its end-of-listing mark is likewise not mistaken for a folder that lost its files, whatever the exit code.
+
+**Decisions:**
+
+- **`ATLAS_WALKER` is the one test affordance in production code.** A lister that hangs cannot be conjured any other way, and the alternative - trusting the watchdog because the code looks right - is what Phase 4 had to settle for. It is one line in `config.ts`, documented as belonging to the fault tests.
+- **The kill points live in a benchmark, not the test suite.** Each round builds a library, kills a process and recovers; the suite already has one such round (`test/recover.test.ts`) to keep the path honest, and the exhaustive sweep is a command to run when Apply changes.
+- **Faults assert what did not happen.** Every injected fault checks the same three things - the file is still there with its content, nothing was overwritten, nothing was left behind - because those are the promises, and an error message is only the explanation.

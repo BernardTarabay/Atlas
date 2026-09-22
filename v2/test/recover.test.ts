@@ -199,7 +199,7 @@ test("a process killed outright mid-batch: recovery settles it, and the batch fi
   db.close();
   // A real child process, killed the moment the first file has moved on disk.
   const child = run(process.execPath, ["--disable-warning=ExperimentalWarning",
-    path.join(import.meta.dirname, "_apply-kill.ts"), dbFile, String(p.batch), "1"]);
+    path.join(import.meta.dirname, "_apply-kill.ts"), dbFile, String(p.batch), "after-move"]);
   const killed = await child.catch((e: { code?: number; signal?: string; stdout?: string }) => e);
   assert.ok(!("stdout" in killed && killed.stdout?.includes("finished without being killed")), "the child was killed mid-batch");
 

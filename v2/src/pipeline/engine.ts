@@ -47,6 +47,11 @@ export const FAILURE_SIG = `a${ANALYZER_VERSION}.t${config.jobTimeoutMs / 1000}.
 /** Likewise for OCR: a content that failed OCR is read again only by a changed OCR. */
 export const OCR_SIG = `o${OCR_VERSION}`;
 
+/** OCR failing because OCR fell over, not because of the page: the helper died or gave up. */
+const OCR_ENGINE_FAULT = /helper (exited|timed out)|no idle OCR slot/i;
+/** How many times OCR may fall over on one content before the content is the suspect. */
+const OCR_ENGINE_ROUNDS = 3;
+
 /**
  * Is the file at `abs` still the one the database describes? Asynchronous on
  * purpose: a stat on a share that just died can take many seconds, and the main
@@ -542,11 +547,16 @@ export class Engine {
       const meta = c.meta ? (JSON.parse(c.meta) as Record<string, unknown>) : {};
       if (!o.result) {
         meta.ocrError = o.error;
-        // The file or the content? If the copy it was read from is gone, changed or
-        // unreachable now, the failure says nothing about the content: it stays
-        // PENDING and is tried again later (1 h, 6 h, then daily). Otherwise the
-        // content defeated OCR, and it waits for a changed OCR or a person.
-        if (!o.same) {
+        // Whose fault? If the copy it was read from is gone, changed or unreachable, the
+        // failure says nothing about the content. Neither does OCR itself falling over:
+        // the helper being killed - a crash, the machine going to sleep, a shutdown
+        // mid-page - is not a property of these bytes, and writing the content off for it
+        // would mean never reading it again. Both wait and come back (1 h, 6 h, then
+        // daily). Only when OCR has fallen over on the same content OCR_ENGINE_ROUNDS
+        // times is the content itself doubted - which is what a page that truly defeats
+        // OCR looks like.
+        const enginesFault = OCR_ENGINE_FAULT.test(o.error ?? "") && c.orounds < OCR_ENGINE_ROUNDS;
+        if (!o.same || enginesFault) {
           db.run("UPDATE contents SET onext = ?, orounds = orounds + 1, meta = ? WHERE id = ?",
             now + backoffMs(c.orounds), JSON.stringify(meta), o.cid);
           continue;

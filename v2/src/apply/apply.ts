@@ -225,7 +225,7 @@ export async function runBatch(db: Db, batch: number, fx: FsOps, opts: { stop?: 
       await fx.mkdirp(path.dirname(op.dst));
 
       let placed: FileFacts | null;
-      let note: string | null = null;
+      const notes: string[] = [];
       if (op.mode === "rename") {
         // 3a. One volume: an atomic rename that never replaces.
         try { await fx.move(op.src, op.dst); } catch (e) {
@@ -252,8 +252,19 @@ export async function runBatch(db: Db, batch: number, fx: FsOps, opts: { stop?: 
           return fail(`Could not copy it: ${(e as Error).message}`);
         }
         setStep.run("copied", op.id);
-        await fx.flush(tmp);
-        const sha = await fx.hash(tmp);
+        try {
+          await fx.flush(tmp);
+        } catch (e) {
+          await dropTmp();
+          return fail(`The copy could not be flushed to the disk: ${(e as Error).message}`);
+        }
+        let sha: string;
+        try {
+          sha = await fx.hash(tmp);
+        } catch (e) {
+          await dropTmp();
+          return fail(`The copy could not be read back to prove it: ${(e as Error).message}`);
+        }
         if (sha !== Buffer.from(op.sha).toString("hex")) {
           await dropTmp();
           return fail("The copy is not the file's recorded content (did it change?). The original is untouched.");
@@ -262,7 +273,12 @@ export async function runBatch(db: Db, batch: number, fx: FsOps, opts: { stop?: 
         // The creation time the original has NOW (the index's may be older than a restore
         // tool's touch-up); the one recorded at planning only if the disk gave none.
         const born = s.birth > 0 ? s.birth : op.birth;
-        if (born) await fx.setCreated(tmp, born);
+        if (born) {
+          // A date is not worth refusing a proven copy over: keep it where it can be kept,
+          // and say so where it cannot.
+          try { await fx.setCreated(tmp, born); }
+          catch (e) { notes.push(`The creation date could not be restored (${(e as { code?: string }).code ?? "error"}).`); }
+        }
         try { await fx.move(tmp, op.dst); } catch (e) {
           await dropTmp();
           const c = (e as { code?: string }).code;
@@ -281,13 +297,14 @@ export async function runBatch(db: Db, batch: number, fx: FsOps, opts: { stop?: 
           await fx.remove(op.src);
           setStep.run("source-removed", op.id);
         } catch (e) {
-          note = `The original could not be deleted (${(e as { code?: string }).code ?? "error"}); it is still at ${op.src}.`;
-          report.notes.push(note);
+          const said = `The original could not be deleted (${(e as { code?: string }).code ?? "error"}); it is still at ${op.src}.`;
+          notes.push(said);
+          report.notes.push(said);
         }
       }
 
       // 4. The index follows the file, in the same durable transaction that says DONE.
-      commitMove(db, op, placed, note);
+      commitMove(db, op, placed, notes.join(" ") || null);
       return "done";
     } catch (e) {
       return fail(`Unexpected: ${(e as Error).message}`);

@@ -63,7 +63,10 @@ function walkNative(root: string, onBatch: (e: Entry[]) => void, batchSize: numb
   return new Promise((resolve, reject) => {
     const args = [root];
     for (const d of config.excludeDirs) args.push("--exclude", d);
-    const child = spawn(config.walkerExe, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    // A stand-in walker written in TypeScript (ATLAS_WALKER) is run with Node; the real one is an exe.
+    const script = /\.(ts|mjs|js)$/.test(config.walkerExe);
+    const child = spawn(script ? process.execPath : config.walkerExe, script ? [config.walkerExe, ...args] : args,
+      { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     const res: WalkResult = { volume: null, fs: null, files: 0, dirs: 0, errors: [], complete: false, rootMissing: false };
     let dir = "";
     let batch: Entry[] = [];

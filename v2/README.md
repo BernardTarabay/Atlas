@@ -242,6 +242,7 @@ npm run typecheck
 npm run bench:gen -- --files 5000 # synthetic corpus in ~/AtlasBench (outside the repo)
 npm run bench                     # scan → hash → analyze → plan, with a main-thread profile
 npm run bench:crash               # 7 hard kills, then proves the result equals a clean run
+npm run bench:apply-crash         # Apply killed at every point of a move, then recovered
 npm run bench:scan -- "C:\Some\Big\Folder"
 npm run bench:ocr:corpus          # render the ground-truth OCR set with Edge (~7 min)
 npm run bench:ocr                 # OCR engines vs ground truth, in 3 languages
@@ -262,6 +263,7 @@ Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB)
 | full pipeline, synthetic mixed corpus | ~2,100–2,250 files/s, ~310 MB/s, 6 workers |
 | engine startup | ~56 ms |
 | crash recovery | 11/11 invariants after 7 hard kills; resumes < 1 s after restart |
+| Apply killed mid-move | 7/7 kill points recover and end where an uninterrupted run ends |
 | search (EN/AR/FR) | 9–18 ms |
 | OCR (Windows OCR, 4 in parallel) | ~20 images/s; 97–99% word recall on Latin, 66–97% on Arabic ([docs/17](../docs/17-ocr.md)) |
 | PDF text layers | Arabic recall 94%, French/English 100% |
