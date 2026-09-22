@@ -25,7 +25,7 @@ after(() => { for (const f of cleanup.reverse()) try { f(); } catch { /* best ef
 
 /** What the tests reach into: the engine's in-memory bookkeeping. */
 interface Inner {
-  failed: { job: { id: number; abs: string; size: number; ext: string }; code: string; message: string }[];
+  failed: { job: { id: number; root: number; rel: string; abs: string; size: number; ext: string }; code: string; message: string }[];
   done: unknown[];
   inflight: Set<number>;
   retryAt: Map<number, number>;
@@ -70,7 +70,7 @@ test("a content failure is kept across scans, and comes back only for a reason",
   const bad = rowOf(db, "bad.pdf").id;
   const fail = (code: string, n = 3) => {
     for (let i = 0; i < n; i++) {
-      inner(eng).failed.push({ job: { id: bad, abs: path.join(tree, "bad.pdf"), size: 1, ext: "pdf" }, code, message: "test" });
+      inner(eng).failed.push({ job: { id: bad, root: 1, rel: "bad.pdf", abs: path.join(tree, "bad.pdf"), size: 1, ext: "pdf" }, code, message: "test" });
       eng.flush();
     }
   };
@@ -95,7 +95,7 @@ test("a content failure is kept across scans, and comes back only for a reason",
   assert.equal(r.tries, 3);
 
   // A failure reported for a row that has moved on is ignored.
-  inner(eng).failed.push({ job: { id: rowOf(db, "good.txt").id, abs: "x", size: 1, ext: "txt" }, code: "TIMEOUT", message: "stale" });
+  inner(eng).failed.push({ job: { id: rowOf(db, "good.txt").id, root: 1, rel: "good.txt", abs: "x", size: 1, ext: "txt" }, code: "TIMEOUT", message: "stale" });
   db.run(`UPDATE files SET state = ${S.DONE} WHERE path = 'good.txt'`);
   eng.flush();
   assert.equal(rowOf(db, "good.txt").state, S.DONE);
@@ -138,7 +138,7 @@ test("an access failure waits 1 h, then 6 h, then a day", async () => {
   const id = rowOf(db, "locked.xlsx").id;
   const fail = (code: string) => {
     for (let i = 0; i < 3; i++) {
-      inner(eng).failed.push({ job: { id, abs: "x", size: 1, ext: "xlsx" }, code, message: "test" });
+      inner(eng).failed.push({ job: { id, root: 1, rel: "locked.xlsx", abs: "x", size: 1, ext: "xlsx" }, code, message: "test" });
       eng.flush();
     }
   };
@@ -168,7 +168,7 @@ test("an access failure waits 1 h, then 6 h, then a day", async () => {
 
   // A file still being written is given minutes between tries, not seconds.
   db.run(`UPDATE files SET state = ${S.NEW}, tries = 0 WHERE id = ?`, id);
-  inner(eng).failed.push({ job: { id, abs: "x", size: 1, ext: "xlsx" }, code: "UNSTABLE", message: "test" });
+  inner(eng).failed.push({ job: { id, root: 1, rel: "locked.xlsx", abs: "x", size: 1, ext: "xlsx" }, code: "UNSTABLE", message: "test" });
   eng.flush();
   assert.ok(inner(eng).retryAt.get(id)! >= Date.now() + 55_000);
 });
@@ -221,7 +221,7 @@ test("the pool: a slow read is not a stuck one, and analysis has a deadline", as
   let id = 0;
   const run = (abs: string) => new Promise<string>((resolve) => {
     settle = resolve;
-    pool.submit({ id: ++id, abs, size: 0, ext: "", wholeFileBytes: 0, maxParseBytes: 0, maxTextChars: 0 });
+    pool.submit({ id: ++id, root: 1, rel: abs, abs, size: 0, ext: "", wholeFileBytes: 0, maxParseBytes: 0, maxTextChars: 0, settleMs: 0 });
   });
   try {
     assert.equal(await run("moving"), "done", "700 ms of steady reading outlives a 250 ms stall clock");
@@ -293,7 +293,7 @@ test("a failed database write does not strand its files in memory", async () => 
   const id = rowOf(db, "a.txt").id;
   const sha = crypto.randomBytes(32);
   inner(eng).inflight.add(id);
-  inner(eng).done.push({ job: { id, abs: path.join(tree, "a.txt"), size: 9, ext: "txt", mtime: 0 }, sha, actual: { size: 9, mtime: 0 } });
+  inner(eng).done.push({ job: { id, root: 1, rel: "a.txt", abs: path.join(tree, "a.txt"), size: 9, ext: "txt", mtime: 0 }, sha, actual: { size: 9, mtime: 0 } });
   db.raw.exec("CREATE TRIGGER boom BEFORE UPDATE OF content ON files BEGIN SELECT RAISE(ABORT, 'disk full'); END");
   try {
     assert.throws(() => eng.flush(), /disk full/);

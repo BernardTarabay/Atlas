@@ -18,7 +18,9 @@ import { log } from "../log.ts";
 import { AnalyzePool, type JobResult } from "./pool.ts";
 import type { Job } from "./worker.ts";
 import { S, C, OCR, failureClass, backoffMs } from "./states.ts";
-import { scanRoot, type ScanStats } from "../scan/scanner.ts";
+import { scanRoot, carryByContent, type ScanStats } from "../scan/scanner.ts";
+import { volumeAt, findMovedRoot } from "../scan/volumes.ts";
+import { validateRoot } from "../roots.ts";
 import { planBatch } from "../plan/planner.ts";
 import { ANALYZER_VERSION } from "../analyze/analyze.ts";
 import { extOf } from "../analyze/sniff.ts";
@@ -29,8 +31,12 @@ import { headingFrom } from "../analyze/title.ts";
 import { indexText } from "../search/text.ts";
 
 interface Failure { job: Job; code: string; message: string }
-/** `same`: after a failure, whether the file read from is still the one the database describes. */
-interface OcrOutcome { cid: number; result?: OcrResult; error?: string; same?: boolean }
+/**
+ * `sha`: the content the reading was for (a content id can be reused after its rows
+ * are forgotten; the hash cannot). `same`: whether the file read from is still the
+ * one the database describes - after a failure, and after a success too.
+ */
+interface OcrOutcome { cid: number; sha: string; result?: OcrResult; error?: string; same: boolean }
 
 /**
  * What a content failure was measured against. A file whose bytes defeated the
@@ -67,6 +73,15 @@ export class Engine {
   private roots = new Map<number, string>();
   private inflight = new Set<number>();
   private retryAt = new Map<number, number>();
+  /** Files found still being written, and how many times: their wait grows (15 s, 30 s ... 10 min). */
+  private settling = new Map<number, number>();
+  /** Scans asked for while that root was being scanned: run again when it finishes. */
+  private rescan = new Set<number>();
+  /** Offline roots: when their disk was last looked for under other drive letters. */
+  private lastProbe = new Map<number, number>();
+  private probing = false;
+  /** Decisions on missing files that could not be placed on a copy unambiguously (carryByContent). */
+  unresolved = 0;
   private extracting = new Set<string>(); // uppercase hex, matches SQLite hex()
   private jobSha = new Map<number, string>(); // job id -> the content hash it is analyzing
   private done: JobResult[] = [];
@@ -203,6 +218,64 @@ export class Engine {
   }
 
   /**
+   * Housekeeping, once a minute: failures due for another try; decisions that can now
+   * follow a moved file by content (it has been read since); roots whose disk is back,
+   * or back under another drive letter.
+   */
+  private everyMinute() {
+    this.reviveFailures(false);
+    const r = this.db.tx(() => carryByContent(this.db));
+    this.unresolved = r.unresolved;
+    if (r.carried) this.onScanned({ carried: r.carried } as ScanStats); // an intent export is due
+    void this.checkOffline();
+  }
+
+  /**
+   * An offline root is looked at again every minute (a drive plugged back in is
+   * scanned within a minute, not at the next hourly scan). If its own disk is not at
+   * its path - absent, or a different disk there - its disk is looked for under the
+   * other drive letters (at most every 5 minutes): one match, same serial and same
+   * folder, and the root follows it. Letters are places; the serial is the disk.
+   */
+  async checkOffline() {
+    if (this.probing) return;
+    this.probing = true;
+    try {
+      const rows = this.db.all<{ id: number; path: string; role: string; volume: string | null }>(
+        "SELECT id, path, role, volume FROM roots WHERE enabled = 1 AND online = 0");
+      for (const r of rows) {
+        if (r.id === this.scanning || this.scanQueue.includes(r.id)) continue;
+        const v = await volumeAt(r.path);
+        if (v && (!r.volume || v === r.volume)) {
+          log.info("folder reachable again; scanning", { root: r.path });
+          this.requestScan(r.id);
+          continue;
+        }
+        if (!r.volume || Date.now() - (this.lastProbe.get(r.id) ?? 0) < 5 * 60_000) continue;
+        this.lastProbe.set(r.id, Date.now());
+        const found = await findMovedRoot(r.path, r.volume);
+        if (!found) continue;
+        try {
+          this.db.durable(() => {
+            validateRoot(this.db, found, r.role); // not a system folder, not overlapping another root
+            this.db.run("UPDATE roots SET path = ?, seen_volume = NULL, scan_error = NULL WHERE id = ?", found, r.id);
+          });
+        } catch (e) {
+          log.warn("folder found under another drive letter, but not moved there", { from: r.path, to: found, why: (e as Error).message });
+          continue;
+        }
+        log.warn("folder found under another drive letter; following it", { from: r.path, to: found, volume: r.volume });
+        this.reloadRoots();
+        this.requestScan(r.id);
+      }
+    } catch (e) {
+      log.error("offline folder check failed", { error: (e as Error).message });
+    } finally {
+      this.probing = false;
+    }
+  }
+
+  /**
    * Try again now, because someone asked. `ids` = these files (and their OCR);
    * omitted = everything that failed, and every OCR reading waiting out a backoff.
    */
@@ -234,7 +307,11 @@ export class Engine {
   /** Queue scans (all enabled roots when no id is given). Scans run one at a time: they compete for the same disks. */
   requestScan(rootId?: number) {
     const ids = rootId != null ? [rootId] : [...this.roots.keys()];
-    for (const id of ids) if (id !== this.scanning && !this.scanQueue.includes(id)) this.scanQueue.push(id);
+    for (const id of ids) {
+      // Asked for while it is being scanned: what changed may be behind the walker already.
+      if (id === this.scanning) this.rescan.add(id);
+      else if (!this.scanQueue.includes(id)) this.scanQueue.push(id);
+    }
     this.kick();
   }
 
@@ -261,7 +338,7 @@ export class Engine {
     let worked = false;
     try {
       this.maybeScan();
-      if (Date.now() - this.lastRevive >= 60_000) this.reviveFailures(false);
+      if (Date.now() - this.lastRevive >= 60_000) this.everyMinute();
       let t = performance.now();
       worked = this.dispatch() || worked;
       this.counters.msDispatch += performance.now() - t;
@@ -315,7 +392,11 @@ export class Engine {
         log.error("scan failed", { root: this.roots.get(id), error: (e as Error).message });
         this.db.run("UPDATE roots SET scan_error = ? WHERE id = ?", (e as Error).message.slice(0, 300), id);
       })
-      .finally(() => { this.scanning = null; this.kick(); });
+      .finally(() => {
+        this.scanning = null;
+        if (this.rescan.delete(id) && !this.scanQueue.includes(id)) this.scanQueue.push(id);
+        this.kick();
+      });
   }
 
   /**
@@ -326,10 +407,10 @@ export class Engine {
   private refill() {
     const batch = 1000;
     let rows = this.db.all<{ id: number; root: number; path: string; size: number; mtime: number }>(
-      `SELECT id, root, path, size, mtime FROM files WHERE state = ${S.NEW} AND id > ? ORDER BY id LIMIT ?`, this.cursor, batch);
+      `SELECT id, root, path, size, mtime FROM files WHERE state = ${S.NEW} AND missed IS NULL AND id > ? ORDER BY id LIMIT ?`, this.cursor, batch);
     if (!rows.length && this.cursor > 0) {
       this.cursor = 0;
-      rows = this.db.all(`SELECT id, root, path, size, mtime FROM files WHERE state = ${S.NEW} ORDER BY id LIMIT ?`, batch);
+      rows = this.db.all(`SELECT id, root, path, size, mtime FROM files WHERE state = ${S.NEW} AND missed IS NULL ORDER BY id LIMIT ?`, batch);
     }
     if (rows.length) this.cursor = rows[rows.length - 1].id;
     const now = Date.now();
@@ -353,8 +434,8 @@ export class Engine {
       const root = this.roots.get(r.root);
       if (!root) continue;
       const job: Job & { mtime: number } = {
-        id: r.id, abs: path.join(root, ...r.path.split("/")), size: r.size, ext: extOf(r.path), mtime: r.mtime,
-        wholeFileBytes: config.wholeFileBytes, maxParseBytes: config.maxParseBytes, maxTextChars: config.maxTextChars,
+        id: r.id, root: r.root, rel: r.path, abs: path.join(root, ...r.path.split("/")), size: r.size, ext: extOf(r.path), mtime: r.mtime,
+        wholeFileBytes: config.wholeFileBytes, maxParseBytes: config.maxParseBytes, maxTextChars: config.maxTextChars, settleMs: config.settleMs,
       };
       if (!this.pool.submit(job)) { this.queue.unshift(r); break; }
       this.inflight.add(r.id);
@@ -397,8 +478,8 @@ export class Engine {
     if (!ocr || ocr.idle === 0 || Date.now() < this.holdUntil) return false;
     // Read from a copy on a root that is online; a content whose reading was deferred
     // (onext) waits for its time. Neither is attempted just to fail again.
-    const rows = this.db.all<{ cid: number; kind: string; root: number; path: string; size: number; mtime: number }>(
-      `SELECT c.id AS cid, c.kind, f.root, f.path, f.size, f.mtime FROM contents c
+    const rows = this.db.all<{ cid: number; sha: string; kind: string; root: number; path: string; size: number; mtime: number }>(
+      `SELECT c.id AS cid, lower(hex(c.sha)) AS sha, c.kind, f.root, f.path, f.size, f.mtime FROM contents c
        JOIN files f ON f.id = (SELECT x.id FROM files x JOIN roots r ON r.id = x.root
                                WHERE x.content = c.id AND x.state IN (${S.IDENT}, ${S.DONE}) AND r.online = 1 LIMIT 1)
        WHERE c.ocr = ${OCR.PENDING} AND (c.onext IS NULL OR c.onext <= ?) LIMIT ?`, Date.now(), ocr.idle + this.ocrInflight.size);
@@ -412,8 +493,10 @@ export class Engine {
       const abs = path.join(root, ...r.path.split("/"));
       this.ocrActive.set(r.cid, { file: abs, since: Date.now() });
       ocr.recognize(abs, r.kind === "pdf" ? "pdf" : "image")
-        .then((result) => this.ocrOut.push({ cid: r.cid, result }))
-        .catch(async (e: Error) => this.ocrOut.push({ cid: r.cid, error: e.message.slice(0, 300), same: await unchanged(abs, r.size, r.mtime) }))
+        // Read by path: prove afterwards the file is still the one that was hashed, or the
+        // text of other bytes would be filed under this content for good.
+        .then(async (result) => this.ocrOut.push({ cid: r.cid, sha: r.sha, result, same: await unchanged(abs, r.size, r.mtime) }))
+        .catch(async (e: Error) => this.ocrOut.push({ cid: r.cid, sha: r.sha, error: e.message.slice(0, 300), same: await unchanged(abs, r.size, r.mtime) }))
         .finally(() => this.kick());
       sent = true;
     }
@@ -443,9 +526,16 @@ export class Engine {
       const act = this.ocrActive.get(o.cid);
       this.ocrActive.delete(o.cid);
       if (act) this.remember(act.file, o.error ? "failed" : "ocr");
-      const c = db.get<{ title: string | null; dtype: string | null; lang: string | null; meta: string | null; quality: string | null; kind: string; orounds: number }>(
-        "SELECT title, dtype, lang, meta, quality, kind, orounds FROM contents WHERE id = ?", o.cid);
-      if (!c) continue;
+      const c = db.get<{ title: string | null; dtype: string | null; lang: string | null; meta: string | null; quality: string | null; kind: string; orounds: number; sha: string }>(
+        "SELECT title, dtype, lang, meta, quality, kind, orounds, lower(hex(sha)) AS sha FROM contents WHERE id = ?", o.cid);
+      // Gone, or the id now names other content (its rows were forgotten and the id reused).
+      if (!c || c.sha !== o.sha) continue;
+      if (o.result && !o.same) {
+        // Read, but the file is no longer the hashed version: the text may be of other
+        // bytes. Not stored. The next scan re-reads the file as new content anyway.
+        db.run("UPDATE contents SET onext = ? WHERE id = ?", now + 10 * 60_000, o.cid);
+        continue;
+      }
       const meta = c.meta ? (JSON.parse(c.meta) as Record<string, unknown>) : {};
       if (!o.result) {
         meta.ocrError = o.error;
@@ -515,13 +605,20 @@ export class Engine {
     const addFts = db.q("INSERT INTO fts_text(rowid, body) VALUES (?, ?)");
     // Recorded with the size/mtime the worker actually read, which is what the hash describes.
     // If the file changes again later, the next scan sees the difference and it is re-read.
+    // Every write about a job names its row fully - id, root AND path - and requires it
+    // still to be waiting (NEW): a result that arrives after the row was rescanned,
+    // forgotten, or its id reused by another file, lands on nothing.
     const link = db.q(
       `UPDATE files SET content = ?, state = ${S.IDENT}, tries = 0, err = NULL, fclass = NULL, fsig = NULL, fnext = NULL, frounds = 0,
-         size = ?, mtime = ? WHERE id = ? AND state = ${S.NEW}`);
-    const failRow = db.q(`SELECT tries, frounds FROM files WHERE id = ? AND state = ${S.NEW}`);
+         size = ?, mtime = ? WHERE id = ? AND state = ${S.NEW} AND root = ? AND path = ?`);
+    const failRow = db.q(`SELECT tries, frounds FROM files WHERE id = ? AND state = ${S.NEW} AND root = ? AND path = ?`);
     const fail = db.q("UPDATE files SET tries = ?, err = ?, state = ?, fclass = ?, fsig = ?, fnext = ?, frounds = ? WHERE id = ?");
     const now = Date.now();
-    const gone = db.q(`UPDATE files SET state = ${S.MISSING}, err = ? WHERE id = ?`);
+    // Not there when read. Not MISSING on one look (a drive may have gone away mid-queue):
+    // SUSPECT, left alone until a complete scan decides.
+    const gone = db.q(
+      `UPDATE files SET missed = coalesce(missed, ?), seenat = coalesce(seenat, (SELECT scan_at FROM roots WHERE id = files.root), ?)
+       WHERE id = ? AND state = ${S.NEW} AND root = ? AND path = ?`);
     // Copies planned while this content was still unanalyzed get re-planned with the real analysis.
     const replanGroup = db.q(`UPDATE files SET state = ${S.IDENT} WHERE content = ? AND state = ${S.DONE}`);
     // A title shared by 5 contents is template boilerplate, not a name (planner.ts). The moment a
@@ -572,17 +669,27 @@ export class Engine {
         insertStub.run(r.sha, j.size);
       }
       const cid = (contentId.get(r.sha) as { id: number }).id;
-      link.run(cid, r.actual.size, r.actual.mtime, j.id);
+      link.run(cid, r.actual.size, r.actual.mtime, j.id, j.root, j.rel);
       this.retryAt.delete(j.id);
+      this.settling.delete(j.id);
     }
     for (const f of failed) {
+      if (f.code === "SETTLING") {
+        // Still being written: not a failure, nothing to record. Look again a little later each time.
+        this.inflight.delete(f.job.id);
+        this.releaseSha(f.job.id);
+        const n = (this.settling.get(f.job.id) ?? 0) + 1;
+        this.settling.set(f.job.id, n);
+        this.retryAt.set(f.job.id, now + Math.min(15_000 * 2 ** (n - 1), 10 * 60_000));
+        continue;
+      }
       this.remember(f.job.abs, "failed");
       this.inflight.delete(f.job.id);
       this.counters.errors++;
       // A crashed/timed-out analysis must not leave its duplicates waiting forever.
       this.releaseSha(f.job.id);
-      if (f.code === "ENOENT") { gone.run("file disappeared before it could be read", f.job.id); continue; }
-      const row = failRow.get(f.job.id) as { tries: number; frounds: number } | undefined;
+      if (f.code === "ENOENT") { gone.run(now, now, f.job.id, f.job.root, f.job.rel); this.retryAt.delete(f.job.id); continue; }
+      const row = failRow.get(f.job.id, f.job.root, f.job.rel) as { tries: number; frounds: number } | undefined;
       if (!row) continue; // rescanned, removed or settled meanwhile: this failure is about nothing current
       // A few tries close together (a lock, a write in progress), then the failure is
       // recorded with its kind. Content: kept until the file or FAILURE_SIG changes.
@@ -593,7 +700,7 @@ export class Engine {
       fail.run(tries, `${f.code}: ${f.message}`.slice(0, 300), final ? S.FAILED : S.NEW, kind,
         kind === "content" ? FAILURE_SIG : null, final && kind === "access" ? now + backoffMs(row.frounds) : null,
         final ? row.frounds + 1 : row.frounds, f.job.id);
-      if (final) this.retryAt.delete(f.job.id);
+      if (final) { this.retryAt.delete(f.job.id); this.settling.delete(f.job.id); }
       // Still being written: give it minutes, not seconds.
       else this.retryAt.set(f.job.id, now + (f.code === "UNSTABLE" ? 60_000 : 30_000) * tries);
     }

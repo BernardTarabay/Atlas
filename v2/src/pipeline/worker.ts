@@ -15,12 +15,17 @@ import { sniff } from "../analyze/sniff.ts";
 
 export interface Job {
   id: number;
+  /** The row this job is about, so a late result can never land on another file. */
+  root: number;
+  rel: string;
   abs: string;
   size: number;
   ext: string;
   wholeFileBytes: number;
   maxParseBytes: number;
   maxTextChars: number;
+  /** Files modified less than this long ago are left to settle before they are read. */
+  settleMs: number;
 }
 
 const port = parentPort!;
@@ -62,6 +67,29 @@ function readInto(fd: number, buf: Buffer, len: number, onRead: (n: number) => v
   return off;
 }
 
+/**
+ * Read the whole file a second time (large documents: the hash pass streamed it)
+ * and prove it is still the version that was hashed. Otherwise the analysis would
+ * describe other bytes, filed under this content's SHA-256 for good.
+ */
+function readAgain(abs: string, size: number, mtimeMs: number): Buffer {
+  const fd = fs.openSync(abs, "r");
+  try {
+    const a = fs.fstatSync(fd);
+    const buf = Buffer.allocUnsafeSlow(size);
+    const n = a.size === size && a.mtimeMs === mtimeMs ? readInto(fd, buf, size, () => {}) : -1;
+    const b = fs.fstatSync(fd);
+    if (n !== size || b.size !== size || b.mtimeMs !== mtimeMs) {
+      const e = new Error("the file changed between reading and analysing it") as NodeJS.ErrnoException;
+      e.code = "UNSTABLE";
+      throw e;
+    }
+    return buf;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 async function run(job: Job) {
   const hash = crypto.createHash("sha256");
   let whole: Buffer | null = null;
@@ -72,6 +100,16 @@ async function run(job: Job) {
   // stale (NTFS updates only the entry of the hard link that was written through).
   const before = fs.fstatSync(fd);
   const size = before.size;
+  // Modified seconds ago: most likely still being written (a copy in progress, a
+  // download, an editor saving). Reading it now would hash a version that is about
+  // to change. Come back shortly - without having read a byte.
+  const age = Date.now() - before.mtimeMs;
+  if (age >= -5_000 && age < job.settleMs) {
+    fs.closeSync(fd);
+    const e = new Error("modified moments ago; waiting for it to settle") as NodeJS.ErrnoException;
+    e.code = "SETTLING";
+    throw e;
+  }
   let read = 0;
   const onRead = (n: number) => { read += n; progress(job.id, read); };
   try {
@@ -114,7 +152,7 @@ async function run(job: Job) {
   // second read -- it comes from the OS cache, which the hashing pass just filled.
   if (!whole && size <= job.maxParseBytes) {
     const k = sniff(head, job.ext).kind;
-    if (k === "pdf" || k === "doc" || k === "sheet" || k === "slides") whole = fs.readFileSync(job.abs);
+    if (k === "pdf" || k === "doc" || k === "sheet" || k === "slides") whole = readAgain(job.abs, size, before.mtimeMs);
   }
   const a = await analyze(whole, head, job.ext, size, job.maxTextChars);
   const index = a.text && a.quality === "ok" ? indexText(`${a.title ?? ""}\n${(a.meta?.heading as string) ?? ""}\n${a.text}`) : "";

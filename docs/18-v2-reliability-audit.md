@@ -468,7 +468,7 @@ Covers changes #1, #2, #8 and #9 in §9.
 - Choices on a missing file stay in the export (marked `missing`): the file may come back.
 - The export is not written by `import` itself, so a partial import can't replace the complete file.
 
-### Phase 3: backups and database integrity (done 2026-09-22, not yet committed)
+### Phase 3: backups and database integrity (done 2026-09-22, commit `67b83c0`)
 
 Covers changes #10, #11 and #12 in §9.
 
@@ -503,3 +503,50 @@ Covers changes #10, #11 and #12 in §9.
 - 7 backups of about the database's size each (currently 280 MB, so about 2 GB). The cost is known and configurable; putting them on another disk is recommended, not required.
 - No automatic repair and no automatic restore. Both replace data, so a person runs the command. The page and the log say exactly which one.
 - The intent export is not rotated alongside the backups: its own history already keeps every version that dropped or changed a decision.
+
+### Phase 4: the filesystem model (done 2026-09-22, not yet committed)
+
+Covers changes #13–#20 in §9, plus the fallback-walker fixes in §5.
+
+| Change | Where |
+|---|---|
+| **SUSPECT → MISSING.** Migration 5 adds `files.missed` (when a complete scan first didn't see the file), `files.seenat` (the scan before, when it was last known there) and `files.born` (first seen). A missed file keeps its state, plan and search entry. It becomes MISSING only when a later complete scan, at least `CONFIRM_MISSING_MS` (10 min) on, still misses it. Seen again: cleared. SUSPECT is a flag, not a state, so the file's real lifecycle state survives a false alarm | `db/schema.ts`, `scan/scanner.ts`, `pipeline/states.ts` |
+| **ENOENT in a worker** makes the file SUSPECT, never MISSING, and it isn't read again until a scan has seen it. An unplugged drive can no longer turn its queued files MISSING, and the ghost library entries this caused (plan kept on a MISSING row) are gone | `pipeline/engine.ts` |
+| **Volume identity.** The walker reports the volume serial before any file. A different serial at the root's path stops the walk before a single row is touched (`roots.seen_volume`, `online=0`), and the Folders page offers **Use this disk** (`PATCH /api/roots/:id {acceptVolume}`) | `scan/walker.ts`, `scan/scanner.ts`, `server/http.ts`, `ui/app.js` |
+| **Drive-letter moves.** Offline roots are polled every minute (`fsp.stat`, never blocking), so a disk that returns is scanned at once. A root whose disk isn't at its path is looked for under every other letter, at most every 5 minutes. Exactly one match with the same serial and folder, validated like a new root, means the root follows it | `scan/volumes.ts`, `pipeline/engine.ts` |
+| **Choices carried by content** (`carryByContent`): a MISSING row with a choice hands it to the one live row with the same SHA-256 that was born after the missing one was last seen, and only when the pairing is one-to-one. Otherwise it is counted as *unresolved* and shown on the Status page. A file ID match that is live elsewhere now settles a *suspect* row at once, so Explorer renames still carry immediately. Runs after each scan and every minute | `scan/scanner.ts`, `pipeline/engine.ts` |
+| **Settling.** A file modified within `ATLAS_SETTLE_S` (10 s) is not read (code SETTLING, not a failure). Retries back off: 15 s, 30 s, 1 min … up to 10 min | `pipeline/worker.ts`, `pipeline/engine.ts` |
+| **Scan watchdog.** A listing silent for `ATLAS_SCAN_STALL_S` (120 s) is abandoned as incomplete; the scan returns at once rather than waiting for a process stuck in I/O. A scan requested *during* that root's scan now runs again afterwards instead of being dropped. Removing a root while it's being scanned returns 409 | `scan/walker.ts`, `pipeline/engine.ts`, `server/http.ts` |
+| **Late results land on nothing.** Every job write names id + root + path. An OCR outcome carries the content's SHA-256 and is dropped if the id now names other content | `pipeline/engine.ts`, `pipeline/worker.ts` |
+| **Reads by path are verified.** OCR (after success too), the second read of large documents, and thumbnails each check the file is still the hashed version; otherwise the result is discarded, not filed under the old SHA-256. All these checks are asynchronous on the main thread | `pipeline/engine.ts`, `pipeline/worker.ts`, `thumbs.ts` |
+| **Planner `evict`** no longer turns a NEW (unread) file into IDENT | `plan/planner.ts` |
+| **Fallback Node walker**: no file ID (it can't tell NTFS from FAT); a file that can't be stat'ed protects its folder instead of being marked gone | `scan/walker.ts` |
+
+**Verified:**
+
+- `npm test`: 85/85, 8 new in `test/filesystem.test.ts`:
+  - a real delete-and-rename save;
+  - a folder denied with `icacls`;
+  - an unreachable root;
+  - a different disk (a changed serial);
+  - **a real drive-letter move with `subst`** (the root followed from R: to S:, same rows);
+  - carry by content with an old copy and ambiguous twins;
+  - the real worker settling;
+  - stale results;
+  - OCR of a file saved over mid-read;
+  - evict;
+  - a scan requested mid-scan.
+- The Phase 1 rescan test now checks suspect, then missing.
+- With the volume guard or the late-result guard removed, their tests fail.
+- `tsc` is clean.
+- `bench:crash`: 11/11.
+- Migration 5 on a snapshot of the live database: 24 ms, counts unchanged, integrity ok.
+- Scan speed against the previous commit, 8 alternating rounds on 5,103 files: medians of 396 against 364 ms (first scan) and 377 against 421 ms (rescan), with fully overlapping ranges. No measurable difference.
+- Live: all 4 roots online on `4043c450`, nothing suspect. The Folders page's "different disk" and "not reachable" states were simulated in the browser only. "Use this disk" with nothing waiting returns 409 and changes nothing.
+
+**Decisions:**
+
+- SUSPECT is a flag (`missed`), not a state value. Every existing query of `state` keeps working, and a false alarm costs nothing.
+- Relocation to another drive letter is automatic only on a unique match of serial and folder. Accepting a *different* disk is always a person's decision.
+- There is no screen yet to resolve an ambiguous carry by hand. It's counted on the Status page, and the choice stays on the missing row (and in the export) until then.
+- The scan watchdog could not be tested automatically (it needs a listing that hangs). It shares its stop path with the volume refusal, which is tested. A real hanging-share test belongs to Phase 8.

@@ -60,11 +60,18 @@ export const config = {
    * such deadline - a 40 GB video on a USB 2 disk takes as long as it takes.
    */
   jobTimeoutMs: num(env.ATLAS_JOB_TIMEOUT_S, 180) * 1000,
+  /**
+   * A file modified less than this long ago is probably still being written (a copy,
+   * a download, a save): it is left to settle, unread, and tried again shortly.
+   */
+  settleMs: num(env.ATLAS_SETTLE_S, 10) * 1000,
   /** A read that makes no progress for this long is stuck (dead share, failing disk): an ACCESS failure. */
   stallTimeoutMs: num(env.ATLAS_STALL_S, 60) * 1000,
   maxTries: 3,
 
   rescanMinutes: num(env.ATLAS_RESCAN_MINUTES, 60),
+  /** A directory listing that produces nothing for this long is stuck (a hung share): the scan is abandoned as incomplete. */
+  scanStallMs: num(env.ATLAS_SCAN_STALL_S, 120) * 1000,
 
   /**
    * Database backups (src/db/maintenance.ts): a verified copy every `backupHours`,

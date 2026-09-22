@@ -114,9 +114,13 @@ async function showStatus() {
 async function showRoots() {
   const [roots, session] = await Promise.all([api("/api/roots"), api("/api/session")]);
   view.innerHTML = `<h1>Folders</h1>
-    <div class="panel"><ul class="list">${roots.map((r) => `<li><span class="name" dir="auto">${esc(r.path)}</span>
+    <div class="panel"><ul class="list">${roots.map((r) => `<li><span class="name" dir="auto">${esc(r.path)}
+        ${r.online ? "" : `<span class="err small">${r.seen_volume ? "a different disk is here" : "not reachable"}</span>`}
+        ${r.scan_error ? `<span class="muted small" dir="auto">${esc(r.scan_error)}</span>` : ""}</span>
+      ${r.seen_volume ? `<button data-accept="${r.id}" title="The files at this path are this folder (for example the same data on a new disk): scan them as this folder.">Use this disk</button>` : ""}
       <select data-role="${r.id}">${["source", "library", "backup"].map((x) => `<option ${x === r.role ? "selected" : ""}>${x}</option>`).join("")}</select>
-      <button class="ghost" data-scan="${r.id}">Rescan</button><button class="ghost" data-del="${r.id}">Remove</button></li>`).join("") || '<li class="muted">No folders yet.</li>'}</ul></div>
+      <button class="ghost" data-scan="${r.id}">Rescan</button><button class="ghost" data-del="${r.id}">Remove</button></li>`).join("") || '<li class="muted">No folders yet.</li>'}</ul>
+      <p class="muted small">A folder is identified by its disk, not its drive letter: if a drive comes back as another letter, Atlas follows it. A <b>different</b> disk at a folder's path is never scanned as that folder unless you say it is the same one.</p></div>
     <div class="panel"><h2>Add a folder</h2>
       <form id="addRoot" class="row"><input id="rootPath" placeholder="D:\\Documents" style="flex:1" dir="ltr" required>
       <select id="rootRole"><option>source</option><option>library</option><option>backup</option></select><button>Add</button></form>
@@ -124,6 +128,9 @@ async function showRoots() {
       ${session.local ? '<div id="browser" class="dirs"></div>' : ""}<p id="rootErr" class="err"></p></div>`;
   view.querySelectorAll("[data-role]").forEach((el) => el.addEventListener("change", () => post(`/api/roots/${el.dataset.role}`, { role: el.value }, "PATCH").then(route)));
   view.querySelectorAll("[data-scan]").forEach((el) => el.addEventListener("click", () => post("/api/scan", { root: Number(el.dataset.scan) }).then(() => (location.hash = "#/status"))));
+  view.querySelectorAll("[data-accept]").forEach((el) => el.addEventListener("click", () => {
+    if (confirm("Scan the disk now at this path as this folder? Files that are not there will be treated as missing.")) post(`/api/roots/${el.dataset.accept}`, { acceptVolume: true }, "PATCH").then(route);
+  }));
   view.querySelectorAll("[data-del]").forEach((el) => el.addEventListener("click", () => {
     if (confirm("Forget this folder? Atlas removes it from the index. Nothing on disk is touched.")) api(`/api/roots/${el.dataset.del}`, { method: "DELETE" }).then(route);
   }));

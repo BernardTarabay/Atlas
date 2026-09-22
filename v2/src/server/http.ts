@@ -175,8 +175,8 @@ function browse(p: string | null) {
  * changed file is a different content with a different hash.
  */
 async function sendThumb(db: Db, thumbs: Thumbs, req: Req, res: Res, id: number, want: number) {
-  const row = db.get<{ path: string; rootPath: string; sha: string | null }>(
-    `SELECT f.path, r.path AS rootPath, hex(c.sha) AS sha FROM files f JOIN roots r ON r.id = f.root
+  const row = db.get<{ path: string; rootPath: string; sha: string | null; size: number; mtime: number }>(
+    `SELECT f.path, r.path AS rootPath, hex(c.sha) AS sha, f.size, f.mtime FROM files f JOIN roots r ON r.id = f.root
      LEFT JOIN contents c ON c.id = f.content WHERE f.id = ?`, id);
   if (!row?.sha) throw new HttpError(404, "no thumbnail");
   const size = bucket(want);
@@ -185,7 +185,7 @@ async function sendThumb(db: Db, thumbs: Thumbs, req: Req, res: Res, id: number,
   const abs = resolveFile(row.rootPath, row.path);
   let closed = false;
   res.on("close", () => { closed = true; });
-  const file = await thumbs.get(row.sha, abs, size, () => closed);
+  const file = await thumbs.get(row.sha, abs, size, () => closed, { size: row.size, mtime: row.mtime });
   if (closed) return;
   if (!file) {
     // Short-lived: the file may gain a thumbnail handler, or come back online.
@@ -334,7 +334,8 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport, maint
     // BYs, and the page polls - while activity is read straight from memory.
     ["GET", /^\/api\/dashboard$/, () => {
       if (!dashCache || Date.now() - dashCache.at > 1000) dashCache = { at: Date.now(), value: dashboard(db) };
-      return { ...dashCache.value, busy: engine.isBusy, uptime: Math.round((Date.now() - engine.startedAt) / 1000), scan: engine.scanState, safety: safety() };
+      return { ...dashCache.value, busy: engine.isBusy, uptime: Math.round((Date.now() - engine.startedAt) / 1000), scan: engine.scanState, safety: safety(),
+        unresolved: engine.unresolved };
     }],
     ["GET", /^\/api\/activity$/, () => {
       const waiting = db.get<{ n: number }>("SELECT count(*) AS n FROM files WHERE state < 50")!.n;
@@ -443,14 +444,23 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport, maint
           db.run(`UPDATE files SET state = ${STATE.IDENT} WHERE root = ? AND state = ${STATE.DONE}`, id); // representatives may change
         }
         if (b.enabled != null) db.run("UPDATE roots SET enabled = ? WHERE id = ?", b.enabled ? 1 : 0, id);
+        // "It is the same folder": a different disk was found at this root's path (the
+        // same data restored to a new disk, a reformat) and a person says it is this root.
+        if (b.acceptVolume === true) {
+          const n = db.run("UPDATE roots SET volume = seen_volume, seen_volume = NULL, scan_error = NULL WHERE id = ? AND seen_volume IS NOT NULL", id).changes;
+          if (!n) throw new HttpError(409, "No other disk is waiting to be accepted for this folder.");
+        }
       });
       intent?.changed();
       engine.reloadRoots();
+      if (b.acceptVolume === true) engine.requestScan(id);
       engine.wake();
       return { ok: true };
     }],
     ["DELETE", /^\/api\/roots\/(\d+)$/, (_req, _res, m) => {
       writable();
+      // A scan in progress would keep adding rows for a root that no longer exists.
+      if (engine.scanState.scanning === Number(m[1])) throw new HttpError(409, "This folder is being scanned right now; try again in a moment.");
       db.durable(() => removeRoot(db, Number(m[1])));
       intent?.changed();
       engine.reloadRoots();

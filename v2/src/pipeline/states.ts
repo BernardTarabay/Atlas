@@ -5,7 +5,14 @@
 //   IDENT   hashed and linked to a content row (or a cloud placeholder, which is never read);
 //           needs planning
 //   DONE    planned into the virtual library (or recognized as a copy of a planned file)
-//   MISSING not seen by the last complete scan of its root
+//   MISSING not seen by two complete scans of its root, at least CONFIRM_MISSING_MS apart
+//
+// SUSPECT is not a state of its own: it is `files.missed IS NOT NULL` on a row that
+// keeps whatever state it had (and its place in the library). A complete scan that
+// does not see a file sets it; seeing the file again clears it; a later complete scan
+// that still does not see it makes the row MISSING. A worker that finds the file gone
+// (ENOENT) sets it too, and the next complete scan decides. Suspect rows are not read
+// until a scan has seen them again.
 //   FAILED  could not be read after config.maxTries attempts. NOT retried by scans:
 //           only when the file changes (size, mtime, file ID), when `fsig` no
 //           longer matches (content failures), at `fnext` (access failures), or
@@ -27,6 +34,14 @@ export type FailureClass = "content" | "access";
 export function failureClass(code: string): FailureClass {
   return code === "TIMEOUT" || code === "CRASH" || code === "ERR" || code.startsWith("ERR_") ? "content" : "access";
 }
+
+/**
+ * A file not seen by a complete scan is only MISSING when a later complete scan, at
+ * least this long after the first, still does not see it. One listing is not proof
+ * of a deletion: a drive that blinked, a share that answered empty once, an editor
+ * saving by delete-and-rename between two quick scans.
+ */
+export const CONFIRM_MISSING_MS = 10 * 60_000;
 
 /** How long an access failure waits before its next round: 1 h, 6 h, then daily. */
 const BACKOFF_MS = [3_600_000, 21_600_000, 86_400_000];

@@ -5,3 +5,6 @@ import path from "node:path";
 
 process.env.ATLAS_HOME ??= fs.mkdtempSync(path.join(os.tmpdir(), "atlas-test-"));
 process.env.ATLAS_LOG_LEVEL ??= "error";
+// Test files are written moments before they are read; the settle window (config.settleMs)
+// would make every test wait. Tests of settling itself pass their own window.
+process.env.ATLAS_SETTLE_S ??= "0";

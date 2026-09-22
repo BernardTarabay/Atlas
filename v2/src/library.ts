@@ -187,6 +187,8 @@ export function dashboard(db: Db) {
   // Of those: set aside until the file changes (content), or tried again later (access).
   const failedAccess = one<{ n: number }>("SELECT count(*) AS n FROM files WHERE state = 90 AND fclass = 'access'").n;
   const missing = one<{ n: number }>("SELECT count(*) AS n FROM files WHERE state = 70").n;
+  // Not seen by the last complete scan, and not yet confirmed gone (pipeline/states.ts).
+  const suspect = one<{ n: number }>("SELECT count(*) AS n FROM files WHERE missed IS NOT NULL AND state <> 70").n;
   const photos = one<{ n: number; bytes: number }>(
     `SELECT count(*) AS n, coalesce(sum(f.size), 0) AS bytes FROM files f JOIN contents c ON c.id = f.content
      WHERE f.plan IS NOT NULL AND c.kind = 'image'`);
@@ -211,7 +213,7 @@ export function dashboard(db: Db) {
   return {
     files: all.n, bytes: all.bytes, placed: placed.n, placedBytes: placed.bytes,
     unique: unique.n, uniqueBytes: unique.bytes,
-    waiting, failed, failedAccess, missing, manual,
+    waiting, failed, failedAccess, missing, suspect, manual,
     photos: photos.n, photoBytes: photos.bytes,
     ocr: { pending: ocrBy(1) - ocrDeferred, deferred: ocrDeferred, read: ocrBy(2), failed: ocrBy(3), noEngine: ocrBy(4) },
     duplicates: { ...dups, aliases },

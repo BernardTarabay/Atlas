@@ -24,6 +24,7 @@
 // thumbnail share one job, and a request the browser has already abandoned
 // (scrolled past, navigated away) is dropped before it starts.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { config } from "./config.ts";
 import { log } from "./log.ts";
@@ -41,7 +42,20 @@ export const SIZES = [128, 256, 512] as const;
 export const THUMB_V = 2;
 export const bucket = (n: number) => SIZES.find((s) => s >= n) ?? SIZES[SIZES.length - 1];
 
-interface Job { key: string; abs: string; size: number; out: string; gone: () => boolean; resolve: (p: string | null) => void }
+/** `expect`: the size and mtime of the version that was hashed; a picture of any other version is not this content's. */
+interface Expect { size: number; mtime: number }
+interface Job { key: string; abs: string; size: number; out: string; gone: () => boolean; expect?: Expect; resolve: (p: string | null) => void }
+
+/** Is the file at `abs` still the hashed version? Asynchronous: never block the main thread on a disk. */
+async function same(abs: string, e: Expect | undefined): Promise<boolean> {
+  if (!e) return true;
+  try {
+    const s = await fsp.stat(abs);
+    return s.size === e.size && Math.floor(s.mtimeMs) === e.mtime;
+  } catch {
+    return false;
+  }
+}
 
 export class Thumbs {
   private dir = path.join(config.home, "thumbs");
@@ -66,7 +80,7 @@ export class Thumbs {
    * The cached thumbnail for this content at this size, making it if needed.
    * Resolves to a file path, or null when there is no picture to be had.
    */
-  get(sha: string, abs: string, size: number, gone: () => boolean = () => false): Promise<string | null> {
+  get(sha: string, abs: string, size: number, gone: () => boolean = () => false, expect?: Expect): Promise<string | null> {
     const key = `${sha}-${size}`;
     if (this.none.has(sha)) return Promise.resolve(null);
     const out = this.file(sha, size);
@@ -75,7 +89,7 @@ export class Thumbs {
     if (running) return running;
     if (!this.slots.length) return Promise.resolve(null);
     const p = new Promise<string | null>((resolve) => {
-      this.queue.push({ key, abs, size, out, gone, resolve });
+      this.queue.push({ key, abs, size, out, gone, expect, resolve });
       this.pump();
     }).finally(() => this.inflight.delete(key));
     this.inflight.set(key, p);
@@ -96,7 +110,15 @@ export class Thumbs {
       // Written beside the final name and renamed into place, so a crash mid-write
       // can never leave a half-written file that looks like a finished thumbnail.
       const tmp = `${j.out}.${process.pid}.tmp`;
-      slot.rt.thumb(j.abs, j.size, tmp)
+      // Cached under the content's SHA-256 for good, so it must be a picture of THAT
+      // content: the file is checked before and after (it may have been saved over
+      // since it was hashed, and not yet rescanned).
+      same(j.abs, j.expect)
+        .then(async (before) => {
+          if (!before) throw new Error("changed since it was read");
+          await slot.rt.thumb(j.abs, j.size, tmp);
+          if (!(await same(j.abs, j.expect))) throw new Error("changed while its thumbnail was made");
+        })
         .then(() => {
           fs.renameSync(tmp, j.out);
           this.counters.made++;
@@ -105,6 +127,7 @@ export class Thumbs {
         .catch((e: Error) => {
           fs.rmSync(tmp, { force: true });
           if (/no thumbnail/i.test(e.message)) { this.none.add(j.key.slice(0, j.key.lastIndexOf("-"))); this.counters.none++; }
+          else if (/^changed /.test(e.message)) this.counters.dropped++;
           else log.warn("thumbnail failed", { file: j.abs, error: e.message.slice(0, 200) });
           j.resolve(null);
         })

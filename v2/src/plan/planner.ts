@@ -67,7 +67,10 @@ export function planBatch(db: Db, limit: number, extracting: Set<string>): numbe
   const clearPlan = db.q(`UPDATE files SET plan = NULL, rule = ?, state = ${S.DONE} WHERE id = ?`);
   const replanRep = db.q(`UPDATE files SET state = ${S.IDENT} WHERE id = ? AND state = ${S.DONE}`);
   const holder = db.q("SELECT id, root, path FROM files WHERE plan = ? AND id <> ? LIMIT 1");
-  const evict = db.q(`UPDATE files SET plan = NULL, state = ${S.IDENT} WHERE id = ?`);
+  // Giving up a name re-plans a PLANNED file. A file still waiting to be read (NEW, an
+  // edited file keeps its old plan until then) keeps waiting: making it IDENT here would
+  // file it without ever reading it.
+  const evict = db.q(`UPDATE files SET plan = NULL, state = CASE WHEN state = ${S.DONE} THEN ${S.IDENT} ELSE state END WHERE id = ?`);
   const titleShared = db.q("SELECT count(*) AS n FROM (SELECT 1 FROM contents WHERE title = ? LIMIT 5)");
   const delName = db.q("DELETE FROM fts_name WHERE rowid = ?");
   const addName = db.q("INSERT INTO fts_name(rowid, name) VALUES(?, ?)");

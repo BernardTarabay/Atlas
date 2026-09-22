@@ -9,7 +9,7 @@ import { Engine } from "../src/pipeline/engine.ts";
 import { search } from "../src/search/search.ts";
 import { listFolder } from "../src/library.ts";
 import { planBatch } from "../src/plan/planner.ts";
-import { S } from "../src/pipeline/states.ts";
+import { S, CONFIRM_MISSING_MS } from "../src/pipeline/states.ts";
 import { docx } from "./_zip.ts";
 
 const tree = fs.mkdtempSync(path.join(os.tmpdir(), "atlas-tree-"));
@@ -134,8 +134,18 @@ test("rescan: moved file keeps its analysis (same NTFS file id), deleted is miss
   const now = byPath("moved-here/Contract final.txt");
   assert.equal(now.content, moved.content, "analysis carried over");
   assert.equal(db.get("SELECT 1 AS x FROM files WHERE path = 'to-move/Contract final.txt'"), undefined, "the old row is gone");
-  assert.equal(byPath("to-delete.txt").state, S.MISSING);
+  // One scan that does not see a file is not proof it is gone: SUSPECT, still in the library.
+  const suspect = db.get<{ state: number; missed: number | null; plan: string | null }>("SELECT state, missed, plan FROM files WHERE path = 'to-delete.txt'")!;
+  assert.equal(suspect.state, S.DONE);
+  assert.ok(suspect.missed != null, "suspected gone");
+  assert.ok(suspect.plan, "keeps its place until confirmed");
   const changed = byPath("to-change.txt");
   assert.equal(changed.state, S.DONE);
   assert.equal(engine.counters.hashed - hashedBefore, 2, "only the edited file and its hard link were re-read");
+  // A later complete scan, CONFIRM_MISSING_MS on, that still does not see it: MISSING.
+  db.run("UPDATE files SET missed = missed - ? WHERE path = 'to-delete.txt'", CONFIRM_MISSING_MS);
+  engine.requestScan(1);
+  await settle();
+  assert.equal(byPath("to-delete.txt").state, S.MISSING);
+  assert.equal(byPath("to-delete.txt").plan, null, "and leaves the library");
 });

@@ -28,6 +28,21 @@ export interface WalkResult {
   complete: boolean;
   /** the root itself could not be opened (drive gone, permissions) */
   rootMissing: boolean;
+  /** the walk was stopped before listing anything: `onVolume` said this is not the expected disk */
+  refused?: boolean;
+  /** the walk was stopped because it produced nothing for `stallMs` (a hung share) */
+  stalled?: boolean;
+}
+
+export interface WalkOptions {
+  /**
+   * Called with the volume serial and filesystem BEFORE any entry is reported.
+   * Returning false stops the walk: nothing at all is listed from a disk that is
+   * not the one this root was.
+   */
+  onVolume?: (volume: string | null, fsName: string | null) => boolean;
+  /** Give up on a listing that produces nothing for this long (native walker only). */
+  stallMs?: number;
 }
 
 const SKIP_FILES = new Set(["desktop.ini", "thumbs.db", "ehthumbs.db", ".ds_store", ".localized"]);
@@ -36,12 +51,15 @@ const skipFile = (name: string) => SKIP_FILES.has(name.toLowerCase()) || name.st
 /** File IDs are only stable on NTFS/ReFS; on FAT/exFAT they are positions, not identities. */
 const stableIds = (fsName: string | null) => fsName === "NTFS" || fsName === "ReFS";
 
-export async function walk(root: string, onBatch: (entries: Entry[]) => void, batchSize = 2000): Promise<WalkResult> {
-  if (process.platform === "win32" && fs.existsSync(config.walkerExe)) return walkNative(root, onBatch, batchSize);
-  return walkNode(root, onBatch, batchSize);
+export async function walk(root: string, onBatch: (entries: Entry[]) => void, batchSize = 2000, opts: WalkOptions = {}): Promise<WalkResult> {
+  if (process.platform === "win32" && fs.existsSync(config.walkerExe)) return walkNative(root, onBatch, batchSize, opts);
+  return walkNode(root, onBatch, batchSize, opts);
 }
 
-function walkNative(root: string, onBatch: (e: Entry[]) => void, batchSize: number): Promise<WalkResult> {
+/** "4043c450": the volume serial as the native walker prints it, from a Node stat. */
+export const serialOf = (dev: bigint | number) => BigInt(dev).toString(16).padStart(8, "0");
+
+function walkNative(root: string, onBatch: (e: Entry[]) => void, batchSize: number, opts: WalkOptions): Promise<WalkResult> {
   return new Promise((resolve, reject) => {
     const args = [root];
     for (const d of config.excludeDirs) args.push("--exclude", d);
@@ -51,9 +69,31 @@ function walkNative(root: string, onBatch: (e: Entry[]) => void, batchSize: numb
     let batch: Entry[] = [];
     let ids = true;
     let stderr = "";
+    let stopped = false;
+    // A listing of a share whose server stopped answering can block for a very long
+    // time; every other root's scan waits behind it. Silence for stallMs ends it, as
+    // an incomplete walk - from which nothing is concluded.
+    let lastOutput = Date.now();
+    let settled = false;
+    /** Stop listening and report now: a process stuck in I/O on a dead share may take long to die. */
+    const stop = () => {
+      stopped = true;
+      child.kill();
+      if (watchdog) clearInterval(watchdog);
+      if (settled) return;
+      settled = true;
+      res.complete = false;
+      if (res.stalled) res.errors.push({ dir: "", code: "the listing stopped responding" });
+      resolve(res);
+    };
+    const watchdog = opts.stallMs ? setInterval(() => {
+      if (Date.now() - lastOutput > opts.stallMs!) { res.stalled = true; stop(); }
+    }, Math.min(5000, opts.stallMs)) : null;
     child.stderr.on("data", (d) => { stderr += d; });
     const rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
     rl.on("line", (line) => {
+      lastOutput = Date.now();
+      if (stopped) return;
       const t = line.charCodeAt(0);
       if (t === 70 /* F */) {
         const p = line.split("\t");
@@ -81,13 +121,17 @@ function walkNative(root: string, onBatch: (e: Entry[]) => void, batchSize: numb
         res.volume = vol;
         res.fs = fsName;
         ids = stableIds(fsName);
+        if (opts.onVolume && !opts.onVolume(vol || null, fsName || null)) { res.refused = true; stop(); }
       } else if (t === 90 /* Z */) {
         res.complete = true;
       }
     });
     child.on("error", reject);
     child.on("close", (code) => {
+      if (watchdog) clearInterval(watchdog);
       rl.close();
+      if (settled) return;
+      settled = true;
       if (batch.length) onBatch(batch);
       if (code === 2) res.rootMissing = true;
       if (code !== 0) res.complete = false;
@@ -97,15 +141,16 @@ function walkNative(root: string, onBatch: (e: Entry[]) => void, batchSize: numb
   });
 }
 
-async function walkNode(root: string, onBatch: (e: Entry[]) => void, batchSize: number): Promise<WalkResult> {
+async function walkNode(root: string, onBatch: (e: Entry[]) => void, batchSize: number, opts: WalkOptions): Promise<WalkResult> {
   const res: WalkResult = { volume: null, fs: null, files: 0, dirs: 0, errors: [], complete: false, rootMissing: false };
   try {
     const st = await fsp.stat(root, { bigint: true });
-    res.volume = st.dev.toString(16);
+    res.volume = serialOf(st.dev);
   } catch {
     res.rootMissing = true;
     return res;
   }
+  if (opts.onVolume && !opts.onVolume(res.volume, null)) { res.refused = true; return res; }
   const exclude = new Set(config.excludeDirs.map((d) => d.toLowerCase()));
   const queue: string[] = [""];
   let batch: Entry[] = [];
@@ -128,13 +173,17 @@ async function walkNode(root: string, onBatch: (e: Entry[]) => void, batchSize: 
                 // No attributes without the helper: a large file occupying no blocks is
                 // how a dehydrated cloud placeholder looks from stat.
                 const placeholder = s.size >= 1048576n && s.blocks === 0n;
+                // No file ID either: without the filesystem's name there is no telling a
+                // stable NTFS ID from a FAT position that a new file may reuse.
                 batch.push({
                   path: r, size: Number(s.size), mtime: Number(s.mtimeMs), ctime: Number(s.birthtimeMs),
-                  attrs: placeholder ? 0x400000 : 0, fid: `${res.volume}:${s.ino.toString(16)}`,
+                  attrs: placeholder ? 0x400000 : 0, fid: null,
                 });
                 res.files++;
                 if (batch.length >= batchSize) { onBatch(batch); batch = []; }
-              } catch (err) { res.errors.push({ dir: r, code: (err as NodeJS.ErrnoException).code ?? "ERR" }); }
+                // A file that cannot be stat'ed is still there: its FOLDER is reported as not
+                // fully listed, so nothing in it is concluded to be gone.
+              } catch (err) { res.errors.push({ dir: rel, code: (err as NodeJS.ErrnoException).code ?? "ERR" }); }
             }));
           }, (err: NodeJS.ErrnoException) => { res.errors.push({ dir: rel, code: err.code ?? "ERR" }); })
           .finally(() => {

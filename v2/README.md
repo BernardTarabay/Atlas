@@ -63,11 +63,29 @@ Setup and host-folder browsing are refused through the tunnel.
 | `NEW` (0) | discovered or changed: read once → SHA-256 → analyze if the content is new |
 | `IDENT` (20) | linked to its content (cloud placeholders skip reading entirely) |
 | `DONE` (50) | placed in the library, or recognized as a copy/alias of a placed file |
-| `MISSING` (70) | not found by the last complete scan of its folder |
+| `MISSING` (70) | not found by two complete scans of its folder, at least 10 minutes apart (see below) |
 | `FAILED` (90) | unreadable after 3 attempts; kept, **not** retried by scans (below) |
 
 There is no job table: in-flight work lives in memory, and after a crash every
 row below `DONE` is simply picked up again. Everything is idempotent.
+
+**When a file counts as gone.** One scan that doesn't see a file isn't proof: a drive may have blinked, a share may have answered empty once, or an editor may have been saving by delete-and-rename.
+
+- **The first time**, the file becomes SUSPECT (`files.missed`). It keeps its state and its place in the library.
+- **It becomes MISSING** only when a *later* complete scan, at least 10 minutes on, still doesn't see it.
+- **Nothing is concluded** from an incomplete listing, from a folder that couldn't be read, or from a root that isn't reachable.
+- **A worker that finds a file gone** makes it SUSPECT, and the next scan decides.
+- **A listing that produces nothing for `ATLAS_SCAN_STALL_S` (120 s)**, such as a hung share, is abandoned as incomplete, so it can't hold up the other folders.
+
+**Drives are disks, not letters.** Each folder records the serial number of the disk it's on.
+
+- **A different disk at the same path** isn't scanned as that folder. The Folders page offers **Use this disk** for when it really is the same data, for example on a new disk.
+- **A drive that comes back as another letter** (E: yesterday, F: today) is found within minutes and followed: same files, same choices.
+- **An offline folder** is checked every minute, so a drive plugged back in is scanned straight away, not at the next hourly scan.
+
+**Moves Atlas can't follow by file ID** are followed by content, but only when that's certain. This covers another drive, FAT/exFAT, or a network share. The choice goes to the one file with the same bytes that appeared when the original vanished. A copy that was always there is never it, and two candidates are never guessed between: the Status page counts those for you.
+
+**Files still being written** (modified in the last `ATLAS_SETTLE_S`, 10 s) are left to settle without being read, and looked at again after 15 s, 30 s, 1 min, and so on.
 
 **When a failed file is tried again.** A failure has a kind (`files.fclass`):
 

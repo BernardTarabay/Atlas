@@ -294,6 +294,8 @@ const render = {
       d.ocr.failed ? `${fmtNum(d.ocr.failed)} OCR failures` : "",
       d.ocr.deferred ? `${fmtNum(d.ocr.deferred)} OCR readings waiting to try again` : "",
       d.missing ? `${fmtNum(d.missing)} missing from disk` : "",
+      d.suspect ? `${fmtNum(d.suspect)} not seen in the last scan (checking again)` : "",
+      d.unresolved ? `${fmtNum(d.unresolved)} choice(s) for moved files could not be placed for sure` : "",
     ].filter(Boolean).join(" · ");
     b.querySelector("[data-actions]").hidden = !(d.failed || d.ocr.failed || d.ocr.deferred);
     const { w, h } = sizeOf(c);

@@ -136,4 +136,22 @@ export const MIGRATIONS: string[] = [
   UPDATE files SET state = 0, tries = 0 WHERE state = 90;
   UPDATE contents SET ocr = 1 WHERE ocr = 3;
   `,
+  // 5: the filesystem model (docs/18 Phase 4).
+  //   files.missed   when a complete scan first failed to see the file (NULL = present). A
+  //                  file is only MISSING once a LATER complete scan, at least 10 minutes on,
+  //                  still does not see it: one bad listing, a drive that blinked, an editor
+  //                  saving by delete-and-rename, is not a deletion.
+  //   files.seenat   the scan before that - when the file was last known to be there.
+  //   files.born     when a row was first seen. With seenat, it tells "a copy that turned up
+  //                  when the other one vanished" (a move to another drive) from "a copy that
+  //                  was always there" (NULL = before this was recorded: never assumed new).
+  //   roots.seen_volume  a DIFFERENT volume found at the root's path (another disk under the
+  //                  same letter): nothing is scanned until someone says it is the same folder.
+  `
+  ALTER TABLE files ADD COLUMN missed INTEGER;
+  ALTER TABLE files ADD COLUMN seenat INTEGER;
+  ALTER TABLE files ADD COLUMN born INTEGER;
+  ALTER TABLE roots ADD COLUMN seen_volume TEXT;
+  CREATE INDEX files_intent ON files(state) WHERE pin IS NOT NULL OR pinname IS NOT NULL;
+  `,
 ];
