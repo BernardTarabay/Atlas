@@ -168,31 +168,53 @@ export class IntentExport {
 }
 
 export interface ImportReport {
-  roots: { added: string[]; present: string[]; skipped: { path: string; reason: string }[] };
+  roots: { added: string[]; present: string[]; updated: string[]; skipped: { path: string; reason: string }[] };
   files: {
     byPath: number; byFileId: number; bySha: number; already: number;
     conflicts: { entry: string; kept: string }[];
     ambiguous: string[];
     unmatched: string[];
+    /** exact mode: choices removed because the export does not have them. */
+    cleared: number;
   };
 }
 
 /**
  * Re-attach exported decisions to this database. Idempotent: running it twice
- * attaches nothing new the second time. A decision is only placed on a file
- * that has none of its own (the database's own, being newer, wins - reported as
- * a conflict). Must run with the engine stopped: it writes to the database.
+ * changes nothing the second time. Must run with the engine stopped: it writes
+ * to the database.
+ *
+ * merge (default)  a decision is only placed on a file that has none of its own:
+ *                  the database's own, being newer, wins (reported as a conflict).
+ *                  For a fresh or rebuilt database.
+ * exact            the export is the truth - the database was restored from a
+ *                  backup OLDER than the export. Choices are set exactly as
+ *                  exported, and a choice the export does not have is removed
+ *                  (within the export's roots; never on a file an ambiguous
+ *                  entry might mean). Roots get the exported role and state.
  */
-export async function importIntent(db: Db, x: IntentFile, scan: (rootId: number) => Promise<unknown>): Promise<ImportReport> {
+export async function importIntent(db: Db, x: IntentFile, scan: (rootId: number) => Promise<unknown>, opts: { exact?: boolean } = {}): Promise<ImportReport> {
+  const exactMode = opts.exact === true;
   const report: ImportReport = {
-    roots: { added: [], present: [], skipped: [] },
-    files: { byPath: 0, byFileId: 0, bySha: 0, already: 0, conflicts: [], ambiguous: [], unmatched: [] },
+    roots: { added: [], present: [], updated: [], skipped: [] },
+    files: { byPath: 0, byFileId: 0, bySha: 0, already: 0, conflicts: [], ambiguous: [], unmatched: [], cleared: 0 },
   };
-  const rootByPath = db.q("SELECT id FROM roots WHERE path = ?");
+  const rootByPath = db.q("SELECT id, role, enabled FROM roots WHERE path = ?");
 
   // Roots first, and scanned, so their files exist to attach decisions to.
   for (const r of x.roots) {
-    if (rootByPath.get(r.path)) { report.roots.present.push(r.path); continue; }
+    const have = rootByPath.get(r.path) as { id: number; role: string; enabled: number } | undefined;
+    if (have) {
+      report.roots.present.push(r.path);
+      if (exactMode && (have.role !== r.role || (have.enabled === 1) !== r.enabled)) {
+        db.durable(() => {
+          db.run("UPDATE roots SET role = ?, enabled = ? WHERE id = ?", r.role, r.enabled ? 1 : 0, have.id);
+          if (have.role !== r.role) db.run(`UPDATE files SET state = ${S.IDENT} WHERE root = ? AND state = ${S.DONE}`, have.id);
+        });
+        report.roots.updated.push(r.path);
+      }
+      continue;
+    }
     try {
       const id = db.durable(() => {
         const id = addRoot(db, r.path, r.role);
@@ -207,12 +229,17 @@ export async function importIntent(db: Db, x: IntentFile, scan: (rootId: number)
   }
 
   const exact = db.q(`SELECT f.id, f.pin, f.pinname FROM files f JOIN roots r ON r.id = f.root WHERE r.path = ? AND f.path = ? AND f.state <> ${S.MISSING}`);
+  const exactMissing = db.q(`SELECT f.id, f.pin, f.pinname FROM files f JOIN roots r ON r.id = f.root WHERE r.path = ? AND f.path = ? AND f.state = ${S.MISSING}`);
   const byFid = db.q(`SELECT id, pin, pinname FROM files WHERE fid = ? AND state <> ${S.MISSING}`);
   const bySha = db.q(`SELECT f.id, f.pin, f.pinname FROM files f JOIN contents c ON c.id = f.content WHERE c.sha = ? AND f.state <> ${S.MISSING}`);
   const set = db.q(
     `UPDATE files SET pin = coalesce(pin, ?), pinname = coalesce(pinname, ?),
        state = CASE WHEN state = ${S.DONE} THEN ${S.IDENT} ELSE state END WHERE id = ?`);
+  const setExact = db.q(
+    `UPDATE files SET pin = ?, pinname = ?, state = CASE WHEN state = ${S.DONE} THEN ${S.IDENT} ELSE state END WHERE id = ?`);
   type Target = { id: number; pin: string | null; pinname: string | null };
+  const matched = new Set<number>();   // rows the export speaks about
+  const unsure = new Set<number>();    // rows an ambiguous entry might mean: never cleared
 
   db.durable(() => {
     for (const e of x.files) {
@@ -224,12 +251,30 @@ export async function importIntent(db: Db, x: IntentFile, scan: (rootId: number)
       if (!targets.length && e.sha) {
         // The same bytes are not the same document: only a single match is trusted.
         const same = bySha.all(Buffer.from(e.sha, "hex")) as unknown as Target[];
-        if (same.length > 1) { report.files.ambiguous.push(`${label} (${same.length} files have these exact bytes)`); continue; }
+        if (same.length > 1) {
+          report.files.ambiguous.push(`${label} (${same.length} files have these exact bytes)`);
+          for (const t of same) unsure.add(t.id);
+          continue;
+        }
         targets = same;
         how = "bySha";
       }
+      // Last: the same path, with the file missing right now. It may come back, and a
+      // scan carries the choice to it if it turns up elsewhere (scanner adoptKnown).
+      if (!targets.length) { targets = exactMissing.all(e.root, e.path) as unknown as Target[]; how = "byPath"; }
       if (!targets.length) { report.files.unmatched.push(label); continue; }
       let attached = false;
+      for (const t of targets) matched.add(t.id);
+      if (exactMode) {
+        for (const t of targets) {
+          if (t.pin === e.pin && t.pinname === e.pinname) continue;
+          setExact.run(e.pin, e.pinname, t.id);
+          attached = true;
+        }
+        if (attached) report.files[how]++;
+        else report.files.already++;
+        continue;
+      }
       for (const t of targets) {
         const clash = (e.pin && t.pin && t.pin !== e.pin) || (e.pinname && t.pinname && t.pinname !== e.pinname);
         if (clash) report.files.conflicts.push({ entry: label, kept: `${t.pin ?? ""}/${t.pinname ?? ""}` });
@@ -238,6 +283,18 @@ export async function importIntent(db: Db, x: IntentFile, scan: (rootId: number)
       }
       if (attached) report.files[how]++;
       else report.files.already++;
+    }
+    if (exactMode) {
+      // A choice the export does not have was made before the backup and undone after it.
+      const roots = x.roots.map((r) => r.path);
+      const holders = db.all<{ id: number }>(
+        `SELECT f.id FROM files f JOIN roots r ON r.id = f.root
+         WHERE (f.pin IS NOT NULL OR f.pinname IS NOT NULL) AND r.path IN (SELECT value FROM json_each(?))`, JSON.stringify(roots));
+      for (const h of holders) {
+        if (matched.has(h.id) || unsure.has(h.id)) continue;
+        setExact.run(null, null, h.id);
+        report.files.cleared++;
+      }
     }
   });
   return report;

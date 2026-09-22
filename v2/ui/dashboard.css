@@ -79,6 +79,14 @@
 .dash-head h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -.01em; }
 .dash-head .live { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px; background: var(--glass); border: 1px solid var(--edge); color: var(--ink-2); font-size: 12px; backdrop-filter: blur(12px); }
 .dash-head .live i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); }
+.dash-head .safety { color: var(--ink-3); font-size: 12px; }
+.dash-head .safety.warn { color: var(--warn); }
+.dash-head .safety.bad { color: var(--bad); font-weight: 600; }
+.alarm { margin: -6px 0 18px; padding: 12px 16px; border-radius: 14px; border: 1px solid var(--bad); color: var(--ink);
+  background: color-mix(in srgb, var(--bad) 10%, transparent); font-size: 13.5px; line-height: 1.5; }
+.alarm[hidden] { display: none; }
+.alarm code { font-size: 12.5px; padding: 1px 5px; border-radius: 5px; background: var(--track); }
+.alarm .fine { display: block; margin-top: 6px; }
 .dash-head .live.on i { background: var(--good); animation: dash-pulse 1.6s var(--ease) infinite; }
 .dash-head .grow { flex: 1; }
 .dash-btn {

@@ -23,6 +23,7 @@ export class Db {
       PRAGMA cache_size = -65536;
       PRAGMA mmap_size = 268435456;
       PRAGMA busy_timeout = 5000;
+      PRAGMA journal_size_limit = 67108864;
     `);
     this.migrate();
   }

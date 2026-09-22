@@ -26,6 +26,8 @@ loadEnvFile();
 const env = process.env;
 const num = (v: string | undefined, d: number) => (v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : d);
 
+const home = path.resolve(env.ATLAS_HOME ?? path.join(env.LOCALAPPDATA ?? path.join(os.homedir(), ".local", "share"), "AtlasDev"));
+
 export const config = {
   appDir,
   /**
@@ -33,7 +35,7 @@ export const config = {
    * The development default is deliberately NOT inside the repo: the repo may sit in a
    * OneDrive-synced folder, and a live SQLite database must never be under a sync client.
    */
-  home: path.resolve(env.ATLAS_HOME ?? path.join(env.LOCALAPPDATA ?? path.join(os.homedir(), ".local", "share"), "AtlasDev")),
+  home,
   port: num(env.ATLAS_PORT, 7717),
   /** Loopback only. Remote access arrives through `tailscale serve`, which also connects to loopback. */
   bindHost: "127.0.0.1",
@@ -63,6 +65,17 @@ export const config = {
   maxTries: 3,
 
   rescanMinutes: num(env.ATLAS_RESCAN_MINUTES, 60),
+
+  /**
+   * Database backups (src/db/maintenance.ts): a verified copy every `backupHours`,
+   * the newest `backupKeep` kept. Each is about the size of the database, most of it
+   * extracted text and OCR - rebuildable, but hours of work. Put `backupDir` on
+   * another disk if there is one: a backup on the same disk survives corruption,
+   * not a dead disk.
+   */
+  backupDir: path.resolve(env.ATLAS_BACKUP_DIR ?? path.join(home, "backups")),
+  backupKeep: num(env.ATLAS_BACKUP_KEEP, 7),
+  backupHours: num(env.ATLAS_BACKUP_HOURS, 24),
   /** Directory names never descended into, whatever root they appear under. */
   excludeDirs: [
     "$RECYCLE.BIN", "System Volume Information", ".git", ".svn", ".hg", "node_modules",

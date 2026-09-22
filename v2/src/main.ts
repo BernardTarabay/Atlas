@@ -13,10 +13,23 @@ import { startServer } from "./server/http.ts";
 import { ensureSetupCode } from "./server/auth.ts";
 import { S } from "./pipeline/states.ts";
 import { IntentExport } from "./intent.ts";
+import { Maintenance } from "./db/maintenance.ts";
 
 fs.mkdirSync(config.home, { recursive: true });
 const t0 = performance.now();
-const db = new Db(path.join(config.home, "atlas.db"));
+const dbFile = path.join(config.home, "atlas.db");
+let db: Db;
+try {
+  db = new Db(dbFile);
+} catch (e) {
+  // Nothing sensible runs on a database that cannot be opened. Say what to do; the
+  // service host will keep retrying, which is harmless.
+  log.error("the database cannot be opened", {
+    file: dbFile, error: (e as Error).message,
+    fix: "stop Atlas, then `npm run db -- restore` (newest verified backup) and `npm run intent -- import --exact` if it says so",
+  });
+  process.exit(1);
+}
 const pending = db.get<{ n: number }>(`SELECT count(*) AS n FROM files WHERE state < ${S.DONE}`)!.n;
 const engine = new Engine(db);
 // What a person decided, exported beside the database (src/intent.ts): now, after
@@ -27,7 +40,15 @@ engine.onScanned = () => intent.changed();
 const control = (line: string) => { if (config.hosted) process.stdout.write(line + "\n"); };
 engine.onBusyChange = (busy) => { control(`@@awake ${busy ? 1 : 0}`); log.info(busy ? "busy" : "idle"); };
 engine.start();
-const server = startServer(db, engine, intent);
+// Integrity at startup (in the background) and daily verified backups (src/db/maintenance.ts).
+// A database that fails its check is not repaired and not written to any more: the engine
+// stops, the Status page says so, and restoring a backup is the way back.
+const maint = new Maintenance(dbFile, (detail) => {
+  log.error("database damaged: Atlas has stopped changing it", { detail: detail.slice(0, 10), fix: "npm run db -- restore" });
+  void engine.stop();
+});
+maint.start();
+const server = startServer(db, engine, intent, maint);
 const setupFile = ensureSetupCode(db);
 log.info("atlas started", {
   home: config.home, port: config.port, hosted: config.hosted, resumed: pending, startupMs: Math.round(performance.now() - t0),
@@ -57,6 +78,7 @@ async function shutdown(reason: string) {
   clearInterval(rescan);
   clearInterval(alive);
   clearInterval(lag);
+  maint.stop();
   server.close();
   server.closeAllConnections();
   try { await engine.stop(); intent.flush(); } finally { db.close(); }

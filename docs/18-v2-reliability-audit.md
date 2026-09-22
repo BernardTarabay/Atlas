@@ -437,7 +437,7 @@ Covers changes #3–#7 in §9.
 - A different file ID at the same path, with the same size and mtime, retries a *failed* file only. Other rows keep today's behaviour.
 - OCR content failures get no automatic second attempt; the button covers the rare transient helper crash.
 
-### Phase 2: durable user intent (done 2026-09-22, not yet committed)
+### Phase 2: durable user intent (done 2026-09-22, commit `16e267a`)
 
 Covers changes #1, #2, #8 and #9 in §9.
 
@@ -467,3 +467,39 @@ Covers changes #1, #2, #8 and #9 in §9.
 - A choice on a hard-linked file goes to every live name that has none: one file, one decision, whichever name represents it.
 - Choices on a missing file stay in the export (marked `missing`): the file may come back.
 - The export is not written by `import` itself, so a partial import can't replace the complete file.
+
+### Phase 3: backups and database integrity (done 2026-09-22, not yet committed)
+
+Covers changes #10, #11 and #12 in §9.
+
+| Change | Where |
+|---|---|
+| **Startup check**: `quick_check`, not `integrity_check`, because on this database it costs the same warm and every page is still verified. The full check (which also matches indexes to their tables) runs on every backup copy and on demand. It runs on a worker thread with its own **read-only** connection, never blocking startup or the 120 s liveness signal. Measured 0.89 s at startup | `db/maint-worker.ts`, `db/maintenance.ts`, `main.ts` |
+| **On failure**, nothing is auto-repaired. The engine stops; moving, renaming, retrying and root changes answer 503 with the fix; reads keep working; the Status page shows a banner (`role="alert"`) with the restore command. Reported once | `main.ts`, `server/http.ts`, `ui/dashboard.js` |
+| **A database that can't be opened at all**: logged with the restore command, then exit (the service host retries harmlessly) | `main.ts` |
+| **Daily backup** (first one 3 min after startup, then checked every 10 min against `ATLAS_BACKUP_HOURS`=24): quick_check the source, then `VACUUM INTO …part` from the read-only connection, then full `integrity_check` of the copy, then rename to `atlas-YYYYMMDD-HHMMSSZ.db`, then keep the newest `ATLAS_BACKUP_KEEP`=7. There is a free-space guard (1.1 × database + 64 MB), and `.part` files a crash leaves behind are removed at startup | `db/maintenance.ts` |
+| **Blame is placed correctly**: an error opening or checking the live database, or damage found while copying it, marks the *database* failed. A full disk or an unreadable copy is a failed *backup* and says nothing about the database | `db/maint-worker.ts` |
+| **Restore**: `npm run db -- restore [file]`. Refuses while Atlas runs, and refuses a damaged backup or one with a newer schema. Moves the live files (`.db`, `-wal`, `-shm`) into `replaced-<time>/` and puts them back if anything fails. Copies, fsyncs and renames the backup into place, then opens it (migrations). If the intent export is newer than the backup, keeps a dated copy of it and prints the `import --exact` command | `db/maintenance.ts`, `scripts/db.ts` |
+| **`import --exact`**: the export is the truth (after a restore). Sets choices exactly as exported, removes choices the export doesn't have (never on a file an ambiguous entry might mean), and sets root roles and states. Import now matches a live file by path first, then file ID, then SHA-256, and finally the same path even if it's missing now | `intent.ts`, `scripts/intent.ts` |
+| `journal_size_limit` = 64 MB | `db/db.ts` |
+
+**Verified:**
+
+- `npm test`: 77/77, 8 new in `test/maintenance.test.ts`:
+  - rotation;
+  - a backup taken during writes;
+  - a damaged file detected and never copied over a good backup;
+  - the startup check;
+  - restore, including refusing a damaged or newer backup;
+  - `--exact`;
+  - the 503 guard.
+- Removing restore's verification makes its test fail.
+- `bench:crash`: 11/11.
+- **Rehearsal on a snapshot of the dev database** (280 MB, in a throwaway folder): full check 0.75 s, then a verified backup in 2.3 s, then restore in 1.8 s. The restore printed the `import --exact` command, running it worked, and the restored database passed the full check.
+- **Live**: the Status page reads "Database checked · …". The failure banner shows (simulated in the browser only) and clears on real data.
+
+**Decisions:**
+
+- 7 backups of about the database's size each (currently 280 MB, so about 2 GB). The cost is known and configurable; putting them on another disk is recommended, not required.
+- No automatic repair and no automatic restore. Both replace data, so a person runs the command. The page and the log say exactly which one.
+- The intent export is not rotated alongside the backups: its own history already keeps every version that dropped or changed a decision.

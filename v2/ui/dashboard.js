@@ -501,6 +501,35 @@ async function refreshDash() {
   try { D.dash = await api("/api/dashboard"); } catch { return; }
   for (const c of D.layout) if (c.type !== "pipeline" && c.type !== "breakdown") render[c.type]?.(c);
   paintLive();
+  paintSafety();
+}
+
+/**
+ * The database itself: checked at startup, backed up daily. One quiet line while
+ * all is well; a banner that cannot be missed when the check fails - Atlas has
+ * stopped changing the database, and the way back is a restore.
+ */
+function paintSafety() {
+  const s = D.dash?.safety;
+  const line = D.root?.querySelector("[data-safety]");
+  const alarm = D.root?.querySelector("[data-alarm]");
+  if (!line || !alarm) return;
+  if (!s) { line.textContent = ""; alarm.hidden = true; return; }
+  const b = s.backup;
+  const backup = b.running ? "backing up now"
+    : b.error ? `last backup failed: ${b.error}`
+    : b.at ? `backed up ${fmtDur(Math.max(60, (Date.now() - b.at) / 1000))} ago (${fmtBytes(b.bytes)}, ${b.count} kept)`
+    : "first backup in a few minutes";
+  line.textContent = s.integrity === "checking" ? "Checking the database…"
+    : s.integrity === "ok" ? `Database checked · ${backup}` : "Database damaged";
+  line.className = `safety ${s.integrity === "failed" ? "bad" : b.error ? "warn" : ""}`;
+  line.title = b.dir ? `Backups: ${b.dir}` : "";
+  alarm.hidden = s.integrity !== "failed";
+  if (s.integrity === "failed") {
+    alarm.innerHTML = `<b>The database failed its integrity check.</b> Atlas has stopped changing it, and no file on disk is
+      affected. To recover: stop Atlas, run <code>npm run db -- restore</code>, and follow what it prints.
+      <span class="fine">${esc(s.detail.join(" · "))}</span>`;
+  }
 }
 
 function paintLive() {
@@ -923,8 +952,10 @@ export async function mountDashboard(view) {
   D.mounted = true;
   const page = document.createElement("div");
   page.className = "dash";
-  page.innerHTML = `<div class="dash-head"><h1>Status</h1><span class="live"><i></i><span>…</span></span><span class="grow"></span>
+  page.innerHTML = `<div class="dash-head"><h1>Status</h1><span class="live"><i></i><span>…</span></span>
+    <span class="safety" data-safety></span><span class="grow"></span>
     <button type="button" class="dash-btn" data-reset>Reset layout</button></div>
+    <div class="alarm" data-alarm role="alert" hidden></div>
     <div class="dash-grid"></div>`;
   view.replaceChildren(page);
   D.root = page;

@@ -11,6 +11,7 @@
     "start": "node --disable-warning=ExperimentalWarning src/main.ts",
     "build:native": "node --disable-warning=ExperimentalWarning scripts/build-native.ts",
     "intent": "node --disable-warning=ExperimentalWarning scripts/intent.ts",
+    "db": "node --disable-warning=ExperimentalWarning scripts/db.ts",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "bench:gen": "node --disable-warning=ExperimentalWarning bench/gen.ts",

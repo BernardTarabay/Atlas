@@ -3,6 +3,9 @@
 //   npm run intent -- export           write <home>/intent/latest.json now
 //   npm run intent -- list             the export and its history, with counts
 //   npm run intent -- import [file]    put roots and choices back (default: latest.json)
+//   npm run intent -- import --exact [file]
+//                                      make the database's choices EXACTLY the export's -
+//                                      after restoring a backup older than the export
 //
 // import writes to the database, so Atlas must be stopped: it is the only writer
 // by design. It re-adds missing roots, scans them (a directory listing, no file is
@@ -10,24 +13,16 @@
 // after Atlas has read the files if some choices were only findable by content.
 import fs from "node:fs";
 import path from "node:path";
-import http from "node:http";
 import { config } from "../src/config.ts";
 import { Db } from "../src/db/db.ts";
 import { IntentExport, importIntent, readIntent } from "../src/intent.ts";
 import { scanRoot } from "../src/scan/scanner.ts";
+import { engineRunning } from "./_engine.ts";
 
-const [cmd, arg] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const exact = args.includes("--exact");
+const [cmd, arg] = args.filter((a) => a !== "--exact");
 const dbFile = path.join(config.home, "atlas.db");
-
-/** Is an Atlas engine answering on this machine? */
-function engineRunning(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const r = http.get({ host: "127.0.0.1", port: config.port, path: "/api/health", headers: { host: `127.0.0.1:${config.port}` }, timeout: 1500 },
-      (res) => { res.resume(); resolve(true); });
-    r.on("timeout", () => { r.destroy(); resolve(false); });
-    r.on("error", () => resolve(false));
-  });
-}
 
 function count(file: string) {
   const x = readIntent(file);
@@ -63,23 +58,24 @@ if (cmd === "export") {
   }
   const db = new Db(dbFile);
   try {
-    const r = await importIntent(db, x, (id) => scanRoot(db, id));
+    const r = await importIntent(db, x, (id) => scanRoot(db, id), { exact });
     const f = r.files;
-    console.log(`roots: ${r.roots.added.length} added, ${r.roots.present.length} already there, ${r.roots.skipped.length} skipped`);
+    console.log(`roots: ${r.roots.added.length} added, ${r.roots.present.length} already there${exact ? ` (${r.roots.updated.length} set to the export's role)` : ""}, ${r.roots.skipped.length} skipped`);
     for (const s of r.roots.skipped) console.log(`  skipped ${s.path}: ${s.reason}`);
-    console.log(`choices: ${f.byPath} by path, ${f.byFileId} by file ID (moved), ${f.bySha} by content, ${f.already} already in place`);
+    console.log(`choices: ${f.byPath} by path, ${f.byFileId} by file ID (moved), ${f.bySha} by content, ${f.already} already in place`
+      + (exact ? `, ${f.cleared} removed (not in the export)` : ""));
     for (const c of f.conflicts) console.log(`  kept the database's own choice for ${c.entry} (${c.kept})`);
     for (const a of f.ambiguous) console.log(`  not placed, ambiguous: ${a}`);
     if (f.unmatched.length) {
       console.log(`  ${f.unmatched.length} not found yet:`);
       for (const u of f.unmatched.slice(0, 20)) console.log(`    ${u}`);
       console.log("  Files that moved to another drive are found by content, once Atlas has read them:");
-      console.log(`  start Atlas, let it finish, stop it, then: npm run intent -- import "${file}"`);
+      console.log(`  start Atlas, let it finish, stop it, then: npm run intent -- import ${exact ? "--exact " : ""}"${file}"`);
     }
   } finally {
     db.close();
   }
 } else {
-  console.log("usage: npm run intent -- export | list | import [file]");
+  console.log("usage: npm run intent -- export | list | import [--exact] [file]");
   process.exit(cmd ? 1 : 0);
 }

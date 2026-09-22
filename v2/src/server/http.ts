@@ -26,6 +26,7 @@ import { safeSegment } from "../plan/names.ts";
 import { Thumbs, bucket, THUMB_V } from "../thumbs.ts";
 import { S as STATE } from "../pipeline/states.ts";
 import type { IntentExport } from "../intent.ts";
+import type { Maintenance } from "../db/maintenance.ts";
 
 type Req = http.IncomingMessage & { remote: boolean; https: boolean; url: string };
 type Res = http.ServerResponse;
@@ -218,10 +219,28 @@ const SET_PINNAME = `UPDATE files SET pinname = ?, state = CASE WHEN state = ${S
  * `intent` receives every change a person makes (roots, folders and names chosen
  * by hand), after it is durably in the database, and exports it (src/intent.ts).
  */
-export function startServer(db: Db, engine: Engine, intent?: IntentExport): http.Server {
+export function startServer(db: Db, engine: Engine, intent?: IntentExport, maint?: Maintenance): http.Server {
   const thumbs = new Thumbs(2);
   /** A person decided something: it is on disk (Db.durable) before the response, and exported soon after. */
   const decided = () => { intent?.changed(); engine.wake(); };
+  /**
+   * A database that failed its integrity check is not written to: a decision saved
+   * into it could be lost with it, and the way back is a restore. Reads still work.
+   */
+  const writable = () => {
+    if (maint?.health.integrity === "failed") {
+      throw new HttpError(503, "The database failed its integrity check, so Atlas has stopped changing it. Stop Atlas and run: npm run db -- restore");
+    }
+  };
+  /** What the Status page shows about the database itself. */
+  const safety = () => {
+    if (!maint) return null;
+    const h = maint.health;
+    return {
+      integrity: h.integrity, detail: h.detail.slice(0, 5), checkedAt: h.checkedAt,
+      backup: { at: h.backup.last?.at ?? null, bytes: h.backup.last?.bytes ?? null, count: h.backup.count, running: h.backup.running, error: h.backup.error, dir: h.backup.dir },
+    };
+  };
   let statesCache: { at: number; value: ReturnType<typeof counts> } | null = null;
   let dashCache: { at: number; value: ReturnType<typeof dashboard> } | null = null;
   const routes: [string, RegExp, Handler, { public?: boolean; local?: boolean }?][] = [
@@ -266,6 +285,7 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport): http
     // folder, and the planner keeps naming and collision handling. That is why this
     // is allowed while every disk-touching command is not.
     ["POST", /^\/api\/plan\/move$/, (_req, _res, _m, b) => {
+      writable();
       const ids = Array.isArray(b.ids) ? b.ids.map(Number).filter(Number.isInteger) : [];
       if (!ids.length) throw new HttpError(400, "no files given");
       if (ids.length > 5000) throw new HttpError(413, "too many files in one move");
@@ -282,6 +302,7 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport): http
     }],
     // Undo, and "let the rules decide again", are the same operation.
     ["POST", /^\/api\/plan\/pin$/, (_req, _res, _m, b) => {
+      writable();
       const items = Array.isArray(b.items) ? b.items : [];
       const set = db.q(SET_PIN);
       const setName = db.q(SET_PINNAME);
@@ -313,7 +334,7 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport): http
     // BYs, and the page polls - while activity is read straight from memory.
     ["GET", /^\/api\/dashboard$/, () => {
       if (!dashCache || Date.now() - dashCache.at > 1000) dashCache = { at: Date.now(), value: dashboard(db) };
-      return { ...dashCache.value, busy: engine.isBusy, uptime: Math.round((Date.now() - engine.startedAt) / 1000), scan: engine.scanState };
+      return { ...dashCache.value, busy: engine.isBusy, uptime: Math.round((Date.now() - engine.startedAt) / 1000), scan: engine.scanState, safety: safety() };
     }],
     ["GET", /^\/api\/activity$/, () => {
       const waiting = db.get<{ n: number }>("SELECT count(*) AS n FROM files WHERE state < 50")!.n;
@@ -356,6 +377,7 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport): http
     // Renaming changes the planned NAME, the way dragging changes the planned
     // folder. The rules still number it against its neighbours; the disk is not touched.
     ["POST", /^\/api\/plan\/rename$/, (_req, _res, _m, b) => {
+      writable();
       const id = Number(b.id);
       if (!Number.isInteger(id)) throw new HttpError(400, "no file given");
       const name = safeSegment(String(b.name ?? "").split(/[/\\]/).pop() ?? "");
@@ -403,6 +425,7 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport): http
     }],
     ["GET", /^\/api\/roots$/, () => db.all("SELECT * FROM roots ORDER BY id")],
     ["POST", /^\/api\/roots$/, (_req, _res, _m, b) => {
+      writable();
       const id = db.durable(() => addRoot(db, String(b.path ?? ""), String(b.role ?? "source")));
       intent?.changed();
       engine.reloadRoots();
@@ -410,6 +433,7 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport): http
       return { id };
     }],
     ["PATCH", /^\/api\/roots\/(\d+)$/, (_req, _res, m, b) => {
+      writable();
       const id = Number(m[1]);
       if (b.role != null && !["source", "library", "backup"].includes(String(b.role))) throw new HttpError(400, "bad role");
       // One transaction: a role that changed with its files not re-planned would be a half-applied decision.
@@ -426,6 +450,7 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport): http
       return { ok: true };
     }],
     ["DELETE", /^\/api\/roots\/(\d+)$/, (_req, _res, m) => {
+      writable();
       db.durable(() => removeRoot(db, Number(m[1])));
       intent?.changed();
       engine.reloadRoots();
@@ -435,6 +460,7 @@ export function startServer(db: Db, engine: Engine, intent?: IntentExport): http
     // "Try again": failures are otherwise kept until the file changes (content) or
     // their backoff runs out (access). `ids` = these files; none = everything that failed.
     ["POST", /^\/api\/retry$/, (_req, _res, _m, b) => {
+      writable();
       if (b.ids == null) return engine.retry();
       const ids = Array.isArray(b.ids) ? b.ids.map(Number).filter(Number.isInteger) : [];
       if (!ids.length) throw new HttpError(400, "no files given");

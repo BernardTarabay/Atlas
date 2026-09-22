@@ -111,6 +111,40 @@ npm run intent -- import [file]     # after losing the database; Atlas must be s
 
 The database's own newer choices win. Anything ambiguous is listed, never guessed. Choices that can only be found by content need the files read first: start Atlas, let it finish, stop it, and run the same import again. It's safe to repeat.
 
+## The database itself: checks, backups, restore
+
+- **Checked at startup.** `quick_check` runs on a background thread with its own read-only connection: 0.8 s warm and 3.5 s cold on a 281 MB database, so startup isn't held up.
+  - If it fails, nothing is repaired automatically. Atlas stops changing the database: the engine stops, and moving, renaming and folder changes are refused with 503. Reading still works.
+  - The Status page shows a banner explaining how to recover.
+- **Backed up daily.** `VACUUM INTO` a new file, from a read-only connection on a background thread. It's a consistent snapshot even while Atlas keeps writing, and a single compact file.
+  - Every copy passes the full `integrity_check` before it's kept.
+  - A database that fails its own check is never copied, so it can't push a good backup out of the rotation.
+  - The newest 7 are kept in `<home>/backups`. Each is about the size of the database; most of that is extracted text and OCR, which can be rebuilt but takes hours.
+  - Settings: `ATLAS_BACKUP_DIR` (another disk, if there is one), `ATLAS_BACKUP_KEEP` and `ATLAS_BACKUP_HOURS`.
+- **The Status page header** shows "Database checked · backed up 3 h ago (280 MB, 7 kept)".
+
+```powershell
+npm run db -- check            # full integrity check; Atlas may be running
+npm run db -- backup           # a verified backup now; Atlas may be running
+npm run db -- list
+npm run db -- restore [file]   # Atlas must be stopped; newest backup by default
+```
+
+`restore` does four things:
+
+1. Verifies the backup, and refuses one that's damaged or made by a newer Atlas.
+2. Moves the current database into `<home>/replaced-<time>/`. It never deletes it.
+3. Copies the backup into place and opens it (a backup from an older Atlas is migrated forward).
+4. If your decisions were exported after the backup was made, prints the one command that brings them back **before** Atlas starts: `npm run intent -- import --exact "<copy>"`. `--exact` makes the database's folder and name choices exactly the export's, including ones undone since the backup.
+
+Measured on the development database (280 MB):
+
+| Operation | Time |
+|---|---|
+| Full check | 0.75 s |
+| Verified backup | 2.3 s |
+| Restore | 1.8 s |
+
 ## Tests and benchmarks
 
 ```bash
@@ -125,6 +159,7 @@ npm run bench:ocr                 # OCR engines vs ground truth, in 3 languages
 npm run bench:rvl                 # document typing on 3,200 real labelled scans
 npm run bench:robust -- <dir>     # what breaks on real files, and how fast the rest goes
 npm run intent -- list            # your decisions, exported (see above)
+npm run db -- check               # the database's integrity, backups, restore (see above)
 ```
 
 Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB):
