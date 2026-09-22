@@ -79,6 +79,38 @@ row below `DONE` is simply picked up again. Everything is idempotent.
 
 Reading has no deadline, only a stall clock: a 40 GB video on a USB 2 disk reads for as long as it takes. OCR follows the same split, per content. If the file it read from has since changed or become unreachable, the reading is deferred (`onext`). Otherwise the content is marked as failed OCR until `OCR_VERSION` changes or someone retries.
 
+## What you decided, and getting it back
+
+Almost everything in the database can be rebuilt by rescanning. It's worked out from the files: hashes, text, OCR, the plan, the search index. A few things can't, because a person decided them:
+
+- which folders are roots, and their roles;
+- a folder or name chosen by hand in the library (`files.pin`, `files.pinname`).
+
+Those are treated differently:
+
+- **Saved safely.** They're committed with `synchronous=FULL` (`Db.durable`), so a power cut straight after you move a file in the library doesn't undo it. A safe save costs about 1 ms; everything else keeps the 0.04 ms fast save.
+- **Attached to the file, not its path.** Rename or move a file in Explorer and its chosen folder and name follow it. The NTFS file ID identifies it, so this isn't a guess.
+- **Exported beside the database.** `<home>/intent/latest.json` is rewritten a couple of seconds after each change and after each scan, atomically (temp file, fsync, rename).
+  - Before it's replaced by a version that drops or changes a decision, the old one is kept in `intent/history/` (newest 50).
+  - A database with no roots never overwrites it.
+
+```powershell
+npm run intent -- list              # the export and its history, with counts
+npm run intent -- export            # write it now
+npm run intent -- import [file]     # after losing the database; Atlas must be stopped
+```
+
+`import` does three things:
+
+1. Re-adds the roots.
+2. Lists them (no file is read).
+3. Puts each choice back on its file:
+   - by path;
+   - then by file ID (the file was renamed or moved since);
+   - then by SHA-256, only when exactly one file has those bytes.
+
+The database's own newer choices win. Anything ambiguous is listed, never guessed. Choices that can only be found by content need the files read first: start Atlas, let it finish, stop it, and run the same import again. It's safe to repeat.
+
 ## Tests and benchmarks
 
 ```bash
@@ -92,6 +124,7 @@ npm run bench:ocr:corpus          # render the ground-truth OCR set with Edge (~
 npm run bench:ocr                 # OCR engines vs ground truth, in 3 languages
 npm run bench:rvl                 # document typing on 3,200 real labelled scans
 npm run bench:robust -- <dir>     # what breaks on real files, and how fast the rest goes
+npm run intent -- list            # your decisions, exported (see above)
 ```
 
 Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB):

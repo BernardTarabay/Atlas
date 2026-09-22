@@ -103,6 +103,8 @@ export class Engine {
   private holdUntil = 0;
   readonly startedAt = Date.now();
   onBusyChange: (busy: boolean) => void = () => {};
+  /** After every scan: a moved file may have carried a person's choices to a new path. */
+  onScanned: (s: ScanStats) => void = () => {};
   private busy = false;
   lastScans = new Map<number, ScanStats>();
 
@@ -308,7 +310,7 @@ export class Engine {
     if (!this.roots.has(id)) return;
     this.scanning = id;
     scanRoot(this.db, id)
-      .then((s) => { this.lastScans.set(id, s); })
+      .then((s) => { this.lastScans.set(id, s); this.onScanned(s); })
       .catch((e) => {
         log.error("scan failed", { root: this.roots.get(id), error: (e as Error).message });
         this.db.run("UPDATE roots SET scan_error = ? WHERE id = ?", (e as Error).message.slice(0, 300), id);

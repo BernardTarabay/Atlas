@@ -405,7 +405,7 @@ Every check below is an inconsistency this audit found possible:
 
 ## 11. Progress
 
-### Phase 1: failed-file retries (done 2026-09-22, not yet committed)
+### Phase 1: failed-file retries (done 2026-09-22, commit `81a5aaf`)
 
 Covers changes #3–#7 in §9.
 
@@ -436,3 +436,34 @@ Covers changes #3–#7 in §9.
 - `maxTries` stays at 3 for both kinds: tries close together absorb a passing lock.
 - A different file ID at the same path, with the same size and mtime, retries a *failed* file only. Other rows keep today's behaviour.
 - OCR content failures get no automatic second attempt; the button covers the rare transient helper crash.
+
+### Phase 2: durable user intent (done 2026-09-22, not yet committed)
+
+Covers changes #1, #2, #8 and #9 in §9.
+
+| Change | Where |
+|---|---|
+| **Explorer rename or move keeps the choice.** Before a moved file's old row (MISSING) is deleted, its `pin`/`pinname` go to the live row(s) with the same file ID, where they have none of their own, newest first. This also works when the old row only goes MISSING on a *later* scan (after an incomplete one). `ScanStats.carried` counts it | `scan/scanner.ts` |
+| **Choices made mid-processing are kept.** Move, pin and rename apply to every row still on disk: DONE is re-planned, NEW/IDENT/FAILED keep their state. Move reports `skipped` for files no longer on disk. Rename of a missing file returns 409 (it used to report success and do nothing) | `server/http.ts`, `ui/explorer.js` |
+| **Durable writes** (`synchronous=FULL`, about 0.9 ms against 0.04 ms): plan move, pin, rename; root add, patch and delete; the owner password (hashed outside the transaction). Root PATCH is now one transaction. `durable()` refuses to run nested: SQLite rejects the change inside a transaction, and the commit that mattered would be the outer one | `db/db.ts`, `server/http.ts`, `server/auth.ts` |
+| **Intent export**: `<home>/intent/latest.json`. Roots, plus every file with a choice, keyed by root + relative path with file ID and SHA-256 for moved files. Written at startup, after each scan and after each change (debounced 2 s), atomically (temp file, fsync, rename). Before an export that drops or changes a decision replaces it, the previous one goes to `intent/history/` (newest 50). A database with no roots never overwrites it | `intent.ts`, `main.ts` |
+| **Import**: `npm run intent -- import [file]`. Refuses while Atlas is running (the single-writer rule). Re-adds and lists roots, then re-attaches by path, then file ID, then SHA-256 when exactly one file has those bytes. The database's own newer choice wins (reported as a conflict); ambiguity is reported, never resolved by guessing. Idempotent. It imports from a dated copy of `latest.json`, because `latest.json` is rewritten as soon as Atlas runs again | `intent.ts`, `scripts/intent.ts` |
+
+**Verified:**
+
+- `npm test`: 69/69, 6 new in `test/intent.test.ts`:
+  - a real Explorer-style rename and move, including hard links;
+  - the carry arriving after a later scan;
+  - the HTTP plan routes on NEW, DONE and MISSING rows;
+  - the export's atomicity, history and empty-database rules;
+  - import by path, file ID and SHA-256, with ambiguity, conflict and idempotence.
+- With the old carry and the old `state = DONE` guard put back, 3 of those tests fail.
+- `tsc` is clean.
+- `bench:crash`: 11/11 on two runs.
+- Live: the startup export was written for the dev library (4 roots), `list` works, and `import` refuses while the engine runs.
+
+**Decisions:**
+
+- A choice on a hard-linked file goes to every live name that has none: one file, one decision, whichever name represents it.
+- Choices on a missing file stay in the export (marked `missing`): the file may come back.
+- The export is not written by `import` itself, so a partial import can't replace the complete file.

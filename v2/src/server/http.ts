@@ -25,6 +25,7 @@ import { kindFromExt, extOf } from "../analyze/sniff.ts";
 import { safeSegment } from "../plan/names.ts";
 import { Thumbs, bucket, THUMB_V } from "../thumbs.ts";
 import { S as STATE } from "../pipeline/states.ts";
+import type { IntentExport } from "../intent.ts";
 
 type Req = http.IncomingMessage & { remote: boolean; https: boolean; url: string };
 type Res = http.ServerResponse;
@@ -202,8 +203,25 @@ async function sendThumb(db: Db, thumbs: Thumbs, req: Req, res: Res, id: number,
   res.end(body);
 }
 
-export function startServer(db: Db, engine: Engine): http.Server {
+/**
+ * A folder or name chosen by hand, on any file that is still on disk. A file that
+ * is waiting to be read or re-planned keeps its state and gets the choice anyway;
+ * only a planned one needs planning again. (Writing only to planned files used to
+ * drop the choice, silently, for a file caught mid-processing.)
+ */
+const SET_PIN = `UPDATE files SET pin = ?, state = CASE WHEN state = ${STATE.DONE} THEN ${STATE.IDENT} ELSE state END
+  WHERE id = ? AND state <> ${STATE.MISSING}`;
+const SET_PINNAME = `UPDATE files SET pinname = ?, state = CASE WHEN state = ${STATE.DONE} THEN ${STATE.IDENT} ELSE state END
+  WHERE id = ? AND state <> ${STATE.MISSING}`;
+
+/**
+ * `intent` receives every change a person makes (roots, folders and names chosen
+ * by hand), after it is durably in the database, and exports it (src/intent.ts).
+ */
+export function startServer(db: Db, engine: Engine, intent?: IntentExport): http.Server {
   const thumbs = new Thumbs(2);
+  /** A person decided something: it is on disk (Db.durable) before the response, and exported soon after. */
+  const decided = () => { intent?.changed(); engine.wake(); };
   let statesCache: { at: number; value: ReturnType<typeof counts> } | null = null;
   let dashCache: { at: number; value: ReturnType<typeof dashboard> } | null = null;
   const routes: [string, RegExp, Handler, { public?: boolean; local?: boolean }?][] = [
@@ -252,32 +270,35 @@ export function startServer(db: Db, engine: Engine): http.Server {
       if (!ids.length) throw new HttpError(400, "no files given");
       if (ids.length > 5000) throw new HttpError(413, "too many files in one move");
       const folder = libraryFolder(String(b.folder ?? ""));
+      // What Undo puts back: the choices these files had, captured before the change.
       const before = db.all<{ id: number; pin: string | null }>(
-        `SELECT id, pin, pinname FROM files WHERE id IN (SELECT value FROM json_each(?))`, JSON.stringify(ids));
-      const set = db.q(`UPDATE files SET pin = ?, state = ${STATE.IDENT} WHERE id = ? AND state = ${STATE.DONE}`);
+        `SELECT id, pin, pinname FROM files WHERE id IN (SELECT value FROM json_each(?)) AND state <> ${STATE.MISSING}`, JSON.stringify(ids));
+      const set = db.q(SET_PIN);
       let moved = 0;
-      db.tx(() => { for (const id of ids) moved += Number(set.run(folder, id).changes); });
-      engine.wake();
-      return { moved, folder, before };
+      db.durable(() => { for (const id of ids) moved += Number(set.run(folder, id).changes); });
+      decided();
+      // `skipped`: files no longer on disk (or unknown ids). Said, not hidden.
+      return { moved, skipped: ids.length - moved, folder, before };
     }],
     // Undo, and "let the rules decide again", are the same operation.
     ["POST", /^\/api\/plan\/pin$/, (_req, _res, _m, b) => {
       const items = Array.isArray(b.items) ? b.items : [];
-      const set = db.q(`UPDATE files SET pin = ?, state = ${STATE.IDENT} WHERE id = ? AND state = ${STATE.DONE}`);
+      const set = db.q(SET_PIN);
+      const setName = db.q(SET_PINNAME);
       let n = 0;
-      db.tx(() => {
-        for (const it of items as { id: unknown; pin: unknown }[]) {
+      db.durable(() => {
+        for (const it of items as { id: unknown; pin: unknown; pinname?: unknown }[]) {
           const id = Number(it.id);
           if (!Number.isInteger(id)) continue;
           const pin = it.pin == null || it.pin === "" ? null : libraryFolder(String(it.pin));
           n += Number(set.run(pin, id).changes);
           if ("pinname" in it) {
             const nm = it.pinname == null || it.pinname === "" ? null : safeSegment(String(it.pinname));
-            db.run(`UPDATE files SET pinname = ?, state = ${STATE.IDENT} WHERE id = ?`, nm, id);
+            setName.run(nm, id);
           }
         }
       });
-      engine.wake();
+      decided();
       return { changed: n };
     }],
     ["GET", /^\/api\/search$/, (req) => {
@@ -339,10 +360,11 @@ export function startServer(db: Db, engine: Engine): http.Server {
       if (!Number.isInteger(id)) throw new HttpError(400, "no file given");
       const name = safeSegment(String(b.name ?? "").split(/[/\\]/).pop() ?? "");
       if (!name || name === "_") throw new HttpError(400, "invalid name");
-      const before = db.get<{ pinname: string | null }>("SELECT pinname FROM files WHERE id = ?", id);
+      const before = db.get<{ pinname: string | null; state: number }>("SELECT pinname, state FROM files WHERE id = ?", id);
       if (!before) throw new HttpError(404, "no such file");
-      db.run(`UPDATE files SET pinname = ?, state = ${STATE.IDENT} WHERE id = ? AND state = ${STATE.DONE}`, name, id);
-      engine.wake();
+      if (before.state === STATE.MISSING) throw new HttpError(409, "This file is no longer on disk, so it has no place in the library to rename.");
+      db.durable(() => db.run(SET_PINNAME, name, id));
+      decided();
       return { id, name, before: before.pinname };
     }],
     ["GET", /^\/api\/ai$/, () => ({ available: aiAvailable(), model: aiAvailable() ? config.ai.model : null })],
@@ -381,23 +403,34 @@ export function startServer(db: Db, engine: Engine): http.Server {
     }],
     ["GET", /^\/api\/roots$/, () => db.all("SELECT * FROM roots ORDER BY id")],
     ["POST", /^\/api\/roots$/, (_req, _res, _m, b) => {
-      const id = addRoot(db, String(b.path ?? ""), String(b.role ?? "source"));
+      const id = db.durable(() => addRoot(db, String(b.path ?? ""), String(b.role ?? "source")));
+      intent?.changed();
       engine.reloadRoots();
       engine.requestScan(id);
       return { id };
     }],
     ["PATCH", /^\/api\/roots\/(\d+)$/, (_req, _res, m, b) => {
       const id = Number(m[1]);
-      if (b.role != null) {
-        if (!["source", "library", "backup"].includes(String(b.role))) throw new HttpError(400, "bad role");
-        db.run("UPDATE roots SET role = ? WHERE id = ?", String(b.role), id);
-        db.run("UPDATE files SET state = 20 WHERE root = ? AND state = 50", id); // representatives may change
-      }
-      if (b.enabled != null) db.run("UPDATE roots SET enabled = ? WHERE id = ?", b.enabled ? 1 : 0, id);
+      if (b.role != null && !["source", "library", "backup"].includes(String(b.role))) throw new HttpError(400, "bad role");
+      // One transaction: a role that changed with its files not re-planned would be a half-applied decision.
+      db.durable(() => {
+        if (b.role != null) {
+          db.run("UPDATE roots SET role = ? WHERE id = ?", String(b.role), id);
+          db.run(`UPDATE files SET state = ${STATE.IDENT} WHERE root = ? AND state = ${STATE.DONE}`, id); // representatives may change
+        }
+        if (b.enabled != null) db.run("UPDATE roots SET enabled = ? WHERE id = ?", b.enabled ? 1 : 0, id);
+      });
+      intent?.changed();
+      engine.reloadRoots();
+      engine.wake();
+      return { ok: true };
+    }],
+    ["DELETE", /^\/api\/roots\/(\d+)$/, (_req, _res, m) => {
+      db.durable(() => removeRoot(db, Number(m[1])));
+      intent?.changed();
       engine.reloadRoots();
       return { ok: true };
     }],
-    ["DELETE", /^\/api\/roots\/(\d+)$/, (_req, _res, m) => { removeRoot(db, Number(m[1])); engine.reloadRoots(); return { ok: true }; }],
     ["POST", /^\/api\/scan$/, (_req, _res, _m, b) => { engine.requestScan(b.root != null ? Number(b.root) : undefined); return { ok: true }; }],
     // "Try again": failures are otherwise kept until the file changes (content) or
     // their backoff runs out (access). `ids` = these files; none = everything that failed.

@@ -32,18 +32,29 @@ export function setup(db: Db, code: string, password: string): boolean {
   if (hasPassword(db)) return false;
   const expected = db.meta("setupCode");
   if (!expected || !timingSafeEqualHex(sha(String(code).trim()), expected)) return false;
-  setPassword(db, password);
-  db.run("DELETE FROM meta WHERE key = 'setupCode'");
+  storePassword(db, passwordRecord(password), () => db.run("DELETE FROM meta WHERE key = 'setupCode'"));
   fs.rmSync(path.join(config.home, "setup-code.txt"), { force: true });
   return true;
 }
 
 export function setPassword(db: Db, password: string) {
+  storePassword(db, passwordRecord(password));
+}
+
+function passwordRecord(password: string): string {
   if (typeof password !== "string" || password.length < 8) throw new Error("The password must be at least 8 characters.");
   const salt = crypto.randomBytes(16);
   const hash = crypto.scryptSync(password, salt, 32, { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
-  db.setMeta("password", `scrypt$${salt.toString("hex")}$${hash.toString("hex")}`);
-  db.run("DELETE FROM sessions"); // a new password signs everyone out
+  return `scrypt$${salt.toString("hex")}$${hash.toString("hex")}`;
+}
+
+/** The owner chose it: on disk before the page says so (hashing happens before, outside the transaction). */
+function storePassword(db: Db, record: string, also: () => void = () => {}) {
+  db.durable(() => {
+    db.setMeta("password", record);
+    db.run("DELETE FROM sessions"); // a new password signs everyone out
+    also();
+  });
 }
 
 export function checkPassword(db: Db, password: string): boolean {

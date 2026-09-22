@@ -1602,7 +1602,8 @@ async function moveTo(items, folder) {
   // The previous pins, captured HERE: a move nobody can take back is a move
   // nobody should make by accident with a mouse. The payload travels with the
   // button rather than living in a variable a later action could overwrite.
-  offerUndo(`Moved ${fmtNum(r.moved)} file(s) to ${folder}`, r.before ?? []);
+  const skipped = r.skipped ? ` · ${fmtNum(r.skipped)} no longer on disk, left out` : "";
+  offerUndo(`Moved ${fmtNum(r.moved)} file(s) to ${folder}${skipped}`, r.before ?? []);
   await refreshAfterPlanChange();
 }
 

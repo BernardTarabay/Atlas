@@ -12,16 +12,22 @@ import { Engine } from "./pipeline/engine.ts";
 import { startServer } from "./server/http.ts";
 import { ensureSetupCode } from "./server/auth.ts";
 import { S } from "./pipeline/states.ts";
+import { IntentExport } from "./intent.ts";
 
 fs.mkdirSync(config.home, { recursive: true });
 const t0 = performance.now();
 const db = new Db(path.join(config.home, "atlas.db"));
 const pending = db.get<{ n: number }>(`SELECT count(*) AS n FROM files WHERE state < ${S.DONE}`)!.n;
 const engine = new Engine(db);
+// What a person decided, exported beside the database (src/intent.ts): now, after
+// every scan (a moved file carries its choices to its new path), and after every change.
+const intent = new IntentExport(db);
+intent.write();
+engine.onScanned = () => intent.changed();
 const control = (line: string) => { if (config.hosted) process.stdout.write(line + "\n"); };
 engine.onBusyChange = (busy) => { control(`@@awake ${busy ? 1 : 0}`); log.info(busy ? "busy" : "idle"); };
 engine.start();
-const server = startServer(db, engine);
+const server = startServer(db, engine, intent);
 const setupFile = ensureSetupCode(db);
 log.info("atlas started", {
   home: config.home, port: config.port, hosted: config.hosted, resumed: pending, startupMs: Math.round(performance.now() - t0),
@@ -53,7 +59,7 @@ async function shutdown(reason: string) {
   clearInterval(lag);
   server.close();
   server.closeAllConnections();
-  try { await engine.stop(); } finally { db.close(); }
+  try { await engine.stop(); intent.flush(); } finally { db.close(); }
   control("@@awake 0");
   process.exit(0);
 }

@@ -6,7 +6,8 @@
 // list, and never when the root itself is gone (an unplugged drive is offline,
 // not deleted). Finally, new rows that are really moved/renamed files (same
 // NTFS file ID, size and mtime as a known row) adopt the known content instead
-// of being re-read.
+// of being re-read. What a person decided about such a file (a folder or name
+// chosen by hand) goes with it.
 import type { Db } from "../db/db.ts";
 import { log } from "../log.ts";
 import { S, PLACEHOLDER_ATTRS } from "../pipeline/states.ts";
@@ -20,6 +21,8 @@ export interface ScanStats {
   errors: number;
   missing: number;
   adopted: number;
+  /** Rows that received a moved file's folder/name chosen by hand. */
+  carried: number;
   ms: number;
   complete: boolean;
   offline: boolean;
@@ -82,7 +85,7 @@ export async function scanRoot(db: Db, rootId: number): Promise<ScanStats> {
 
   const w = await walk(root.path, onBatch);
   const stats: ScanStats = {
-    root: rootId, files: w.files, dirs: w.dirs, errors: w.errors.length, missing: 0, adopted: 0,
+    root: rootId, files: w.files, dirs: w.dirs, errors: w.errors.length, missing: 0, adopted: 0, carried: 0,
     ms: 0, complete: w.complete && !w.rootMissing, offline: w.rootMissing,
   };
 
@@ -95,7 +98,7 @@ export async function scanRoot(db: Db, rootId: number): Promise<ScanStats> {
 
   db.tx(() => {
     if (stats.complete) stats.missing = markMissing(db, rootId, gen, seen, w.errors.map((e) => e.dir));
-    stats.adopted = adoptKnown(db, rootId, gen);
+    ({ adopted: stats.adopted, carried: stats.carried } = adoptKnown(db, rootId, gen));
     stats.ms = Math.round(performance.now() - t0);
     db.run(
       `UPDATE roots SET gen = ?, online = 1, volume = ?, fs = ?, scan_at = ?, scan_ms = ?, scan_files = ?, scan_error = ?
@@ -139,7 +142,7 @@ function markMissing(db: Db, rootId: number, gen: number, seen: Set<number>, err
   return gone.length;
 }
 
-function adoptKnown(db: Db, rootId: number, gen: number): number {
+function adoptKnown(db: Db, rootId: number, gen: number): { adopted: number; carried: number } {
   // Same NTFS file ID + size + mtime as a known row = the same physical file, seen
   // at a new path (moved/renamed) or through a hard link. That is identity of the
   // file, not an inference about content, so its analysis carries over.
@@ -150,6 +153,25 @@ function adoptKnown(db: Db, rootId: number, gen: number): number {
        AND o.fid = n.fid AND o.id <> n.id AND o.content IS NOT NULL AND o.size = n.size AND o.mtime = n.mtime`,
     rootId, gen,
   ).changes as number;
+  // What a person decided belongs to the FILE, not to the path it had. The old row of
+  // a moved or renamed file is about to be deleted as history; first its folder and
+  // name chosen by hand go to the live row(s) of the same physical file - where they
+  // have none of their own, newest decision first. A file ID is identity of the file
+  // itself (NTFS/ReFS), so this is not a guess from content; other filesystems get
+  // no file ID and are handled elsewhere. Every live name of the file gets it: one
+  // file, one decision, whichever name ends up representing it.
+  let carried = 0;
+  const intent = db.all<{ fid: string; pin: string | null; pinname: string | null }>(
+    `SELECT fid, pin, pinname FROM files m
+     WHERE state = ${S.MISSING} AND fid IS NOT NULL AND (pin IS NOT NULL OR pinname IS NOT NULL)
+       AND EXISTS (SELECT 1 FROM files x WHERE x.fid = m.fid AND x.state <> ${S.MISSING})
+     ORDER BY id DESC`);
+  const carry = db.q(
+    `UPDATE files SET pin = coalesce(pin, ?), pinname = coalesce(pinname, ?),
+       state = CASE WHEN state = ${S.DONE} THEN ${S.IDENT} ELSE state END
+     WHERE fid = ? AND state <> ${S.MISSING}
+       AND ((pin IS NULL AND ? IS NOT NULL) OR (pinname IS NULL AND ? IS NOT NULL))`);
+  for (const m of intent) carried += Number(carry.run(m.pin, m.pinname, m.fid, m.pin, m.pinname).changes);
   // The old row of a moved file is now just history.
   db.run(
     `DELETE FROM files WHERE state = ${S.MISSING} AND fid IS NOT NULL
@@ -164,5 +186,5 @@ function adoptKnown(db: Db, rootId: number, gen: number): number {
        SELECT fid FROM files WHERE root = ? AND seen = ? AND state = ${S.NEW} AND fid IS NOT NULL)`,
     rootId, gen,
   );
-  return adopted;
+  return { adopted, carried };
 }

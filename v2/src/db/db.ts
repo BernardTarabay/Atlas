@@ -69,10 +69,16 @@ export class Db {
   /**
    * A transaction that is on disk before this returns, even across power loss.
    * WAL + synchronous=NORMAL (the default above) survives a process crash but can
-   * lose the last commits on power loss; the file-operation journal cannot, because
-   * its whole job is to say what was about to happen to a real file.
+   * lose the last commits on power loss. That is fine for everything Atlas worked
+   * out itself - it is worked out again - and not for what a person decided (a
+   * folder or name chosen by hand, a root added) or for the file-operation journal.
+   * About 1 ms per commit on an SSD, against 0.04 ms: reserved for those.
+   *
+   * Never nested: SQLite cannot change the safety level inside a transaction, and
+   * the commit that matters would be the outer, ordinary one.
    */
   durable<T>(fn: () => T): T {
+    if (this.depth > 0) throw new Error("durable() cannot run inside another transaction");
     this.raw.exec("PRAGMA synchronous = FULL");
     try {
       return this.tx(fn);
