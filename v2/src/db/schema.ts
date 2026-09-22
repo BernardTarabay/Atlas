@@ -7,7 +7,11 @@
 // contents  one row per unique SHA-256. Everything learned by reading bytes
 //           (type, text quality, title, dates, OCR) lives here, so a duplicate
 //           costs one read+hash and inherits the rest.
-export const MIGRATIONS: string[] = [
+import type { Db } from "./db.ts";
+import { planKey } from "../plan/key.ts";
+
+/** A migration is SQL, or a function for what SQL cannot do (each runs in one transaction). */
+export const MIGRATIONS: (string | ((db: Db) => void))[] = [
   `
   CREATE TABLE roots(
     id        INTEGER PRIMARY KEY,
@@ -154,4 +158,39 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE roots ADD COLUMN seen_volume TEXT;
   CREATE INDEX files_intent ON files(state) WHERE pin IS NOT NULL OR pinname IS NOT NULL;
   `,
+  // 6: Apply (docs/18 Phase 6).
+  //   files.plankey  the planned path as the disk compares it (plan/key.ts): collisions are
+  //                  decided on this, so two names differing only in case never share a place.
+  //   ops            what Apply must prove and restore: the content's SHA-256, the creation
+  //                  time to keep on a copy, rename or copy, the temporary name of a copy, the
+  //                  last step done (for people; recovery trusts the disk), the files row
+  //                  before and after, and the op an undo reverses.
+  `
+  ALTER TABLE files ADD COLUMN plankey TEXT;
+  CREATE INDEX files_plankey ON files(plankey) WHERE plankey IS NOT NULL;
+  ALTER TABLE ops ADD COLUMN sha BLOB;
+  ALTER TABLE ops ADD COLUMN birth INTEGER;
+  ALTER TABLE ops ADD COLUMN mode TEXT;
+  ALTER TABLE ops ADD COLUMN tmp TEXT;
+  ALTER TABLE ops ADD COLUMN step TEXT;
+  ALTER TABLE ops ADD COLUMN sroot INTEGER;
+  ALTER TABLE ops ADD COLUMN spath TEXT;
+  ALTER TABLE ops ADD COLUMN droot INTEGER;
+  ALTER TABLE ops ADD COLUMN dpath TEXT;
+  ALTER TABLE ops ADD COLUMN undoes INTEGER;
+  CREATE INDEX ops_batch ON ops(batch);
+  `,
+  // 7: fill plankey; files already planned into one place (differing only in case) are
+  // planned again, and the planner now numbers the second one.
+  (db) => {
+    const set = db.q("UPDATE files SET plankey = ? WHERE id = ?");
+    const seen = new Set<string>();
+    const clash = new Set<string>();
+    for (const r of db.all<{ id: number; plan: string }>("SELECT id, plan FROM files WHERE plan IS NOT NULL ORDER BY id")) {
+      const k = planKey(r.plan);
+      set.run(k, r.id);
+      if (seen.has(k)) clash.add(k); else seen.add(k);
+    }
+    for (const k of clash) db.run("UPDATE files SET state = 20 WHERE plankey = ? AND state = 50", k);
+  },
 ];

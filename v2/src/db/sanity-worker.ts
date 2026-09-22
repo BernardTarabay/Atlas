@@ -91,16 +91,22 @@ check("representatives", "error", "Identical files with no copy, or more than on
 check("failed-unclassified", "warn", "Failed files without a kind of failure (content or access)",
   "They will not be retried automatically. Press \"Try again now\" on the Status page.",
   n(`SELECT count(*) AS n FROM files WHERE state = ${S.FAILED} AND fclass IS NULL`));
-check("ops-open", "error", "File operations started and never finished",
-  "Do not move those files by hand. This version of Atlas never changes files on disk, so this is unexpected: keep this report and tell whoever maintains Atlas.",
+check("ops-open", "error", "File operations that were interrupted (Apply stopped mid-file)",
+  "Do not move those files by hand. Stop Atlas and look: npm run apply -- list. They are reconciled before anything else is moved.",
   n("SELECT count(*) AS n FROM ops WHERE state = 1"),
   () => paths("SELECT src || ' → ' || dst AS p FROM ops WHERE state = 1 LIMIT 10"));
+check("ops-review", "warn", "File operations waiting for a person (something changed on disk while they ran)",
+  "See npm run apply -- show <batch>: each says what happened and where the files are. Nothing was deleted.",
+  n("SELECT count(*) AS n FROM ops WHERE state = 5"),
+  () => paths("SELECT 'batch ' || batch || ': ' || src || ' → ' || dst || coalesce(' (' || err || ')', '') AS p FROM ops WHERE state = 5 LIMIT 10"));
 
 // ---- names that would collide on disk (Windows ignores case) -------------------
 check("plan-case-collision", "warn", "Planned names that differ only in capitals: the same name on Windows",
-  "Harmless while Atlas only plans. Rename one of them in the library before anything is ever applied to disk.",
-  n("SELECT count(*) AS n FROM (SELECT lower(plan) FROM files WHERE plan IS NOT NULL GROUP BY lower(plan) HAVING count(*) > 1)"),
-  () => paths("SELECT group_concat(plan, '  |  ') AS p FROM files WHERE plan IS NOT NULL GROUP BY lower(plan) HAVING count(*) > 1 LIMIT 10"));
+  "The planner numbers such names now, and these are planned again as Atlas runs; Apply never puts two files in one place. If this stays, rename one of them in the library.",
+  n("SELECT count(*) AS n FROM (SELECT plankey FROM files WHERE plankey IS NOT NULL GROUP BY plankey HAVING count(*) > 1)"),
+  () => paths("SELECT group_concat(plan, '  |  ') AS p FROM files WHERE plankey IS NOT NULL GROUP BY plankey HAVING count(*) > 1 LIMIT 10"));
+check("plan-key-missing", "error", "Planned files without the key that name collisions are decided on", BUG,
+  n("SELECT count(*) AS n FROM files WHERE plan IS NOT NULL AND plankey IS NULL"));
 
 // ---- folders and scans -------------------------------------------------------
 check("roots-offline", "warn", "Folders that are not reachable", "Plug the drive in, or reconnect the share. Nothing in them is marked missing meanwhile.",

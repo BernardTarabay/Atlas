@@ -6,6 +6,7 @@
 //   worker -> main  { t: "hash", id, sha }          after the full read
 //   main -> worker  { t: "go", id, extract }        extract=false for known content
 //   worker -> main  { t: "done", id, sha, a?, index? } | { t: "err", id, code, message }
+//   main -> worker  { t: "leave" }                  shutting down: end on your own
 import { parentPort } from "node:worker_threads";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -40,6 +41,9 @@ port.on("message", (m: { t: string; id: number; extract?: boolean } & Job) => {
     decisions.delete(m.id);
   } else if (m.t === "job") {
     run(m).catch((e: NodeJS.ErrnoException) => port.postMessage({ t: "err", id: m.id, code: e.code ?? "ERR", message: String(e.message).slice(0, 300) }));
+  } else if (m.t === "leave") {
+    // Shutting down: stop listening and let the thread end on its own (pool.ts stop()).
+    port.close();
   }
 });
 

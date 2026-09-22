@@ -15,11 +15,15 @@
 //   {"id":3,"op":"pages","path":"x.pdf"}                    -> {"id":3,"pages":4}
 //   {"id":4,"op":"ocrpdf","path":"x.pdf","page":0,"dpi":200,"lang":"fr-FR"} -> like "ocr" (page rendered in memory)
 //   {"id":5,"op":"render","path":"x.pdf","page":0,"dpi":150,"out":"C:\\dir\\p.png"} -> {"id":5,"w":..,"h":..}
-// Errors: {"id":n,"error":"..."}. The helper never exits on a bad request.
+//   {"id":6,"op":"move","path":"C:\\a.pdf","to":"C:\\lib\\a.pdf"}   -> {"id":6}  (Apply: never replaces, see Move)
+//   {"id":7,"op":"created","path":"C:\\x.pdf","t":1700000000000}   -> {"id":7}  (set the creation time)
+// Errors: {"id":n,"error":"...","code":<win32 error, when there is one>}. The helper never exits on a bad request.
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
@@ -35,6 +39,43 @@ using Windows.Storage.Streams;
 static class AtlasWinRT {
   static readonly Dictionary<string, OcrEngine> engines = new Dictionary<string, OcrEngine>();
   static readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+
+  // ---- Apply's two primitives ------------------------------------------------
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern bool MoveFileExW(string from, string to, uint flags);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sa, uint disp, uint flags, IntPtr tmpl);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool SetFileTime(IntPtr h, ref long created, IntPtr accessed, IntPtr written);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  const uint MOVEFILE_WRITE_THROUGH = 0x8, FILE_WRITE_ATTRIBUTES = 0x100, SHARE_ALL = 0x7, OPEN_EXISTING = 3, BACKUP_SEMANTICS = 0x02000000;
+
+  static string LongPath(string p) {
+    p = Path.GetFullPath(p);
+    if (p.StartsWith(@"\\?\")) return p;
+    if (p.StartsWith(@"\\")) return @"\\?\UNC\" + p.Substring(2);
+    return @"\\?\" + p;
+  }
+
+  // Rename on one volume that NEVER replaces: without MOVEFILE_REPLACE_EXISTING an
+  // existing destination (compared the way the filesystem compares names, ignoring
+  // case) fails with ERROR_ALREADY_EXISTS instead of being overwritten - which is
+  // what Node's fs.rename would do. Without MOVEFILE_COPY_ALLOWED, across volumes it
+  // fails (ERROR_NOT_SAME_DEVICE) instead of silently becoming a copy and delete.
+  // WRITE_THROUGH: it does not return before the rename is on disk.
+  static void Move(string from, string to) {
+    if (!MoveFileExW(LongPath(from), LongPath(to), MOVEFILE_WRITE_THROUGH)) throw new Win32Exception(Marshal.GetLastWin32Error());
+  }
+
+  // A copy is a new file with a new creation time: give it back the original's.
+  static void SetCreated(string path, long unixMs) {
+    IntPtr h = CreateFileW(LongPath(path), FILE_WRITE_ATTRIBUTES, SHARE_ALL, IntPtr.Zero, OPEN_EXISTING, BACKUP_SEMANTICS, IntPtr.Zero);
+    if (h == new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    try {
+      long ft = (unixMs + 11644473600000L) * 10000L;
+      if (!SetFileTime(h, ref ft, IntPtr.Zero, IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    } finally { CloseHandle(h); }
+  }
 
   static T Wait<T>(IAsyncOperation<T> op) {
     using (var done = new ManualResetEvent(false)) {
@@ -207,6 +248,8 @@ static class AtlasWinRT {
       return new Dictionary<string, object> { { "langs", list } };
     }
     string path = (string)req["path"];
+    if (op == "move") { Move(path, (string)req["to"]); return new Dictionary<string, object>(); }
+    if (op == "created") { SetCreated(path, Convert.ToInt64(req["t"])); return new Dictionary<string, object>(); }
     if (op == "thumb") return Thumb(path, Convert.ToUInt32(req["size"]), (string)req["out"]);
     if (op == "ocr") {
       using (var s = OpenRead(path)) return Recognize(Decode(s), (string)req["lang"]);
@@ -251,6 +294,8 @@ static class AtlasWinRT {
       } catch (Exception e) {
         var inner = e is AggregateException && e.InnerException != null ? e.InnerException : e;
         reply = new Dictionary<string, object> { { "error", inner.Message } };
+        var w32 = inner as Win32Exception;
+        if (w32 != null) reply["code"] = w32.NativeErrorCode;
       }
       reply["id"] = id;
       reply["ms"] = sw.ElapsedMilliseconds;

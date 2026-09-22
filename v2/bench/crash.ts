@@ -32,9 +32,10 @@ function startEngine(home: string, port: number): ChildProcess {
 function peek(home: string) {
   const db = new Db(path.join(home, "atlas.db"));
   try {
-    const r = db.get<{ total: number; done: number; scanned: number }>(
-      "SELECT count(*) AS total, sum(state = 50) AS done, (SELECT count(*) FROM roots WHERE gen > 0) AS scanned FROM files")!;
-    return { total: r.total, done: r.done ?? 0, scanned: r.scanned };
+    const r = db.get<{ total: number; done: number; scanned: number; ocr: number }>(
+      `SELECT count(*) AS total, sum(state = 50) AS done, (SELECT count(*) FROM roots WHERE gen > 0) AS scanned,
+              (SELECT count(*) FROM contents WHERE ocr = 1) AS ocr FROM files`)!;
+    return { total: r.total, done: r.done ?? 0, scanned: r.scanned, ocrPending: r.ocr };
   } finally { db.close(); }
 }
 
@@ -56,11 +57,14 @@ async function runToCompletion(home: string, port: number, kills: number[]) {
   const tRestart = performance.now();
   let firstProgress = 0;
   const start = peek(home).done;
-  for (;;) {
+  // Finished means at rest: every file planned AND no OCR still to come - an OCR result
+  // sends its files back to be planned again, so "all planned" alone can be a passing
+  // moment (a kill right then left one file unplanned). Seen three times in a row.
+  for (let atRest = 0; atRest < 3; ) {
     await new Promise((r) => setTimeout(r, 100));
     const p = peek(home);
     if (!firstProgress && p.done > start) firstProgress = performance.now() - tRestart;
-    if (p.scanned && p.total > 0 && p.done === p.total) break;
+    atRest = p.scanned && p.total > 0 && p.done === p.total && p.ocrPending === 0 ? atRest + 1 : 0;
   }
   recovery.push(firstProgress);
   child.kill("SIGTERM");
@@ -75,6 +79,8 @@ function snapshot(home: string) {
     return {
       files: q<{ n: number }>("SELECT count(*) AS n FROM files").n,
       notDone: q<{ n: number }>("SELECT count(*) AS n FROM files WHERE state <> 50").n,
+      notDoneRows: db.all<{ path: string; state: number; err: string | null; ocr: number | null }>(
+        "SELECT f.path, f.state, f.err, c.ocr FROM files f LEFT JOIN contents c ON c.id = f.content WHERE f.state <> 50 LIMIT 5"),
       contents: q<{ n: number }>("SELECT count(*) AS n FROM contents").n,
       orphanContents: q<{ n: number }>("SELECT count(*) AS n FROM contents c WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.content = c.id)").n,
       unanalyzed: q<{ n: number }>("SELECT count(*) AS n FROM contents WHERE state <> 10").n,
@@ -110,7 +116,7 @@ for (const [p, plan] of a.planned) {
 }
 if (diffs.length) console.log("differences:\n" + diffs.join("\n"));
 const checks: [string, boolean, string][] = [
-  ["every file processed", b.notDone === 0, `${b.notDone} not done`],
+  ["every file processed", b.notDone === 0, `${b.notDone} not done: ${JSON.stringify(b.notDoneRows)}`],
   ["same file count as clean run", a.files === b.files, `${a.files} vs ${b.files}`],
   ["same unique contents", a.contents === b.contents, `${a.contents} vs ${b.contents}`],
   ["every content analyzed", b.unanalyzed === 0, `${b.unanalyzed} unanalyzed`],

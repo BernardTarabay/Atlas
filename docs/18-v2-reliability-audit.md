@@ -109,6 +109,8 @@ AtlasService.exe (native/AtlasService.cs): restarts the engine with backoff (1 s
 
 Schema only; no code. The schema cannot yet support recovery: it records no expected SHA-256, no temporary path and no volume. See §8.
 
+*Since Phase 6:* the code exists (`src/apply/apply.ts`), migration 6 added what recovery needs, and a sixth state, REVIEW 5, means "something unexpected happened after the disk changed; a person decides". See §11, Phase 6.
+
 ---
 
 ## 3. Filesystem mutation map
@@ -311,6 +313,8 @@ Atlas works with these identifiers:
 | A poison file | unchanged | FAILED, reset hourly | none | **it loops** | no |
 
 ### 8b. Apply specification (no code yet)
+
+*Built in Phase 6, including the four prerequisites at the end of this section; where the code differs from this specification, §11 Phase 6 says how and why. Reconciliation at startup (the "Recovery at startup" column) is Phase 7.*
 
 Apply does not exist yet, so this is the behaviour its code must produce. The protocol:
 
@@ -551,7 +555,7 @@ Covers changes #13–#20 in §9, plus the fallback-walker fixes in §5.
 - There is no screen yet to resolve an ambiguous carry by hand. It's counted on the Status page, and the choice stays on the missing row (and in the export) until then.
 - The scan watchdog could not be tested automatically (it needs a listing that hangs). It shares its stop path with the volume refusal, which is tested. A real hanging-share test belongs to Phase 8.
 
-### Phase 5: the sanity checker (done 2026-09-22, not yet committed)
+### Phase 5: the sanity checker (done 2026-09-22, commit `46606db`)
 
 Covers change #21 in §9, with the §10 inventory extended by what Phases 1–4 introduced.
 
@@ -583,3 +587,58 @@ Covers change #21 in §9, with the §10 inventory extended by what Phases 1–4 
 
 - The re-hash is a sample, not a full pass: 100 files and 512 MB a day is seconds. Over months it covers a meaningful share of an archive without ever becoming a job of its own.
 - There is still no repair tool. The findings that would need one (orphan index entries, unused content) are all derived data and harmless; a pruning command can come later if the counts grow.
+
+### Phase 6: Apply (done 2026-09-22, not yet committed)
+
+Covers changes #22 and #23 in §9, except recovery at startup (Phase 7). Built and tested **only on throwaway folders**: Apply has never run on a real folder, and it runs only when a person types the command.
+
+| Change | Where |
+|---|---|
+| **Case-insensitive names.** Migration 6 adds `files.plankey`, the planned path as Windows compares it (`plan/key.ts`: NFC, upper case). Every "is this place taken?" in the planner is asked of the key, so `Report.pdf` and `REPORT.pdf` are numbered apart. Migration 7 fills the key and sends files already sharing a key back to be planned (IDENT); the planner numbers the second | `db/schema.ts`, `plan/planner.ts`, `plan/key.ts`, `scan/scanner.ts` |
+| **The journal.** Migration 6 adds to `ops` what a move must prove and restore: the SHA-256, the creation time, `rename` or `copy`, the copy's temporary name, the last step done, the files row before and after (`sroot`/`spath`, `droot`/`dpath`), and `undoes` | `db/schema.ts` |
+| **Planning** (`planApply`): into a folder with the role *library* only, enabled, online, and on the disk it was registered on; one open batch at a time. Skips (and counts, with examples) cloud-only files, files the last scan missed, offline folders, a place held by a file that isn't moving, and two files planned to one key. One durable transaction writes the batch; nothing on disk is touched. `preview` writes nothing at all | `apply/apply.ts` |
+| **Running** (`runBatch`), per file: STARTED durably → the source is still the file on record (ID, size, mtime) and the destination is free on disk and in the index → the move → the index row, `fts_name` and DONE in **one** durable transaction. Same disk: `MoveFileExW` without `REPLACE_EXISTING` (never `fs.rename`, which replaces on Windows), then the destination must carry the same file ID. Across disks: `COPYFILE_EXCL` to the op's own temporary name → flush → SHA-256 on a hashing thread must match → creation time restored → no-replace rename into place → the original deleted only if it's still exactly what was copied | `apply/apply.ts`, `apply/fsops.ts`, `apply/hash-worker.ts` |
+| **Outcomes.** A failure before anything changed on disk is FAILED (nothing to undo; plan again). Anything unexpected after is the new state **REVIEW 5**: the op says what happened, and nothing is guessed. A destination held by a file of the same batch that has yet to leave waits for a later pass; a pass with no progress is a cycle, and those fail with nothing done | `apply/apply.ts`, `pipeline/states.ts` |
+| **Undo** (`planUndo`): the reverse of a batch's DONE ops, as a new batch run the same way, for files still where the batch put them; each original op becomes UNDONE when its reverse is done. **Cancel** fails the PLANNED ops of a batch, touching nothing | `apply/apply.ts` |
+| **Native moves.** `atlas-winrt.exe` gains `move` (MoveFileExW, `MOVEFILE_WRITE_THROUGH`, never replacing) and `created` (SetFileTime), and replies carry the Win32 error code, so "already exists" and "in use" are told apart reliably | `native/winrt.cs`, `ocr/winrt.ts` |
+| **One writer.** `<home>/atlas.lock`, opened with no sharing (`UV_FS_O_EXLOCK`), held by the engine, Apply, `intent import` and `db restore`. The OS drops it however the process ends. The engine warns at startup when ops are STARTED or REVIEW | `lock.ts`, `main.ts`, `scripts/*.ts` |
+| **The CLI**: `npm run apply -- list / preview / plan / run --yes / undo --yes / cancel / show` | `scripts/apply.ts` |
+| **Sanity**: `ops-open` now points at `npm run apply -- list`; new `ops-review` (warn) and `plan-key-missing` (error); case collisions are grouped by the key | `db/sanity-worker.ts` |
+
+**Differences from §8b:**
+
+- The temporary name is `<dst>.atlas-<batch>-<file id>.tmp` rather than `<dst>.atlas-<op id>.tmp`: just as unique (a file appears once per batch), and readable by a person.
+- The copy is proven **before** it's renamed into place (flush, then hash the temporary file), not after. A rename in one folder doesn't change bytes, so the destination is then checked by size. This way a bad copy never occupies the destination, even briefly.
+- The creation time put on a copy is the one the original has **at the time of the copy**; the one recorded at planning is used only if the disk gives none.
+- "Needs review" became its own state (REVIEW 5) rather than FAILED: FAILED means "nothing changed, safe to plan again", and the two must never be confused.
+- Reconciliation at startup is not built: a STARTED op blocks planning and running until Phase 7 settles it. There is also no command yet to settle a REVIEW op; that is Phase 7 too.
+
+**Found while doing this** (each reproduced before it was fixed):
+
+- **A native crash of the whole process, rarely, under load** (`0xC0000005`). pdf.js loads its optional native add-on `@napi-rs/canvas` whenever it starts under Node, only to polyfill DOMMatrix/ImageData/Path2D for *rendering*, which Atlas never does. Loaded inside a worker thread, the add-on crashes the process when the thread ends. Measured on a malformed-PDF repro, 16 runs of 20 worker lifetimes each, 4 processes at a time: with the add-on, 2/16 runs crashed when workers were terminated and 7/16 when they exited on their own; without it, 0/16 and 0/16. npm installs it as an optional dependency of pdfjs-dist, so its absence can't be pinned from `package.json` (an `overrides` stub was tried and not honoured). Instead `pdf.ts` puts an empty module in the thread's `require` cache under the exact path pdf.js resolves, before pdf.js loads: the binary is never opened (confirmed from the process's loaded modules), and text from 20 real PDFs is byte-identical. Along the way: a PDF that fails to open now destroys its loading task (one leaked per malformed PDF), and the pool asks idle workers to leave instead of terminating them. (`analyze/pdf.ts`, `pipeline/pool.ts`, `pipeline/worker.ts`)
+- **A stopped pool kept a job clock running.** `stop()` terminated a busy worker without clearing its deadline, so up to 3 min later (`jobTimeoutMs`) it reported a TIMEOUT to an engine that had stopped, and kept a test process alive that long. In production that is the "database damaged: engine stopped" path. Now a stopped pool clears every clock, forgets its jobs (read again at the next start, as after a crash), and a second `stop()` returns the same shutdown. (`pipeline/pool.ts`)
+- **OCR outcomes could be lost** (introduced in Phase 4, `ff4d80f`). `this.ocrOut.push({ …, same: await unchanged(…) })` reads the list *before* the await; when the engine wrote other outcomes meanwhile, it replaced that list and this outcome went into the discarded one. The content then stayed "in flight" in memory and waiting for OCR in the database until Atlas restarted, and still showed as an active OCR on the Status page. On the 484-image bench corpus, 17–27 contents were stranded every run; after the fix, none (all 484 in ~10 s). `bench:crash` never saw it: it stopped at the first moment every file was planned, before OCR had finished. (`pipeline/engine.ts`)
+- **`bench:crash` compared runs before OCR had settled.** An OCR result sends its files back to be planned again; a kill in that moment left one file unplanned (3 of 8 runs failed "every file processed"). Finished now means every file planned **and** no OCR pending, three samples in a row, and a failure names the files. (`bench/crash.ts`)
+- Maintenance replied before closing its copy of the database, so renaming the backup into place could hit EBUSY (an intermittent failure of the full suite); the reply now waits for every connection to close. Renames of Atlas's **own** files (backups, restore, the intent export, reports, thumbnails) retry briefly on EBUSY/EPERM/EACCES from antivirus or indexers (`fsutil.ts`); a user's file never goes through that path. (`db/maint-worker.ts`, `fsutil.ts`)
+**Verified:**
+
+- `npm test`: **100/100**, three consecutive runs at 16.5-17.3 s (10 new in `test/apply.test.ts`, 2 new in `test/retry.test.ts`). `tsc` clean.
+- **Every new guard was checked by breaking it**, and only then trusted:
+  - a replacing rename in place of the native no-replace move: "a file saved at the destination after it was checked" fails. This one matters - the check *before* a move cannot catch a file that appears a moment later, and the first version of the tests did not cover it (breaking the move changed nothing, which is how the gap was found);
+  - no hash comparison on a copy: "a copy that is not the recorded content is thrown away" fails;
+  - the old `pool.stop()`: "a stopped pool is silent" fails with a TIMEOUT reported after the stop;
+  - the old OCR push: "an OCR outcome is not lost" times out waiting for the outcome.
+- `bench:crash`: 5 runs, **11/11 invariants each**; clean run 9.5-10.1 s, crash run (7 hard kills) 14.5-15.7 s, first progress 0.64-1.04 s after the final restart.
+- **The native crash repro** (a malformed PDF parsed in a worker thread, 20 thread lifetimes per run, 4 processes at once, 16 runs per mode): **0 of 32 runs crashed** with the add-on kept out, against 9 of 32 with it (2/16 terminating workers, 7/16 letting them exit). Text from 20 real PDFs is byte-identical, and the process's loaded-module list no longer contains `skia.win32-x64-msvc.node`.
+- **Migrations 6 + 7 on a snapshot of the live database** (7,057 files, 280 MB): 68 ms. 7,056 keys written, none wrong; counts unchanged; `integrity_check` ok; the one real case collision found in Phase 5 re-planned to `… WWL DATA POINT ANALYSIS (2).txt`, and no colliding keys left.
+- **Live, on the development database**: migrated on the first command (0.7 s including startup); the engine then started in 43 ms, resumed the 2 rows waiting to be planned, and scanned all four roots clean (nothing suspect, nothing missing). `npm run apply -- list` and `preview` are refused while Atlas runs (exit 1), and the lock file cannot even be read while it is held. The health check: **31 checks, 0 errors, 0 warnings, 0 notes**, 100 re-read files matching - the collision Phase 5 reported is gone. The library still browses in the UI.
+- **Apply, on throwaway folders** (1,000 files of ~3 KB, one disk): plan 29 ms (0.03 ms/file), run 5.9 ms/file, undo 4.6 ms/file, and the copy protocol 9.5 ms/file over 300 files. About 170 files/s: per file, two durable commits and a helper round trip. Fast enough for a command a person runs; Phase 9 can look again.
+- One suite run failed three timing tests (STALL instead of steady reading, a drive-letter follow missed) while the machine was in **Modern Standby** - Windows power events 19:25:11 to 19:54:13 cover exactly that run. Re-run awake: 100/100. Worth remembering when a timed test fails on a laptop.
+
+**Decisions:**
+
+- **Apply is a command, not a button.** The only code that moves a person's files runs by hand, with the engine stopped, and moves nothing without `--yes`. A UI for it waits until it has run on real folders.
+- **It has never been run on a real folder.** Every test builds its own throwaway tree, and the development machine's own folders were never a destination.
+- Only the **representative** of a set of identical files moves; its copies stay where they are. The same bytes are not the same document.
+- **REVIEW is not something the code resolves.** FAILED means "nothing changed, plan again"; REVIEW means a person looks. Phase 7 gives them the command to settle it.
+- The index takes a **file ID from the destination only on NTFS/ReFS**; on anything else it keeps none, rather than a number that means nothing after a move.

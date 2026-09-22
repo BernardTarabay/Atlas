@@ -14,6 +14,7 @@ port.on("message", (m: { t: string; id: number; abs: string }) => {
     if (jobs.get(m.id) !== "hang") port.postMessage({ t: "done", id: m.id, sha, actual: { size: 0, mtime: 0 } });
     return;
   }
+  if (m.t === "leave") { port.close(); return; }
   if (m.t !== "job") return;
   jobs.set(m.id, m.abs);
   let n = 0;

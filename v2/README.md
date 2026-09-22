@@ -3,8 +3,10 @@
 A local engine that scans your folders, reads every file once, deduplicates by
 SHA-256, extracts text and metadata, reads scans and photos with local OCR, and
 organizes a virtual library you can browse and search from this machine or your
-phone. Nothing is moved, renamed or deleted: V2 runs in **preview mode**. Design
-record: [docs/14](../docs/14-v2-audit.md), [15](../docs/15-v2-decisions.md),
+phone. The engine never moves, renames or deletes a file: V2 runs in **preview
+mode**. Moving files into the library is a separate command you run by hand
+([Apply](#moving-files-into-the-library-apply)); so far it has only been run on
+test folders. Design record: [docs/14](../docs/14-v2-audit.md), [15](../docs/15-v2-decisions.md),
 [16](../docs/16-v2-revisions-and-research.md), [17](../docs/17-ocr.md).
 
 ```
@@ -176,6 +178,49 @@ Measured on the development database (280 MB):
 
 It **repairs nothing**: each finding says what it means and what a person can do. The newest 30 reports are kept in `<home>/sanity/`. On the development database it takes 2.5 s warm, 33 s from cold caches.
 
+## Moving files into the library (Apply)
+
+Apply makes the disk look like the plan: each file the library shows goes to that place, inside a folder you registered with the role **library**. It's the only code in Atlas that moves a person's files, so it runs **by hand, with Atlas stopped**, and nothing moves without `--yes`.
+
+```powershell
+npm run apply -- preview --to <root id>        # what would move; writes nothing
+npm run apply -- plan --to <root id> [--limit N]   # writes a batch to the journal; no file moves
+npm run apply -- run <batch> --yes             # moves that batch's files
+npm run apply -- undo <batch> --yes            # puts them back (as a new batch)
+npm run apply -- list | show <batch> | cancel <batch>
+```
+
+**Planning** writes one journal row per file (the `ops` table) with everything the move must prove: the file's ID, size, date and SHA-256, and its creation time. It leaves out, and says why:
+
+- cloud-only files;
+- files the last scan didn't see;
+- files whose folder is offline;
+- a place in the library that another file already holds;
+- two files planned to one place.
+
+Only one copy of a set of identical files is moved. The others stay where they are.
+
+**Running** takes one file at a time:
+
+1. The row is marked *started*, durably, before the file is touched.
+2. The file must still be exactly the one on record, and the destination must be free: on disk, and in the index.
+3. Moving it:
+   - **Same disk:** a rename that can never replace anything (`MoveFileExW` without `REPLACE_EXISTING`). The destination must then be that same file, by its ID.
+   - **Another disk:** a copy to a temporary name beside the destination, flushed and hashed; it must match the recorded SHA-256. It gets the original's creation time and is renamed into place, again never replacing. The original is deleted only if it's still exactly the file that was copied.
+4. The index row follows the file, and the op is marked *done*: one durable transaction.
+
+If anything fails before the disk changed, the op is *failed* and there's nothing to undo. If anything unexpected happens after, it's *for review*: `show` says which file and why, and nothing is guessed. A file waiting for another file of the same batch to move out of its way runs in a later pass. Two files that would have to swap places fail, and neither moves.
+
+**Never:**
+
+- replace a file;
+- delete an original that hasn't been copied and verified;
+- move a duplicate.
+
+**One writer.** The engine, Apply, `intent import` and `db restore` all take `<home>/atlas.lock`, a file held open without sharing. So Apply refuses to start while Atlas runs, and Atlas refuses to start while Apply runs. Windows releases the lock however the process ends, so a crash never leaves a stale one.
+
+**Not yet:** after a crash mid-file, the op stays *started*. Atlas warns at startup, and Apply refuses to run or plan anything else until it's reconciled. Reconciling at startup, and a way to settle a *for review* op, are the next step (Phase 7 in [docs/18](../docs/18-v2-reliability-audit.md)).
+
 ## Tests and benchmarks
 
 ```bash
@@ -192,6 +237,7 @@ npm run bench:robust -- <dir>     # what breaks on real files, and how fast the 
 npm run intent -- list            # your decisions, exported (see above)
 npm run db -- check               # the database's integrity, backups, restore (see above)
 npm run db -- sanity              # the report-only sanity check (see above)
+npm run apply -- list             # Apply's batches and their outcome (see above)
 ```
 
 Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB):
@@ -341,6 +387,7 @@ file contents).
 
 ## Not built yet
 
-Thumbnails, local semantic search, mirror mode (links), journaled apply, the AI
-gateway, the control plane (updates, heartbeat, logs), and re-analysis on demand
-(today a better extractor or dictionary only applies to files that are read again).
+Thumbnails, local semantic search, mirror mode (links), recovery of an interrupted
+Apply at startup, the AI gateway, the control plane (updates, heartbeat, logs), and
+re-analysis on demand (today a better extractor or dictionary only applies to files
+that are read again).

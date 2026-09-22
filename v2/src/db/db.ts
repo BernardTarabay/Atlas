@@ -107,7 +107,8 @@ export class Db {
     const current = Number(this.meta("schema") ?? 0);
     for (let v = current + 1; v <= MIGRATIONS.length; v++) {
       this.tx(() => {
-        this.raw.exec(MIGRATIONS[v - 1]);
+        const m = MIGRATIONS[v - 1];
+        if (typeof m === "function") m(this); else this.raw.exec(m);
         this.setMeta("schema", String(v));
       });
     }

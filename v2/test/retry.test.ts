@@ -31,6 +31,7 @@ interface Inner {
   retryAt: Map<number, number>;
   holdUntil: number;
   ocrOut: unknown[];
+  ocrInflight: Set<number>;
   reviveFailures(startup: boolean): void;
   dispatchOcr(): boolean;
   flushOcr(): void;
@@ -233,6 +234,42 @@ test("the pool: a slow read is not a stuck one, and analysis has a deadline", as
   } finally {
     await pool.stop();
   }
+});
+
+test("a stopped pool is silent: no clock left running, nothing reported after it stops", async () => {
+  const reported: string[] = [];
+  const pool = new AnalyzePool(1, 400, 5000, () => true, () => reported.push("done"), (_j, code) => reported.push(code),
+    new URL("./_stall-worker.ts", import.meta.url));
+  pool.submit({ id: 1, root: 1, rel: "hang", abs: "hang", size: 0, ext: "", wholeFileBytes: 0, maxParseBytes: 0, maxTextChars: 0, settleMs: 0 });
+  await until("analysis to start", () => pool.activity()[0].stage === "analyzing");
+  await pool.stop(); // mid-analysis: the job's 400 ms deadline is running
+  const t0 = Date.now();
+  await pool.stop(); // again, as a cleanup after a test's own stop does
+  assert.ok(Date.now() - t0 < 1000, "stopping a stopped pool waits for nothing");
+  await new Promise((r) => setTimeout(r, 1000));
+  assert.deepEqual(reported, [], "no TIMEOUT for a job of a pool that has stopped");
+});
+
+test("an OCR outcome is not lost when others are written while its file is being checked", async () => {
+  const { db } = fixture("ocrrace", { "scan.png": "pretend these are pixels" });
+  await scanRoot(db, 1);
+  const cid = Number(db.run("INSERT INTO contents(sha, size, kind, ocr) VALUES (?, 24, 'image', 1)", crypto.randomBytes(32)).lastInsertRowid);
+  db.run(`UPDATE files SET content = ?, state = ${S.DONE} WHERE path = 'scan.png'`, cid);
+  const eng = new Engine(db);
+  eng.reloadRoots();
+  (eng as unknown as { ocr: unknown }).ocr = {
+    idle: 1, busy: 0, close() {},
+    recognize: async () => ({ text: "", lang: null, engine: "test", pages: 1, ms: 1 }),
+  };
+  assert.equal(inner(eng).dispatchOcr(), true);
+  // The text is back and the file is being re-checked (a stat, off the main thread)...
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  // ...when the engine writes the outcomes it already has, starting a fresh list.
+  inner(eng).flushOcr();
+  await until("the outcome to be queued", () => inner(eng).ocrOut.length > 0, 3000);
+  inner(eng).flushOcr();
+  assert.equal(db.get<{ ocr: number }>("SELECT ocr FROM contents WHERE id = ?", cid)!.ocr, OCR.DONE, "recorded, not left waiting for OCR");
+  assert.equal(inner(eng).ocrInflight.size, 0, "and no longer counted as in flight");
 });
 
 test("OCR: the file's fault waits and comes back; the content's fault is kept", async () => {

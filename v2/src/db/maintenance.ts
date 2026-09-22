@@ -29,6 +29,7 @@ import { config } from "../config.ts";
 import { log } from "../log.ts";
 import { Db } from "./db.ts";
 import { MIGRATIONS } from "./schema.ts";
+import { renameRetrying } from "../fsutil.ts";
 import { runSanity, saveReport, latestReport, type SanityReport } from "./sanity.ts";
 
 export interface CheckResult { ok: boolean; detail: string[]; ms: number }
@@ -89,7 +90,7 @@ export async function makeBackup(file: string, dir = config.backupDir, keep = co
     fs.rmSync(part, { force: true });
     return { ok: false, stage: r.stage ?? "copy", detail: r.detail };
   }
-  fs.renameSync(part, final);
+  await renameRetrying(part, final);
   const all = listBackups(dir);
   const removed: string[] = [];
   for (const old of all.slice(keep)) {
@@ -244,11 +245,11 @@ export async function restoreBackup(backup: string, home = config.home): Promise
     try {
       for (const f of present) {
         const to = path.join(replacedDir, path.basename(f));
-        fs.renameSync(f, to);
+        await renameRetrying(f, to);
         moved.push([f, to]);
       }
     } catch (e) {
-      for (const [from, to] of moved.reverse()) fs.renameSync(to, from);
+      for (const [from, to] of moved.reverse()) await renameRetrying(to, from);
       throw new Error(`could not move the current database aside (is Atlas still running?): ${(e as Error).message}`);
     }
   }
@@ -257,10 +258,10 @@ export async function restoreBackup(backup: string, home = config.home): Promise
     fs.copyFileSync(backup, tmp);
     const fd = fs.openSync(tmp, "r+");
     try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(tmp, live);
+    await renameRetrying(tmp, live);
   } catch (e) {
     fs.rmSync(`${live}.restoring`, { force: true });
-    for (const [from, to] of moved.reverse()) fs.renameSync(to, from);
+    for (const [from, to] of moved.reverse()) await renameRetrying(to, from);
     throw new Error(`could not put the backup in place; the previous database is back: ${(e as Error).message}`);
   }
   // Opening it applies any migrations a backup from an older Atlas needs.

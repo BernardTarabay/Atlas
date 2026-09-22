@@ -74,9 +74,11 @@ test("every contradiction it knows is found, named, and left alone", async () =>
     db.run(`INSERT INTO files(root, path, size, mtime, seen, state, plan) VALUES (1, 'ghost.txt', 1, 0, 1, ${S.MISSING}, 'X/ghost.txt')`);
     db.run(`INSERT INTO files(root, path, size, mtime, seen, state, plan, rule) VALUES (1, 'unread.txt', 1, 0, 1, ${S.DONE}, 'X/unread.txt', 'r')`);
     db.run(`INSERT INTO files(root, path, size, mtime, seen, state, content, rule) VALUES (1, 'placeless.txt', 1, 0, 1, ${S.DONE}, ?, 'notes')`, c);
-    db.run(`INSERT INTO files(root, path, size, mtime, seen, state, content, plan, rule) VALUES (1, 'same-place.txt', 1, 0, 1, ${S.DONE}, ?, (SELECT plan FROM files WHERE path = 'b.txt'), 'r')`, row("b.txt").content);
-    db.run(`INSERT INTO files(root, path, size, mtime, seen, state, content, plan, rule) VALUES (1, 'case.txt', 1, 0, 1, ${S.DONE}, ?, upper((SELECT plan FROM files WHERE path = 'c.txt')), 'r')`, row("c.txt").content);
-    db.run(`UPDATE files SET plan = 'Twins/twin2.txt', rule = 'r' WHERE path = 'twin2.txt'`); // two representatives
+    db.run(`INSERT INTO files(root, path, size, mtime, seen, state, content, plan, plankey, rule) VALUES (1, 'same-place.txt', 1, 0, 1, ${S.DONE}, ?,
+      (SELECT plan FROM files WHERE path = 'b.txt'), (SELECT plankey FROM files WHERE path = 'b.txt'), 'r')`, row("b.txt").content);
+    db.run(`INSERT INTO files(root, path, size, mtime, seen, state, content, plan, plankey, rule) VALUES (1, 'case.txt', 1, 0, 1, ${S.DONE}, ?,
+      upper((SELECT plan FROM files WHERE path = 'c.txt')), (SELECT plankey FROM files WHERE path = 'c.txt'), 'r')`, row("c.txt").content);
+    db.run(`UPDATE files SET plan = 'Twins/twin2.txt', plankey = 'TWINS/TWIN2.TXT', rule = 'r' WHERE path = 'twin2.txt'`); // two representatives
     db.run(`INSERT INTO files(root, path, size, mtime, seen, state) VALUES (1, 'failed.txt', 1, 0, 1, ${S.FAILED})`);
     db.run("INSERT INTO ops(batch, kind, file, src, dst, state) VALUES (1, 'move', 1, 'C:\\\\a', 'C:\\\\b', 1)");
     db.run("INSERT INTO fts_name(rowid, name) VALUES (88888, 'nothing')");
@@ -103,7 +105,8 @@ test("every contradiction it knows is found, named, and left alone", async () =>
   const found = ids(r);
   for (const id of ["orphan-files", "dangling-content", "missing-with-plan", "filed-unread", "done-without-place", "plan-collision",
     "plan-case-collision", "representatives", "failed-unclassified", "ops-open", "fts-name-orphans", "text-orphans",
-    "roots-offline", "roots-other-disk", "suspect-stale", "intent-export", "backup-stale", "rehash-differs", "litter", "thumbs-broken"]) {
+    "roots-offline", "roots-other-disk", "suspect-stale", "intent-export", "backup-stale", "rehash-differs", "litter", "thumbs-broken",
+    "plan-key-missing"]) {
     assert.ok(found.includes(id), `found: ${id}`);
   }
   const level = (id: string) => r.findings.find((f) => f.id === id)!.level;

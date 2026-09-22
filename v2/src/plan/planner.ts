@@ -11,6 +11,7 @@ import { S } from "../pipeline/states.ts";
 import { plan, type PlanInput } from "./rules.ts";
 import { nameText } from "../search/text.ts";
 import { splitName } from "./names.ts";
+import { planKey } from "./key.ts";
 
 interface Cand {
   id: number; root: number; path: string; mtime: number; ctime: number; content: number | null; fid: string | null; plan: string | null; pin: string | null; pinname: string | null;
@@ -36,11 +37,13 @@ const byLocation = (a: { root: number; path: string }, b: { root: number; path: 
  * are re-planned so the numbering compacts exactly as a fresh run would number it.
  */
 export function releaseName(db: Db, plan: string) {
-  const slash = plan.lastIndexOf("/");
-  const [stem, ext] = splitName(plan.slice(slash + 1));
-  const base = `${plan.slice(0, slash)}/${stem.replace(/ \(\d+\)$/, "")} (`;
+  // Compared as the disk compares names (plan/key.ts): "Report (2).pdf" follows "REPORT.pdf".
+  const key = planKey(plan);
+  const slash = key.lastIndexOf("/");
+  const [stem, ext] = splitName(key.slice(slash + 1));
+  const base = `${key.slice(0, slash)}/${stem.replace(/ \(\d+\)$/, "")} (`;
   const tail = ext ? `%).${ext.replace(/[\\%_]/g, "\\$&")}` : "%)";
-  db.run(`UPDATE files SET state = ${S.IDENT} WHERE state = ${S.DONE} AND plan >= ? AND plan < ? AND plan LIKE ? ESCAPE '\\'`,
+  db.run(`UPDATE files SET state = ${S.IDENT} WHERE state = ${S.DONE} AND plankey >= ? AND plankey < ? AND plankey LIKE ? ESCAPE '\\'`,
     base, base.slice(0, -1) + ")", tail);
 }
 
@@ -63,14 +66,15 @@ export function planBatch(db: Db, limit: number, extracting: Set<string>): numbe
   const members = db.q(
     `SELECT f.id, f.root, f.path, f.mtime, f.fid, r.role, f.plan FROM files f JOIN roots r ON r.id = f.root
      WHERE f.content = ? AND f.state IN (${S.IDENT}, ${S.DONE})`);
-  const setPlan = db.q(`UPDATE files SET plan = ?, rule = ?, state = ${S.DONE} WHERE id = ?`);
-  const clearPlan = db.q(`UPDATE files SET plan = NULL, rule = ?, state = ${S.DONE} WHERE id = ?`);
+  const setPlan = db.q(`UPDATE files SET plan = ?, plankey = ?, rule = ?, state = ${S.DONE} WHERE id = ?`);
+  const clearPlan = db.q(`UPDATE files SET plan = NULL, plankey = NULL, rule = ?, state = ${S.DONE} WHERE id = ?`);
   const replanRep = db.q(`UPDATE files SET state = ${S.IDENT} WHERE id = ? AND state = ${S.DONE}`);
-  const holder = db.q("SELECT id, root, path FROM files WHERE plan = ? AND id <> ? LIMIT 1");
+  // Who holds a place is asked the way the disk would: ignoring case (plan/key.ts).
+  const holder = db.q("SELECT id, root, path FROM files WHERE plankey = ? AND id <> ? LIMIT 1");
   // Giving up a name re-plans a PLANNED file. A file still waiting to be read (NEW, an
   // edited file keeps its old plan until then) keeps waiting: making it IDENT here would
   // file it without ever reading it.
-  const evict = db.q(`UPDATE files SET plan = NULL, state = CASE WHEN state = ${S.DONE} THEN ${S.IDENT} ELSE state END WHERE id = ?`);
+  const evict = db.q(`UPDATE files SET plan = NULL, plankey = NULL, state = CASE WHEN state = ${S.DONE} THEN ${S.IDENT} ELSE state END WHERE id = ?`);
   const titleShared = db.q("SELECT count(*) AS n FROM (SELECT 1 FROM contents WHERE title = ? LIMIT 5)");
   const delName = db.q("DELETE FROM fts_name WHERE rowid = ?");
   const addName = db.q("INSERT INTO fts_name(rowid, name) VALUES(?, ?)");
@@ -124,11 +128,11 @@ export function planBatch(db: Db, limit: number, extracting: Set<string>): numbe
       let target = "";
       for (let n = 1; ; n++) {
         target = n === 1 ? `${p.folder}/${p.name}` : `${p.folder}/${stem} (${n})${ext ? "." + ext : ""}`;
-        const h = holder.get(target, f.id) as { id: number; root: number; path: string } | undefined;
+        const h = holder.get(planKey(target), f.id) as { id: number; root: number; path: string } | undefined;
         if (!h) break;
         if (byLocation(f, h) < 0) { evict.run(h.id); break; }
       }
-      setPlan.run(target, p.rule, f.id);
+      setPlan.run(target, planKey(target), p.rule, f.id);
       if (f.plan && f.plan !== target) releaseName(db, f.plan);
       done++;
     }

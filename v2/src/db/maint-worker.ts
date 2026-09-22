@@ -31,12 +31,14 @@ const t0 = performance.now();
 const ms = () => Math.round(performance.now() - t0);
 /** Which database an error is about: the live one (untrustworthy) or the copy being made (a failed backup). */
 let step: "source" | "vacuum" | "verify" = "source";
+// The reply is sent only once every connection is CLOSED: the caller renames the copy
+// next, and Windows refuses to rename a file something still has open.
+let reply: Record<string, unknown>;
 try {
   if (job.op === "check") {
     const db = open(job.file);
     try {
-      const r = verify(db, job.full ? "integrity_check" : "quick_check");
-      parentPort!.postMessage({ ...r, ms: ms() });
+      reply = { ...verify(db, job.full ? "integrity_check" : "quick_check") };
     } finally { db.close(); }
   } else {
     const src = open(job.file);
@@ -48,7 +50,7 @@ try {
       if (source.ok) src.exec(`VACUUM INTO '${job.out!.replaceAll("'", "''")}'`);
     } finally { src.close(); }
     if (!source.ok) {
-      parentPort!.postMessage({ ok: false, stage: "source", detail: source.detail, ms: ms() });
+      reply = { ok: false, stage: "source", detail: source.detail };
     } else {
       // The backup must be proven readable and whole before it may replace an older one.
       step = "verify";
@@ -56,7 +58,7 @@ try {
       try {
         const r = verify(copy, "integrity_check");
         const schema = copy.prepare("SELECT value FROM meta WHERE key = 'schema'").get() as { value: string } | undefined;
-        parentPort!.postMessage({ ok: r.ok, stage: "copy", detail: r.detail, schema: schema ? Number(schema.value) : null, ms: ms() });
+        reply = { ok: r.ok, stage: "copy", detail: r.detail, schema: schema ? Number(schema.value) : null };
       } finally { copy.close(); }
     }
   }
@@ -67,5 +69,6 @@ try {
   // Trouble reading the finished copy is always the copy's.
   const code = (e as { errcode?: number }).errcode;
   const stage = step === "source" || (step === "vacuum" && (code === 11 || code === 26)) ? "source" : "copy";
-  parentPort!.postMessage({ ok: false, stage, detail: [(e as Error).message], ms: ms() });
+  reply = { ok: false, stage, detail: [(e as Error).message] };
 }
+parentPort!.postMessage({ ...reply, ms: ms() });

@@ -25,6 +25,7 @@ import { config } from "./config.ts";
 import { log } from "./log.ts";
 import { addRoot } from "./roots.ts";
 import { S } from "./pipeline/states.ts";
+import { renameRetryingSync } from "./fsutil.ts";
 
 export interface IntentRoot { path: string; role: string; enabled: boolean; volume: string | null; fs: string | null }
 export interface IntentEntry {
@@ -88,7 +89,7 @@ function writeAtomic(file: string, text: string) {
   } finally {
     fs.closeSync(fd);
   }
-  fs.renameSync(tmp, file);
+  renameRetryingSync(tmp, file);
 }
 
 export class IntentExport {

@@ -29,6 +29,7 @@ import path from "node:path";
 import { config } from "./config.ts";
 import { log } from "./log.ts";
 import { WinRt, winrtAvailable } from "./ocr/winrt.ts";
+import { renameRetrying } from "./fsutil.ts";
 
 export const SIZES = [128, 256, 512] as const;
 
@@ -119,8 +120,8 @@ export class Thumbs {
           await slot.rt.thumb(j.abs, j.size, tmp);
           if (!(await same(j.abs, j.expect))) throw new Error("changed while its thumbnail was made");
         })
-        .then(() => {
-          fs.renameSync(tmp, j.out);
+        .then(async () => {
+          await renameRetrying(tmp, j.out);
           this.counters.made++;
           j.resolve(j.out);
         })

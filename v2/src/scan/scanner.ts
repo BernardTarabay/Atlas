@@ -174,7 +174,7 @@ function markMissing(db: Db, rootId: number, gen: number, seen: Set<number>, err
     }
   }
   if (!gone.length) return { suspect: suspected, missing: 0 };
-  const setMissing = db.q(`UPDATE files SET state = ${S.MISSING}, plan = NULL WHERE id = ?`);
+  const setMissing = db.q(`UPDATE files SET state = ${S.MISSING}, plan = NULL, plankey = NULL WHERE id = ?`);
   for (const g of gone) {
     setMissing.run(g.id);
     if (g.plan) releaseName(db, g.plan);

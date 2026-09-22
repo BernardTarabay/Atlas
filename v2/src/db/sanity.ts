@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { config } from "../config.ts";
+import { renameRetryingSync } from "../fsutil.ts";
 import type { Finding, SanityResult } from "./sanity-worker.ts";
 
 export type { Finding } from "./sanity-worker.ts";
@@ -48,7 +49,7 @@ export function saveReport(r: SanityReport, dir = sanityDir()): string {
   const file = path.join(dir, name);
   const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(r, null, 1));
-  fs.renameSync(tmp, file);
+  renameRetryingSync(tmp, file);
   const all = fs.readdirSync(dir).filter((n) => /^report-.*Z\.json$/.test(n)).sort();
   for (const old of all.slice(0, Math.max(0, all.length - KEEP))) fs.rmSync(path.join(dir, old), { force: true });
   return file;

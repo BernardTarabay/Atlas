@@ -10,12 +10,13 @@
 // space only where there is a real gap, then put right-to-left lines back into
 // reading order and fold presentation forms to ordinary letters.
 import path from "node:path";
-import { createRequire } from "node:module";
+import { createRequire, Module } from "node:module";
 
 const require = createRequire(import.meta.url);
-const fontDir = path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") + path.sep;
+const pdfjsDir = path.dirname(require.resolve("pdfjs-dist/package.json"));
+const fontDir = path.join(pdfjsDir, "standard_fonts") + path.sep;
 type PdfJs = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
-let lib: PdfJs | null = null;
+let lib: Promise<PdfJs> | null = null;
 
 export interface PdfResult { text: string; title: string | null; created: string | null; modified: string | null; producer: string | null; pages: number }
 
@@ -108,16 +109,76 @@ export function assembleLines(items: Item[]): string[] {
   return out;
 }
 
+/**
+ * Keeps pdf.js's optional native add-on, @napi-rs/canvas, out of this thread.
+ *
+ * pdf.js requires it whenever it loads under Node, only to polyfill DOMMatrix, ImageData
+ * and Path2D for RENDERING pages, which Atlas never does. Loaded inside a worker thread,
+ * that add-on crashes the whole process when the thread ends - rarely, and only under
+ * load (docs/18 Phase 6: 2 of 16 runs crashed with it when workers were terminated, 7 of
+ * 16 when they exited on their own, 0 of 16 without it; text extracted identically).
+ *
+ * npm installs it as an optional dependency of pdfjs-dist, so its absence cannot be
+ * pinned from package.json. Instead, before pdf.js loads, this thread's require cache
+ * gets an empty module under the exact path pdf.js's own require would resolve (Node
+ * allows adding entries). pdf.js then receives {} and the native binary is never opened.
+ */
+function keepCanvasOut() {
+  const pdfRequire = createRequire(path.join(pdfjsDir, "legacy", "build", "pdf.mjs"));
+  let file: string;
+  try {
+    file = pdfRequire.resolve("@napi-rs/canvas");
+  } catch {
+    return; // not installed: pdf.js's require fails on its own, the same result
+  }
+  if (pdfRequire.cache[file]) return;
+  const empty = new Module(file);
+  empty.filename = file;
+  empty.loaded = true;
+  empty.exports = {};
+  pdfRequire.cache[file] = empty;
+}
+
+/**
+ * pdf.js, loaded once per worker, without its native add-on (keepCanvasOut). It then
+ * warns that it cannot polyfill DOMMatrix/ImageData/Path2D for rendering; exactly those
+ * lines are dropped, and only while it loads. Callers share one load (pdfText), so the
+ * console is patched and restored exactly once.
+ */
+async function loadPdfJs(): Promise<PdfJs> {
+  keepCanvasOut();
+  const log = console.log;
+  console.log = (...a: unknown[]) => {
+    if (typeof a[0] === "string" && /^Warning: Cannot (polyfill|load "@napi-rs\/canvas")/.test(a[0])) return;
+    log(...a);
+  };
+  try {
+    return await import("pdfjs-dist/legacy/build/pdf.mjs");
+  } finally {
+    console.log = log;
+  }
+}
+
 export async function pdfText(buf: Buffer, maxChars: number): Promise<PdfResult> {
-  lib ??= await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const doc = await lib.getDocument({
+  const pdfjs = await (lib ??= loadPdfJs().catch((e) => { lib = null; throw e; }));
+  const task = pdfjs.getDocument({
     data: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
     standardFontDataUrl: fontDir,
     useSystemFonts: false,
     disableFontFace: true,
     isEvalSupported: false,
     verbosity: 0,
-  }).promise;
+  });
+  let doc: Awaited<typeof task.promise>;
+  try {
+    doc = await task.promise;
+  } catch (e) {
+    // A PDF that fails to open still has a loading task (and pdf.js's in-thread worker)
+    // behind it. Left alone, each malformed PDF leaked one into a long-running worker.
+    // Destroy it before reporting the failure.
+    await task.destroy().catch(() => {});
+    throw e;
+  }
   try {
     const meta = await doc.getMetadata().catch(() => null);
     const info = (meta?.info ?? {}) as Record<string, unknown>;

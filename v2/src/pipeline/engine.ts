@@ -495,8 +495,11 @@ export class Engine {
       ocr.recognize(abs, r.kind === "pdf" ? "pdf" : "image")
         // Read by path: prove afterwards the file is still the one that was hashed, or the
         // text of other bytes would be filed under this content for good.
-        .then(async (result) => this.ocrOut.push({ cid: r.cid, sha: r.sha, result, same: await unchanged(abs, r.size, r.mtime) }))
-        .catch(async (e: Error) => this.ocrOut.push({ cid: r.cid, sha: r.sha, error: e.message.slice(0, 300), same: await unchanged(abs, r.size, r.mtime) }))
+        // The check is awaited BEFORE this.ocrOut is read: flushOcr() replaces that list, and
+        // an outcome pushed into the list it replaced was lost - the content then stayed
+        // "in flight" and waiting for OCR until Atlas restarted.
+        .then(async (result) => { const same = await unchanged(abs, r.size, r.mtime); this.ocrOut.push({ cid: r.cid, sha: r.sha, result, same }); })
+        .catch(async (e: Error) => { const same = await unchanged(abs, r.size, r.mtime); this.ocrOut.push({ cid: r.cid, sha: r.sha, error: e.message.slice(0, 300), same }); })
         .finally(() => this.kick());
       sent = true;
     }

@@ -14,6 +14,7 @@ import { checkDatabase, listBackups, makeBackup, restoreBackup } from "../src/db
 import { runSanity, saveReport, formatReport } from "../src/db/sanity.ts";
 import { readIntent } from "../src/intent.ts";
 import { engineRunning } from "./_engine.ts";
+import { acquireLock } from "../src/lock.ts";
 
 const [cmd, arg] = process.argv.slice(2);
 const live = path.join(config.home, "atlas.db");
@@ -45,6 +46,8 @@ if (cmd === "check") {
   const backup = arg ? path.resolve(arg) : listBackups()[0]?.file;
   if (!backup || !fs.existsSync(backup)) { console.error(arg ? `No such file: ${arg}` : `No backups in ${config.backupDir}`); process.exit(1); }
   if (await engineRunning()) { console.error(`Atlas is running on port ${config.port}. Stop it first: restore replaces its database.`); process.exit(1); }
+  const lock = acquireLock("database restore");
+  if (!lock) { console.error("Another Atlas process is using the database. Stop it first: restore replaces the database."); process.exit(1); }
   const taken = listBackups().find((b) => b.file === backup)?.at ?? fs.statSync(backup).mtimeMs;
   // Decisions made after the backup live in the intent export. Keep a copy that stays put:
   // latest.json is rewritten - from the restored, older database - as soon as Atlas runs.

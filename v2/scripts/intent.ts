@@ -18,6 +18,7 @@ import { Db } from "../src/db/db.ts";
 import { IntentExport, importIntent, readIntent } from "../src/intent.ts";
 import { scanRoot } from "../src/scan/scanner.ts";
 import { engineRunning } from "./_engine.ts";
+import { acquireLock } from "../src/lock.ts";
 
 const args = process.argv.slice(2);
 const exact = args.includes("--exact");
@@ -56,6 +57,8 @@ if (cmd === "export") {
     file = copy;
     console.log(`importing from a copy: ${file}`);
   }
+  const lock = acquireLock("intent import");
+  if (!lock) { console.error("Another Atlas process is using the database. Stop Atlas first: import writes to it."); process.exit(1); }
   const db = new Db(dbFile);
   try {
     const r = await importIntent(db, x, (id) => scanRoot(db, id), { exact });
@@ -74,6 +77,7 @@ if (cmd === "export") {
     }
   } finally {
     db.close();
+    lock.release();
   }
 } else {
   console.log("usage: npm run intent -- export | list | import [--exact] [file]");

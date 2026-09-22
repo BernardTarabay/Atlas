@@ -14,8 +14,16 @@ import { ensureSetupCode } from "./server/auth.ts";
 import { S } from "./pipeline/states.ts";
 import { IntentExport } from "./intent.ts";
 import { Maintenance } from "./db/maintenance.ts";
+import { acquireLock } from "./lock.ts";
+import { OP } from "./pipeline/states.ts";
 
 fs.mkdirSync(config.home, { recursive: true });
+// One writer (src/lock.ts): not while another engine, or a maintenance command that
+// writes the database (Apply, intent import, restore), is running.
+const lock = acquireLock("atlas engine") ?? (() => {
+  log.error("another Atlas process is using this database (an engine, or a maintenance command); not starting", { home: config.home });
+  return process.exit(1);
+})();
 const t0 = performance.now();
 const dbFile = path.join(config.home, "atlas.db");
 let db: Db;
@@ -31,6 +39,12 @@ try {
   process.exit(1);
 }
 const pending = db.get<{ n: number }>(`SELECT count(*) AS n FROM files WHERE state < ${S.DONE}`)!.n;
+// File operations left in flight by an interrupted Apply, or waiting for a person.
+const unsettled = db.get<{ started: number; review: number }>(
+  `SELECT sum(state = ${OP.STARTED}) AS started, sum(state = ${OP.REVIEW}) AS review FROM ops`)!;
+if (unsettled.started || unsettled.review) {
+  log.warn("file operations need attention (npm run apply -- list)", { interrupted: unsettled.started ?? 0, review: unsettled.review ?? 0 });
+}
 const engine = new Engine(db);
 // What a person decided, exported beside the database (src/intent.ts): now, after
 // every scan (a moved file carries its choices to its new path), and after every change.
@@ -81,7 +95,7 @@ async function shutdown(reason: string) {
   maint.stop();
   server.close();
   server.closeAllConnections();
-  try { await engine.stop(); intent.flush(); } finally { db.close(); }
+  try { await engine.stop(); intent.flush(); } finally { db.close(); lock.release(); }
   control("@@awake 0");
   process.exit(0);
 }

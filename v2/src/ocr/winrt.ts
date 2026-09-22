@@ -35,7 +35,8 @@ export class WinRt {
       if (!pend) return;
       this.pending.delete(msg.id as number);
       clearTimeout(pend.timer);
-      if (msg.error) pend.reject(new Error(String(msg.error)));
+      // `code`: the Windows error, when there is one (Apply tells "exists" from "in use" by it).
+      if (msg.error) pend.reject(Object.assign(new Error(String(msg.error)), { code: msg.code }));
       else pend.resolve(msg);
     });
     p.on("exit", () => {
@@ -72,6 +73,11 @@ export class WinRt {
   async thumb(file: string, size: number, out: string): Promise<{ w: number; h: number; source: string; format: string; bytes: number; ms: number }> {
     return (await this.call({ op: "thumb", path: file, size, out })) as unknown as { w: number; h: number; source: string; format: string; bytes: number; ms: number };
   }
+
+  /** Rename on one volume that never replaces an existing file (native/winrt.cs Move). */
+  async move(from: string, to: string): Promise<void> { await this.call({ op: "move", path: from, to }); }
+  /** Set a file's creation time (a copy gets a new one; Apply gives it back the original's). */
+  async setCreated(file: string, unixMs: number): Promise<void> { await this.call({ op: "created", path: file, t: Math.round(unixMs) }); }
 
   close() { this.p?.kill(); this.p = null; }
 }

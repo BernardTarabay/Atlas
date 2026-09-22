@@ -52,6 +52,18 @@ export const PLACEHOLDER_ATTRS = 0x1000 | 0x40000 | 0x400000;
 
 export const isPlaceholder = (attrs: number) => (attrs & PLACEHOLDER_ATTRS) !== 0;
 
+/**
+ * A file operation (Apply, src/apply/apply.ts), one row of the `ops` journal.
+ *   PLANNED  written before anything happens; nothing on disk has changed
+ *   STARTED  durably marked BEFORE the file is touched: after a crash, this is the row
+ *            that says a file may be half-way somewhere (Phase 7 reconciles it)
+ *   DONE     the file is at its destination, verified, and the index says so
+ *   FAILED   refused or failed with NOTHING changed on disk (the reason is in `err`)
+ *   UNDONE   a DONE operation that an undo has reversed
+ *   REVIEW   something changed on disk that a person must look at; never guessed
+ */
+export const OP = { PLANNED: 0, STARTED: 1, DONE: 2, FAILED: 3, UNDONE: 4, REVIEW: 5 } as const;
+
 /** Content analysis levels. */
 export const C = { HASHED: 0, ANALYZED: 10 } as const;
 

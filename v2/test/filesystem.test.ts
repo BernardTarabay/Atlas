@@ -249,7 +249,7 @@ test("OCR text is only kept for the content it was read for", async () => {
 test("making room for a name never files an unread file", () => {
   const db = database("evict", "C:\\EvictTest");
   // An edited file (NEW again, content gone) still holds its old planned name...
-  db.run(`INSERT INTO files(root, path, size, mtime, seen, state, plan) VALUES (1, 'z/Invoice.pdf', 1, 0, 1, ${S.NEW}, 'Documents/Invoice.pdf')`);
+  db.run(`INSERT INTO files(root, path, size, mtime, seen, state, plan, plankey) VALUES (1, 'z/Invoice.pdf', 1, 0, 1, ${S.NEW}, 'Documents/Invoice.pdf', 'DOCUMENTS/INVOICE.PDF')`);
   // ...and a file that sorts before it earns the same name.
   const sha = crypto.randomBytes(32);
   db.run("INSERT INTO contents(sha, size, kind, state, av) VALUES (?, 1, 'pdf', 10, 99)", sha);

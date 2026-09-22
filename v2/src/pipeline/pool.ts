@@ -26,6 +26,7 @@ export interface WorkerActivity { worker: number; file: string | null; size: num
 export class AnalyzePool {
   private slots: Slot[] = [];
   private stopped = false;
+  private stopping: Promise<void> | null = null;
   private timeoutMs: number;
   private stallMs: number;
   private workerUrl: URL;
@@ -86,9 +87,35 @@ export class AnalyzePool {
     slot.timer = setTimeout(() => this.kill(slot, "STALL", `no progress reading the file for ${Math.round(this.stallMs / 1000)}s`), this.stallMs);
   }
 
-  async stop() {
+  /**
+   * Shutting down. An idle worker is asked to leave and ends on its own; only a busy one,
+   * or one that has not left within `graceMs`, is terminated. Forcing a thread down is
+   * the one way to stop a hung parser, and stays that - but it is the harsh path: native
+   * code loaded in the thread gets no chance to wind down (pdf.js's canvas add-on crashed
+   * the whole process that way, docs/18 Phase 6; it is now kept out, analyze/pdf.ts). A
+   * shutdown has no reason to take that path for threads that are simply idle.
+   *
+   * A stopped pool is silent. Every job's clock is cleared and the job forgotten: nothing
+   * is reported for it later (it is read again at the next start, as after a crash). A
+   * clock left running here once kept a process alive for the whole analysis deadline
+   * (3 min) and then reported a TIMEOUT to an engine that had stopped. Calling stop()
+   * again returns the same shutdown.
+   */
+  stop(graceMs = 3000): Promise<void> {
+    return (this.stopping ??= this.shutdown(graceMs));
+  }
+
+  private async shutdown(graceMs: number) {
     this.stopped = true;
-    await Promise.all(this.slots.map((s) => s.w.terminate()));
+    await Promise.all(this.slots.map((s) => new Promise<void>((resolve) => {
+      const w = s.w;
+      const busy = s.job != null;
+      this.release(s);
+      if (busy) { void w.terminate().then(() => resolve(), () => resolve()); return; }
+      const force = setTimeout(() => { void w.terminate().then(() => resolve(), () => resolve()); }, graceMs);
+      w.once("exit", () => { clearTimeout(force); resolve(); });
+      w.postMessage({ t: "leave" });
+    })));
   }
 
   private spawn(): Slot {
