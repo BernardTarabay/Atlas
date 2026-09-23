@@ -10,20 +10,10 @@
  * beyond a hover tint: movement on a list of 2,000 items is noise.
  */
 
+/* The palette (--bg, --pane, --bar, --line, --text, --accent, --sel, ...) is the
+   app's, defined once in app.css, so the library and every other page are the
+   same colours in the same theme. */
 .ex {
-  --bg: #f3f3f3;
-  --pane: #ffffff;
-  --bar: #f9f9f9;
-  --line: #e5e5e5;
-  --line-strong: #d6d6d6;
-  --text: #1b1b1b;
-  --muted: #5d5d5d;
-  --accent: #0067c0;
-  --sel: #cfe8fc;
-  --sel-line: #99d1ff;
-  --hover: #ededed;
-  --focus: #005fb8;
-  --shadow: 0 8px 20px rgba(0, 0, 0, .14);
   --row: 28px;
   --tile: 96px;
 
@@ -32,44 +22,13 @@
   top: var(--ex-top, 0);
   display: grid;
   grid-template-rows: auto auto 1fr auto;
+  /* One column, as wide as the window: never as wide as the widest thing in it
+     (on a phone, the command bar would otherwise push everything off the edge). */
+  grid-template-columns: minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font: 13px/1.4 var(--font);
   overflow: hidden;
-}
-
-@media (prefers-color-scheme: dark) {
-  .ex:not([data-theme="light"]) {
-    --bg: #202020;
-    --pane: #272727;
-    --bar: #2b2b2b;
-    --line: #373737;
-    --line-strong: #454545;
-    --text: #ffffff;
-    --muted: #a0a0a0;
-    --accent: #4cc2ff;
-    --sel: #143a5c;
-    --sel-line: #2a6ea6;
-    --hover: #323232;
-    --focus: #4cc2ff;
-    --shadow: 0 8px 20px rgba(0, 0, 0, .5);
-  }
-}
-
-.ex[data-theme="dark"] {
-  --bg: #202020;
-  --pane: #272727;
-  --bar: #2b2b2b;
-  --line: #373737;
-  --line-strong: #454545;
-  --text: #ffffff;
-  --muted: #a0a0a0;
-  --accent: #4cc2ff;
-  --sel: #143a5c;
-  --sel-line: #2a6ea6;
-  --hover: #323232;
-  --focus: #4cc2ff;
-  --shadow: 0 8px 20px rgba(0, 0, 0, .5);
 }
 
 .ex * { box-sizing: border-box; }
@@ -152,7 +111,8 @@
 }
 
 .ex-crumbs a:hover { background: var(--hover); }
-.ex-crumbs .chev { opacity: .5; flex: none; }
+.ex-crumbs .chev { display: flex; flex: none; opacity: .5; }
+.ex-crumbs .chev svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 
 .ex-filter {
   display: flex;
@@ -506,7 +466,7 @@
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   box-shadow: var(--shadow);
-  font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font: 13px/1.5 var(--font);
 }
 
 .ex-dialog::backdrop { background: rgba(0, 0, 0, .35); }
@@ -522,7 +482,7 @@
   border: 1px solid var(--line-strong); border-radius: 4px;
   background: var(--pane); color: inherit; font: inherit; cursor: pointer;
 }
-.ex-dialog .foot button.primary { background: var(--focus); border-color: var(--focus); color: #fff; }
+.ex-dialog .foot button.primary { background: var(--focus); border-color: var(--focus); color: var(--on-accent); }
 .ex-dialog .why { color: var(--muted); font-size: 12px; }
 .ex-dialog input[type="text"] {
   width: 100%; height: 34px; padding: 0 10px;
@@ -558,14 +518,14 @@
   color: inherit;
 }
 
-.ex[data-theme="dark"] .ex-item mark { background: #8a6d1f; color: #fff; }
+:root[data-theme="dark"] .ex-item mark { background: #8a6d1f; color: #fff; }
 @media (prefers-color-scheme: dark) {
-  .ex:not([data-theme="light"]) .ex-item mark { background: #8a6d1f; color: #fff; }
+  :root:not([data-theme="light"]) .ex-item mark { background: #8a6d1f; color: #fff; }
 }
 
 /* The match you have walked TO, rendered hotter than the rest. */
 .ex-item.hot { outline: 2px solid var(--focus); outline-offset: -2px; }
-.ex-item.hot mark { background: var(--focus); color: #fff; }
+.ex-item.hot mark { background: var(--focus); color: var(--on-accent); }
 
 .ex-item .snippet {
   display: block;
@@ -644,9 +604,9 @@
 .ex-items.v-photos .ex-ico { width: 100%; height: 200px; border-radius: 4px; background: var(--bg); }
 .ex-items.v-photos .ex-ico img { object-fit: contain; }
 .ex-items.v-photos .sub.warn { color: #b26a00; }
-.ex[data-theme="dark"] .ex-items.v-photos .sub.warn { color: #ffb84d; }
+:root[data-theme="dark"] .ex-items.v-photos .sub.warn { color: #ffb84d; }
 @media (prefers-color-scheme: dark) {
-  .ex:not([data-theme="light"]) .ex-items.v-photos .sub.warn { color: #ffb84d; }
+  :root:not([data-theme="light"]) .ex-items.v-photos .sub.warn { color: #ffb84d; }
 }
 
 /* ---- the viewer ------------------------------------------------------- */
@@ -698,7 +658,8 @@
   border: 1px solid var(--line-strong); border-radius: 4px;
   background: var(--pane); color: inherit; font: inherit; cursor: pointer;
 }
-.ex-viewer .tools button:hover { background: var(--hover); }
+.ex-viewer .tools button:hover:not(:disabled) { background: var(--hover); }
+.ex-viewer .tools button:disabled { opacity: .4; cursor: default; }
 .ex-viewer .tools svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 
 @media (max-width: 900px) {
@@ -712,22 +673,18 @@
 body.viewing .ai { display: none; }
 
 .ai {
-  --ai-bg: #ffffff; --ai-line: #e2e5e9; --ai-text: #1b1f24; --ai-muted: #5d6673;
-  --ai-accent: #2f6fdb; --ai-me: #eaf1fd;
-  position: fixed; right: 18px; bottom: 18px; z-index: 70;
-  font: 13px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --ai-bg: var(--bar); --ai-line: var(--line-strong); --ai-text: var(--text); --ai-muted: var(--muted);
+  --ai-accent: var(--focus); --ai-me: var(--sel);
+  position: fixed; right: 18px; bottom: 36px; z-index: 70;
+  font: 13px/1.5 var(--font);
   color: var(--ai-text);
-}
-
-@media (prefers-color-scheme: dark) {
-  .ai { --ai-bg: #22262b; --ai-line: #363b42; --ai-text: #e7eaee; --ai-muted: #9aa4b1; --ai-accent: #6b9cf0; --ai-me: #2c3947; }
 }
 
 .ai .launch {
   display: flex; align-items: center; gap: 8px;
   height: 42px; padding: 0 16px;
   border: 0; border-radius: 21px;
-  background: var(--ai-accent); color: #fff; font: inherit; font-weight: 600;
+  background: var(--ai-accent); color: var(--on-accent); font: inherit; font-weight: 600;
   box-shadow: 0 6px 18px rgba(0, 0, 0, .22); cursor: pointer;
 }
 .ai .launch:hover { filter: brightness(1.08); }
@@ -736,7 +693,7 @@ body.viewing .ai { display: none; }
 .ai .panel {
   display: flex; flex-direction: column;
   width: min(380px, calc(100vw - 32px)); height: min(520px, calc(100vh - 120px));
-  background: var(--ai-bg); border: 1px solid var(--ai-line); border-radius: 12px;
+  background: var(--ai-bg); border: 1px solid var(--ai-line); border-radius: 8px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, .28); overflow: hidden;
 }
 .ai header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--ai-line); }
@@ -751,25 +708,25 @@ body.viewing .ai { display: none; }
 .ai .msg.me { align-self: flex-end; background: var(--ai-me); }
 .ai .msg.bot { align-self: flex-start; background: transparent; border: 1px solid var(--ai-line); }
 .ai .msg.hint { color: var(--ai-muted); font-size: 12px; }
-.ai .msg.err { border-color: #c0392b; color: #c0392b; }
+.ai .msg.err { border-color: var(--bad); color: var(--bad); }
 .ai .dots { color: var(--ai-muted); }
 .ai .did { margin-top: 6px; color: var(--ai-muted); font-size: 12px; }
 
 .ai .card { margin-top: 8px; padding: 8px; border: 1px solid var(--ai-line); border-radius: 8px; background: rgba(127, 127, 127, .06); }
 .ai .card .what { font-weight: 600; margin-bottom: 6px; }
 .ai .card .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.ai .card button { height: 26px; padding: 0 12px; border: 0; border-radius: 5px; background: var(--ai-accent); color: #fff; font: inherit; font-size: 12px; cursor: pointer; }
+.ai .card button { height: 26px; padding: 0 12px; border: 0; border-radius: 4px; background: var(--ai-accent); color: var(--on-accent); font: inherit; font-size: 12px; cursor: pointer; }
 .ai .card button.ghost { background: none; border: 1px solid var(--ai-line); color: var(--ai-text); }
 .ai .card button:disabled { opacity: .5; cursor: default; }
 .ai .card .note { color: var(--ai-muted); font-size: 11px; }
-.ai .card .note.bad { color: #c0392b; }
+.ai .card .note.bad { color: var(--bad); }
 .ai .card.done { color: var(--ai-muted); }
 
 .ai form.ask { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--ai-line); }
 .ai form.ask input {
   flex: 1; min-width: 0; height: 34px; padding: 0 10px;
-  border: 1px solid var(--ai-line); border-radius: 6px; background: transparent; color: inherit; font: inherit;
+  border: 1px solid var(--ai-line); border-radius: 4px; background: var(--pane); color: inherit; font: inherit;
 }
 .ai form.ask input:focus { outline: 2px solid var(--ai-accent); outline-offset: -1px; }
-.ai form.ask button { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 6px; background: var(--ai-accent); color: #fff; cursor: pointer; }
+.ai form.ask button { width: 34px; height: 34px; padding: 0; border: 0; border-radius: 4px; background: var(--ai-accent); color: var(--on-accent); cursor: pointer; }
 .ai form.ask svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }

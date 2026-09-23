@@ -19,7 +19,7 @@
 // spec, and nothing ever again, because the spec is answered by the local
 // database on every refresh. The free Gemini tier is for asking, not for keeping
 // numbers up to date.
-import { thumbUrl } from "./explorer.js";
+import { thumbUrl, ico } from "./explorer.js";
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtNum = (n) => Math.round(n ?? 0).toLocaleString();
 const fmtBytes = (n) => {
@@ -946,7 +946,7 @@ function addCard() {
       <button type="button" data-add="breakdown" data-spec='{"title":"By month","by":"month","metric":"count","chart":"columns"}'>By month</button>
       <button type="button" data-add="breakdown" data-spec='{"title":"Languages","by":"lang","metric":"count","chart":"donut"}'>Languages</button>
     </div>
-    ${D.ai ? `<form data-ai><input type="text" placeholder="Or describe one: “Arabic invoices by year”" dir="auto"><button class="dash-btn primary" type="submit">Make</button></form>
+    ${D.ai ? `<form data-ai><input type="text" placeholder="Or describe one: “Arabic invoices by year”" dir="auto"><button class="btn primary" type="submit">Make</button></form>
       <div class="note">Uses one assistant request to design the card. After that it updates itself for free.</div>` : ""}`;
   el.addEventListener("click", (e) => {
     const b = e.target.closest("[data-add]");
@@ -991,17 +991,21 @@ async function addToLayout(c) {
 
 /* ---- mount ------------------------------------------------------------ */
 
-export async function mountDashboard(view) {
+/**
+ * Fills a page frame (app.js: command bar, address bar, body, status bar) with the
+ * dashboard. The frame is the library's, so Status reads like every other page:
+ * its one command in the command bar, whether Atlas is busy in the status bar.
+ */
+export async function mountDashboard(page) {
   D.mounted = true;
-  const page = document.createElement("div");
-  page.className = "dash";
-  page.innerHTML = `<div class="dash-head"><h1>Status</h1><span class="live"><i></i><span>…</span></span>
-    <span class="safety" data-safety></span><span class="grow"></span>
-    <button type="button" class="dash-btn" data-reset>Reset layout</button></div>
-    <div class="alarm" data-alarm role="alert" hidden></div>
+  page.classList.add("dash");
+  page.querySelector(".ex-cmd").innerHTML = `<button type="button" class="ex-btn" data-reset
+    title="Put every card back where it started">${ico("view")}<span>Reset layout</span></button>`;
+  page.querySelector(".ex-status").innerHTML = `<span class="live"><i></i><span>…</span></span>
+    <span class="safety" data-safety></span>`;
+  page.querySelector(".pg-body").innerHTML = `<div class="alarm" data-alarm role="alert" hidden></div>
     <div class="health" data-health hidden></div>
     <div class="dash-grid"></div>`;
-  view.replaceChildren(page);
   D.root = page;
   try { D.ai = (await api("/api/ai")).available; } catch { D.ai = false; }
   await Promise.all([refreshDash(), refreshActivity()]);

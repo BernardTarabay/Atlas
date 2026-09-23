@@ -14,16 +14,17 @@
 </head>
 <body>
   <header class="bar" id="bar" hidden>
-    <a class="brand" href="#/lib/">Atlas</a>
-    <form class="search" id="searchForm" role="search">
-      <input id="q" type="search" placeholder="Search names and contents — English, العربية, français" autocomplete="off" dir="auto">
-    </form>
+    <a class="brand" href="#/lib/"><img src="/icon.svg" alt="">Atlas</a>
     <nav>
       <a href="#/lib/" data-nav="lib">Library</a>
       <a href="#/photos" data-nav="photos">Photos</a>
       <a href="#/status" data-nav="status">Status</a>
       <a href="#/roots" data-nav="roots">Folders</a>
     </nav>
+    <form class="search" id="searchForm" role="search">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13 13l4 4M8.5 14a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z"/></svg>
+      <input id="q" type="search" placeholder="Search names and contents — English, العربية, français" autocomplete="off" dir="auto" aria-label="Search">
+    </form>
   </header>
   <main id="view" aria-live="polite"></main>
   <script src="/app.js" type="module"></script>

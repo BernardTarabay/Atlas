@@ -113,8 +113,8 @@ const PATHS = {
   link: "M8 12a3 3 0 0 0 4 0l2-2a3 3 0 0 0-4-4m0 4a3 3 0 0 0-4 0l-2 2a3 3 0 0 0 4 4",
   download: "M10 3v9m0 0 3-3m-3 3-3-3M4 15h12",
 };
-const ico = (name, cls = "") => `<svg class="${cls}" viewBox="0 0 20 20" aria-hidden="true"><path d="${PATHS[name]}"/></svg>`;
-const FOLDER_SVG = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3.2a1 1 0 0 1 .7.3L8.8 5.6h7.7A1.5 1.5 0 0 1 18 7v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>';
+export const ico = (name, cls = "") => `<svg class="${cls}" viewBox="0 0 20 20" aria-hidden="true"><path d="${PATHS[name]}"/></svg>`;
+export const FOLDER_SVG = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3.2a1 1 0 0 1 .7.3L8.8 5.6h7.7A1.5 1.5 0 0 1 18 7v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>';
 
 /* ---- view / sort / group vocabularies -------------------------------- */
 
@@ -201,6 +201,7 @@ const S = {
 };
 
 let root = null;   // the .ex element, or null when the explorer is not mounted
+applyTheme();      // before anything is drawn, on whichever page the app opens
 let previewSeq = 0;
 
 /* ---- item model ------------------------------------------------------ */
@@ -762,11 +763,31 @@ function flash(msg, actionLabel, action) {
 
 const selectedItems = () => S.rows.filter((it) => S.selected.has(it.key));
 
+/*
+ * What opening a file means. A picture opens in the viewer. What the browser can show by
+ * itself - a PDF, a video, a song, plain text - opens in a tab of its own. Anything else
+ * (a Word file, a spreadsheet, a zip) is downloaded, and the computer opens it with
+ * whatever it normally uses. Decided from the name, and synchronously: a tab opened after
+ * waiting on the server is a pop-up, and the browser blocks it.
+ */
+const PICTURES = new Set("jpg jpeg jpe jfif png gif bmp webp avif".split(" "));
+// Only what the server hands over in a form the browser renders. CSV and Office files
+// arrive as downloads whatever we do, and HTML/SVG are served as sandboxed text on purpose.
+const IN_A_TAB = new Set("pdf mp4 m4v webm mp3 wav flac aac m4a ogg oga opus txt text log md markdown ini cfg conf yaml yml toml json xml".split(" "));
+export const isPicture = (it) => !!it && !it.isDir && PICTURES.has(it.ext);
+/** Opens in the viewer: what the browser draws, and every other image (TIFF scans, HEIC) as its thumbnail. */
+const inViewer = (it) => isPicture(it) || (!!it && !it.isDir && it.kind === "image");
+export const opensInTab = (it) => !!it && !it.isDir && IN_A_TAB.has(it.ext);
+const contentUrl = (it) => `/api/files/${it.id}/content`;
+const downloadFile = (it) => { location.href = `${contentUrl(it)}?download`; };
+const openLabel = (it) => (it.isDir ? "Open" : inViewer(it) ? "View picture" : opensInTab(it) ? "Open in a new tab" : "Open (downloads it)");
+
 function open(it) {
   if (!it) return;
   if (it.isDir) navigate(S.path ? `${S.path}/${it.name}` : it.name);
-  else if (S.mode === "photos") openViewer(S.rows.indexOf(it));   // a picture is opened by looking at it
-  else location.hash = `#/file/${it.id}`;
+  else if (inViewer(it)) openViewer(S.rows.indexOf(it));
+  else if (opensInTab(it)) window.open(contentUrl(it), "_blank", "noopener");
+  else downloadFile(it);
 }
 
 const CMD = {
@@ -816,8 +837,10 @@ const CMD = {
     const d = await api(`/api/files/${it.id}`);
     copyText(`${d.file.rootPath}\\${String(d.file.path).replace(/\//g, "\\")}`, "Path");
   },
-  download: () => { const it = selectedItems()[0]; if (it && !it.isDir) location.href = `/api/files/${it.id}/content?download`; },
-  openOriginal: () => { const it = selectedItems()[0]; if (it && !it.isDir) window.open(`/api/files/${it.id}/content`, "_blank", "noopener"); },
+  download: () => { const it = selectedItems()[0]; if (it && !it.isDir) downloadFile(it); },
+  openOriginal: () => { const it = selectedItems()[0]; if (it && !it.isDir) window.open(contentUrl(it), "_blank", "noopener"); },
+  // What Atlas knows about a file: where it came from, its copies, the text it read.
+  details: () => { const it = selectedItems()[0]; if (it && !it.isDir) location.hash = `#/file/${it.id}`; },
   // The counterpart to dragging: hand the file back to the filing rules.
   resetPlan: async () => {
     const files = selectedItems().filter((it) => !it.isDir);
@@ -866,9 +889,10 @@ function setGroup(by) {
   renderItems();
 }
 function setTheme(t) { S.theme = t; savePrefs(); applyTheme(); }
+/** The theme is the app's, not the library's: it goes on <html>, which every page's palette reads. */
 function applyTheme() {
-  if (S.theme === "system") root.removeAttribute("data-theme");
-  else root.setAttribute("data-theme", S.theme);
+  if (S.theme === "system") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", S.theme);
 }
 
 /* ---- menu contents --------------------------------------------------- */
@@ -926,8 +950,9 @@ const optionsMenu = () => [
 function itemMenu(it) {
   const many = S.selected.size > 1;
   return [
-    { id: "open", label: it.isDir ? "Open" : "Open file", icon: "open", key: "Enter", disabled: many, run: () => open(it) },
+    { id: "open", label: openLabel(it), icon: "open", key: "Enter", disabled: many, run: () => open(it) },
     { id: "orig", label: "Open the original", icon: "eye", disabled: many || it.isDir, run: CMD.openOriginal },
+    { id: "details", label: "Details", icon: "info", disabled: many || it.isDir, run: CMD.details },
     { id: "preview", label: "Preview pane", icon: "eye", checked: S.preview, run: () => { S.preview = !S.preview; savePrefs(); layout(); updatePreview(); } },
     "-",
     { id: "cut", label: "Cut", icon: "cut", key: "Ctrl+X", run: CMD.cut },
@@ -1250,9 +1275,14 @@ function photoTabsHtml() {
  * and reads as broken.
  */
 let viewer = null;
+/** The next picture in the current order, skipping what is not one (folders, PDFs, songs). */
+function stepViewer(dir) {
+  for (let i = S.cursor + dir; i >= 0 && i < S.rows.length; i += dir) if (inViewer(S.rows[i])) return openViewer(i);
+}
+
 async function openViewer(index) {
   const it = S.rows[index];
-  if (!it || it.isDir) return;
+  if (!inViewer(it)) return;
   S.cursor = index;
   if (!viewer) {
     viewer = document.createElement("div");
@@ -1271,18 +1301,30 @@ async function openViewer(index) {
         <button type="button" data-zoom="-1" title="Zoom out (-)">&minus;</button>
         <button type="button" data-zoom="0" title="Actual size (0)">1:1</button>
         <button type="button" data-zoom="1" title="Zoom in (+)">+</button>
-        <button type="button" data-open="1" title="Open the file">${ico("open")}</button>
+        <button type="button" data-open="1" title="Open the full-size original in a new tab">${ico("open")}</button>
+        <button type="button" data-download="1" title="Download">${ico("download")}</button>
         <button type="button" data-close="1" title="Close (Esc)">&times;</button>
       </div>`;
     viewer.addEventListener("click", (e) => {
       // Clicking the picture itself must NOT close: that is where the eye is.
       if (e.target.tagName === "IMG") return;
-      const t = e.target.closest("[data-close], [data-go], [data-zoom], [data-open]");
+      const t = e.target.closest("[data-close], [data-go], [data-zoom], [data-open], [data-download]");
       if (!t) return;
       if (t.dataset.close) closeViewer();
-      else if (t.dataset.go) openViewer(Math.max(0, Math.min(S.rows.length - 1, S.cursor + Number(t.dataset.go))));
-      else if (t.dataset.open) open(S.rows[S.cursor]);
+      else if (t.dataset.go) stepViewer(Number(t.dataset.go));
+      else if (t.dataset.open) window.open(contentUrl(S.rows[S.cursor]), "_blank", "noopener");
+      else if (t.dataset.download) downloadFile(S.rows[S.cursor]);
       else zoomViewer(Number(t.dataset.zoom));
+    });
+    // A picture the browser cannot draw (named .jpg but really HEIC, a truncated file)
+    // falls back to the thumbnail Windows made of it; if there is none either, say
+    // so instead of leaving an empty frame. An emptied src on close is not an error.
+    viewer.querySelector("img").addEventListener("error", () => {
+      const img = viewer.querySelector("img");
+      const it = S.rows[S.cursor];
+      if (viewer.hidden || !img.getAttribute("src") || !it) return;
+      if (img.getAttribute("src") === contentUrl(it)) { showThumbInViewer(it); return; }
+      viewer.querySelector("figcaption").textContent = `${it.name} - this picture can't be shown in the browser. Download it to open it.`;
     });
     root.appendChild(viewer);
   }
@@ -1291,9 +1333,13 @@ async function openViewer(index) {
   document.body.classList.add("viewing");
   zoomViewer(0);
   const img = viewer.querySelector("img");
-  img.src = `/api/files/${it.id}/content`;
-  viewer.querySelector("figcaption").textContent = it.name;
-  viewer.querySelector(".pos").textContent = `${index + 1} / ${S.rows.length}`;
+  viewer.querySelector("[data-open]").disabled = !isPicture(it);
+  if (isPicture(it)) {
+    img.src = contentUrl(it);
+    viewer.querySelector("figcaption").textContent = it.name;
+  } else showThumbInViewer(it);
+  const pictures = S.rows.filter(inViewer);
+  viewer.querySelector(".pos").textContent = `${pictures.indexOf(it) + 1} / ${pictures.length}`;
   const aside = viewer.querySelector(".read");
   aside.innerHTML = `<p class="ex-empty">Reading…</p>`;
   const seq = ++previewSeq;
@@ -1310,6 +1356,12 @@ async function openViewer(index) {
       <dt>Rule</dt><dd>${esc(d.file.rule ?? "")}</dd>
     </dl>
     ${text ? `<div class="snip" dir="auto">${esc(text)}</div>` : `<p class="ex-empty">No text was read from this picture.</p>`}`;
+}
+
+/** The browser cannot draw this format (TIFF, HEIC, RAW): show Windows' thumbnail of it, and say that is what it is. */
+function showThumbInViewer(it) {
+  viewer.querySelector("img").src = thumbUrl(it.id, 512);
+  viewer.querySelector("figcaption").textContent = `${it.name} - a preview: the browser can't show this format at full size. Download it for the original.`;
 }
 
 function zoomViewer(step) {
@@ -1727,8 +1779,8 @@ function wireDrag() {
 function onKey(e) {
   if (viewer && !viewer.hidden) {
     if (e.key === "Escape") { e.preventDefault(); return closeViewer(); }
-    if (e.key === "ArrowRight") { e.preventDefault(); return openViewer(Math.min(S.rows.length - 1, S.cursor + 1)); }
-    if (e.key === "ArrowLeft") { e.preventDefault(); return openViewer(Math.max(0, S.cursor - 1)); }
+    if (e.key === "ArrowRight") { e.preventDefault(); return stepViewer(1); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); return stepViewer(-1); }
     if (e.key === "+" || e.key === "=") { e.preventDefault(); return zoomViewer(1); }
     if (e.key === "-") { e.preventDefault(); return zoomViewer(-1); }
     if (e.key === "0") { e.preventDefault(); return zoomViewer(0); }
