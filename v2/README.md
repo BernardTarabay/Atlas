@@ -243,6 +243,8 @@ npm run bench:gen -- --files 5000 # synthetic corpus in ~/AtlasBench (outside th
 npm run bench                     # scan → hash → analyze → plan, with a main-thread profile
 npm run bench:crash               # 7 hard kills, then proves the result equals a clean run
 npm run bench:apply-crash         # Apply killed at every point of a move, then recovered
+npm run bench:apply -- --files N  # how fast Apply moves files, on folders it makes itself
+npm run bench:soak -- --minutes N # the engine against a folder that will not hold still
 npm run bench:scan -- "C:\Some\Big\Folder"
 npm run bench:ocr:corpus          # render the ground-truth OCR set with Edge (~7 min)
 npm run bench:ocr                 # OCR engines vs ground truth, in 3 languages
@@ -256,21 +258,41 @@ npm run apply -- list             # Apply's batches and their outcome (see above
 
 Measured on this development machine (i7-1165G7, 4 cores/8 threads, NVMe, 12 GB):
 
+Two synthetic corpora: **5,103 files (0.7 GB)** and **204,004 files (6.0 GB, 163,868
+unique contents, 40,136 exact duplicates)**.
+
+| | 5,103 files | 204,004 files |
+|---|---|---|
+| scan, first pass (walker + SQLite) | ~51,000 files/s | ~22,500 files/s (9.1 s) |
+| rescan, nothing changed | ~70,000 files/s, zero database writes | 39,000–48,000 files/s |
+| read, hash, analyze, plan (no OCR) | ~1,700 files/s, ~250 MB/s | 646 s end to end: every byte read and hashed by 245 s, the rest is placing files |
+| the library itself | 21 MB database | 653 MB database, 983 MB peak memory while building it |
+| engine startup | ~56 ms | 169 ms |
+| search (EN/AR/FR) | 9–18 ms | 14–61 ms (median) |
+| health check | 2.5 s | 3.7 s |
+| verified backup | 2.3 s (280 MB) | 8.5 s (567 MB) |
+
 | | result |
 |---|---|
-| scan, first pass (walker + SQLite) | ~51,000 files/s |
-| rescan, nothing changed | ~70,000 files/s, zero database writes |
-| full pipeline, synthetic mixed corpus | ~2,100–2,250 files/s, ~310 MB/s, 6 workers |
-| engine startup | ~56 ms |
+| Apply, 20,000 files | plan 0.02 ms/file; move on one disk 3.2 ms/file; undo 3.1 ms/file; copy across disks 7.0 ms/file |
 | crash recovery | 11/11 invariants after 7 hard kills; resumes < 1 s after restart |
 | Apply killed mid-move | 7/7 kill points recover and end where an uninterrupted run ends |
-| search (EN/AR/FR) | 9–18 ms |
 | OCR (Windows OCR, 4 in parallel) | ~20 images/s; 97–99% word recall on Latin, 66–97% on Arabic ([docs/17](../docs/17-ocr.md)) |
 | PDF text layers | Arabic recall 94%, French/English 100% |
 | document typing, real scans (RVL-CDIP) | 39% of invoices/letters/resumes/reports found; 3% false typing on the rest ([docs/17](../docs/17-ocr.md)) |
 
-The synthetic corpus measures the machinery. Representative numbers (real PDFs,
+The synthetic corpora measure the machinery. Representative numbers (real PDFs,
 photos, scans, OCR) come from the real corpus in the next milestone.
+
+Reading a library is a one-time cost, and the rate is an average, not a promise: the
+same run moves at 1,500 files/s through a stretch of duplicates and 100/s through
+unique documents that each have to be analysed, indexed and given a place. Per file,
+the cost also grows with how much is already filed. What made it *fall off a cliff*
+were three bugs at scale, all fixed in Phase 9 of
+[docs/18](../docs/18-v2-reliability-audit.md): numbering files that want the same name
+asked the database once per attempt, every pass of the loop read the whole file table
+because a partial index could not be used, and giving up a name re-planned an entire
+crowd instead of the files numbered after it.
 
 ## Browsing the library
 

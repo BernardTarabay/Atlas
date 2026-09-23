@@ -8,6 +8,23 @@ import { MIGRATIONS } from "./schema.ts";
 
 export type Row = Record<string, SQLInputValue>;
 
+/**
+ * The page cache, in MB. It matters most while a large library is being built: every
+ * index update reads the page it changes first, and what is not cached is read from
+ * the disk. ATLAS_DB_CACHE_MB raises it (docs/18 Phase 9 measures what that buys).
+ */
+const cacheMb = Number(process.env.ATLAS_DB_CACHE_MB) > 0 ? Number(process.env.ATLAS_DB_CACHE_MB) : 64;
+/**
+ * How much write-ahead log may pile up before SQLite folds it back into the database.
+ * Folding happens inside a commit, so a small limit means frequent pauses while pages
+ * are copied into a large file; a big one means fewer, longer pauses and a bigger log
+ * to replay after a crash. SQLite's default of 1000 pages (4 MB) costs real time while a
+ * big library is being built: 4000 pages (16 MB) read 100,000 files in 187 s against
+ * 210 s, and 10,000 pages bought nothing more (183 s), so the log stays small.
+ * ATLAS_WAL_PAGES changes it (docs/18 Phase 9).
+ */
+const walPages = Number(process.env.ATLAS_WAL_PAGES) > 0 ? Number(process.env.ATLAS_WAL_PAGES) : 4000;
+
 export class Db {
   readonly raw: DatabaseSync;
   private cache = new Map<string, StatementSync>();
@@ -20,10 +37,11 @@ export class Db {
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
       PRAGMA temp_store = MEMORY;
-      PRAGMA cache_size = -65536;
+      PRAGMA cache_size = -${cacheMb * 1024};
       PRAGMA mmap_size = 268435456;
       PRAGMA busy_timeout = 5000;
       PRAGMA journal_size_limit = 67108864;
+      PRAGMA wal_autocheckpoint = ${walPages};
     `);
     this.migrate();
   }

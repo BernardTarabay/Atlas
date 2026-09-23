@@ -20,6 +20,8 @@ interface Cand {
 }
 
 interface Member { id: number; root: number; path: string; mtime: number; fid: string | null; role: string; plan: string | null }
+/** Whoever holds one numbered place of one name. */
+interface Holder { id: number; root: number; path: string }
 
 const roleRank = (r: string) => (r === "library" ? 0 : r === "backup" ? 2 : 1);
 const depth = (p: string) => p.split("/").length;
@@ -41,10 +43,20 @@ export function releaseName(db: Db, plan: string) {
   const key = planKey(plan);
   const slash = key.lastIndexOf("/");
   const [stem, ext] = splitName(key.slice(slash + 1));
+  const freed = Number(/ \((\d+)\)$/.exec(stem)?.[1] ?? 1);
   const base = `${key.slice(0, slash)}/${stem.replace(/ \(\d+\)$/, "")} (`;
   const tail = ext ? `%).${ext.replace(/[\\%_]/g, "\\$&")}` : "%)";
-  db.run(`UPDATE files SET state = ${S.IDENT} WHERE state = ${S.DONE} AND plankey >= ? AND plankey < ? AND plankey LIKE ? ESCAPE '\\'`,
-    base, base.slice(0, -1) + ")", tail);
+  // Only the numbers ABOVE the one given up can move down: "(2)" is unaffected when
+  // "(7)" goes. Re-planning the whole group instead made a crowd of files churn - in
+  // the 200,000-file benchmark whole groups went back to being planned again and again,
+  // and the count of filed files visibly went backwards (docs/18 Phase 9). Giving up the
+  // LAST number, the common case, now costs nothing at all.
+  const replan = db.q(`UPDATE files SET state = ${S.IDENT} WHERE id = ? AND state = ${S.DONE}`);
+  for (const r of db.all<{ id: number; plankey: string }>(
+    `SELECT id, plankey FROM files WHERE state = ${S.DONE} AND plankey >= ? AND plankey < ? AND plankey LIKE ? ESCAPE '\\'`,
+    base, base.slice(0, -1) + ")", tail)) {
+    if (Number(/ \((\d+)\)(\.[^.]*)?$/.exec(r.plankey)?.[1] ?? 1) > freed) replan.run(r.id);
+  }
 }
 
 export function chooseRepresentative(members: Member[]): Member {
@@ -61,7 +73,7 @@ export function planBatch(db: Db, limit: number, extracting: Set<string>): numbe
     `SELECT f.id, f.root, f.path, f.mtime, f.ctime, f.content, f.fid, f.plan, f.pin, f.pinname, r.role,
             c.kind, c.dtype, c.title, c.quality, c.ddate, c.dsrc, c.meta, c.state AS cstate, hex(c.sha) AS sha
      FROM files f JOIN roots r ON r.id = f.root LEFT JOIN contents c ON c.id = f.content
-     WHERE f.state = ${S.IDENT} ORDER BY f.id LIMIT ?`, limit);
+     WHERE f.state = ${S.IDENT} AND f.state < ${S.DONE} ORDER BY f.id LIMIT ?`, limit);
   if (!rows.length) return 0;
   const members = db.q(
     `SELECT f.id, f.root, f.path, f.mtime, f.fid, r.role, f.plan FROM files f JOIN roots r ON r.id = f.root
@@ -70,7 +82,43 @@ export function planBatch(db: Db, limit: number, extracting: Set<string>): numbe
   const clearPlan = db.q(`UPDATE files SET plan = NULL, plankey = NULL, rule = ?, state = ${S.DONE} WHERE id = ?`);
   const replanRep = db.q(`UPDATE files SET state = ${S.IDENT} WHERE id = ? AND state = ${S.DONE}`);
   // Who holds a place is asked the way the disk would: ignoring case (plan/key.ts).
-  const holder = db.q("SELECT id, root, path FROM files WHERE plankey = ? AND id <> ? LIMIT 1");
+  // All the names taken for one base - the name itself and its numbered forms - read
+  // ONCE per batch over the plankey index, then kept up to date in memory as files are
+  // placed. Asking the database per attempt ("is (2) free? is (3) free?") is quadratic
+  // in the size of a group, and so is re-reading the whole group for every file in it.
+  // Real archives are full of files that all want one name: 413 of them in a single
+  // group of the 200,000-file benchmark (docs/18 Phase 9).
+  const takenNames = db.q(
+    `SELECT id, root, path, plankey FROM files
+     WHERE plankey = ? OR (plankey >= ? AND plankey < ? AND plankey LIKE ? ESCAPE '\\')`);
+  const groups = new Map<string, Map<number, Holder>>();       // base name -> number -> who holds it
+  const held = new Map<number, { base: string; n: number }>(); // file -> the place it holds here
+  const groupFor = (baseKey: string, prefix: string, numbered: string) => {
+    let g = groups.get(baseKey);
+    if (g) return g;
+    g = new Map<number, Holder>();
+    for (const r of takenNames.all(baseKey, prefix, prefix.slice(0, -1) + ")", numbered) as unknown as (Holder & { plankey: string })[]) {
+      const n = r.plankey === baseKey ? 1 : Number(/ \((\d+)\)(\.[^.]*)?$/.exec(r.plankey)?.[1] ?? 0);
+      if (!n || g.has(n)) continue;
+      g.set(n, { id: r.id, root: r.root, path: r.path });
+      held.set(r.id, { base: baseKey, n });
+    }
+    groups.set(baseKey, g);
+    return g;
+  };
+  /** This file no longer holds what it held: evicted, cleared, or placed somewhere else. */
+  const release = (id: number) => {
+    const w = held.get(id);
+    if (!w) return;
+    held.delete(id);
+    const g = groups.get(w.base);
+    if (g?.get(w.n)?.id === id) g.delete(w.n);
+  };
+  const take = (baseKey: string, n: number, h: Holder) => {
+    release(h.id);
+    groups.get(baseKey)?.set(n, h);
+    held.set(h.id, { base: baseKey, n });
+  };
   // Giving up a name re-plans a PLANNED file. A file still waiting to be read (NEW, an
   // edited file keeps its old plan until then) keeps waiting: making it IDENT here would
   // file it without ever reading it.
@@ -95,7 +143,7 @@ export function planBatch(db: Db, limit: number, extracting: Set<string>): numbe
             // The representative changed (role change, a copy went missing) and has no place yet: plan it.
             if (!rep.plan) replanRep.run(rep.id);
           } else for (const m of group) {
-            if (m.id !== f.id && m.plan) { clearPlan.run(m.fid && m.fid === f.fid ? "alias" : "duplicate", m.id); releaseName(db, m.plan); }
+            if (m.id !== f.id && m.plan) { clearPlan.run(m.fid && m.fid === f.fid ? "alias" : "duplicate", m.id); release(m.id); releaseName(db, m.plan); }
           }
         }
       }
@@ -103,6 +151,7 @@ export function planBatch(db: Db, limit: number, extracting: Set<string>): numbe
       addName.run(f.id, nameText(f.path.replaceAll("/", " ")));
       if (!isRep) {
         clearPlan.run(label, f.id);
+        release(f.id);
         if (f.plan) releaseName(db, f.plan);
         done++;
         continue;
@@ -125,13 +174,20 @@ export function planBatch(db: Db, limit: number, extracting: Set<string>): numbe
       // evicted and re-planned into the next number. The result does not depend on the
       // order files were planned in, so it survives crashes and reruns unchanged.
       const [stem, ext] = splitName(p.name);
+      const baseKey = planKey(`${p.folder}/${p.name}`);
+      const prefix = planKey(`${p.folder}/${stem} (`);
+      const numbered = ext ? `%).${planKey(ext).replace(/[\\%_]/g, "\\$&")}` : "%)";
+      const taken = groupFor(baseKey, prefix, numbered);
       let target = "";
+      let slot = 1;
       for (let n = 1; ; n++) {
         target = n === 1 ? `${p.folder}/${p.name}` : `${p.folder}/${stem} (${n})${ext ? "." + ext : ""}`;
-        const h = holder.get(planKey(target), f.id) as { id: number; root: number; path: string } | undefined;
-        if (!h) break;
-        if (byLocation(f, h) < 0) { evict.run(h.id); break; }
+        slot = n;
+        const h = taken.get(n);
+        if (!h || h.id === f.id) break;
+        if (byLocation(f, h) < 0) { evict.run(h.id); release(h.id); break; }
       }
+      take(baseKey, slot, { id: f.id, root: f.root, path: f.path });
       setPlan.run(target, planKey(target), p.rule, f.id);
       if (f.plan && f.plan !== target) releaseName(db, f.plan);
       done++;

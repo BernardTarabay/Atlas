@@ -31,15 +31,20 @@ const sampler = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUs
 engine.start();
 engine.requestScan(1);
 
+// Asking "how many are left?" counts rows, and at 200,000 files that count costs ~15 ms
+// on the same thread the engine writes from - ten times a second, it measures itself
+// slowing down (docs/18 Phase 9). Quarter-second polls, and the second count only until
+// the reading is done.
 const pending = () => db.get<{ n: number }>("SELECT count(*) n FROM files WHERE state < 50")!.n;
 await new Promise<void>((resolve) => {
   const check = setInterval(() => {
     const ms = performance.now() - t0;
     if (!marks.scan && engine.lastScans.has(1)) marks.scan = ms;
     const p = pending();
-    if (!marks.hashed && marks.scan && db.get<{ n: number }>("SELECT count(*) n FROM files WHERE state = 0")!.n === 0 && engine.pool.busy === 0) marks.hashed = ms;
+    if (!marks.hashed && marks.scan && engine.pool.busy === 0
+      && db.get<{ n: number }>("SELECT count(*) n FROM files WHERE state = 0 AND state < 50")!.n === 0) marks.hashed = ms;
     if (marks.scan && p === 0 && engine.pool.busy === 0) { clearInterval(check); resolve(); }
-  }, 50);
+  }, 250);
 });
 const total = performance.now() - t0;
 clearInterval(sampler);

@@ -412,10 +412,15 @@ export class Engine {
   private refill() {
     const batch = 1000;
     let rows = this.db.all<{ id: number; root: number; path: string; size: number; mtime: number }>(
-      `SELECT id, root, path, size, mtime FROM files WHERE state = ${S.NEW} AND missed IS NULL AND id > ? ORDER BY id LIMIT ?`, this.cursor, batch);
+      // `state < 50` is the work-queue index's own condition (files_todo). SQLite only
+      // uses a partial index when the query repeats its condition, so leaving it out
+      // means reading the whole table to find the next few files (docs/18 Phase 9).
+      `SELECT id, root, path, size, mtime FROM files WHERE state = ${S.NEW} AND state < ${S.DONE} AND missed IS NULL AND id > ? ORDER BY id LIMIT ?`,
+      this.cursor, batch);
     if (!rows.length && this.cursor > 0) {
       this.cursor = 0;
-      rows = this.db.all(`SELECT id, root, path, size, mtime FROM files WHERE state = ${S.NEW} AND missed IS NULL ORDER BY id LIMIT ?`, batch);
+      rows = this.db.all(
+        `SELECT id, root, path, size, mtime FROM files WHERE state = ${S.NEW} AND state < ${S.DONE} AND missed IS NULL ORDER BY id LIMIT ?`, batch);
     }
     if (rows.length) this.cursor = rows[rows.length - 1].id;
     const now = Date.now();

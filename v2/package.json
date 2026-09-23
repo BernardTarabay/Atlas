@@ -18,6 +18,8 @@
     "bench:gen": "node --disable-warning=ExperimentalWarning bench/gen.ts",
     "bench": "node --disable-warning=ExperimentalWarning bench/run.ts",
     "bench:scan": "node --disable-warning=ExperimentalWarning bench/scan.ts",
+    "bench:soak": "node --disable-warning=ExperimentalWarning bench/soak.ts",
+    "bench:apply": "node --disable-warning=ExperimentalWarning bench/apply.ts",
     "bench:apply-crash": "node --disable-warning=ExperimentalWarning bench/apply-crash.ts",
     "bench:crash": "node --disable-warning=ExperimentalWarning bench/crash.ts",
     "bench:ocr:corpus": "node --disable-warning=ExperimentalWarning bench/ocr-corpus.ts",

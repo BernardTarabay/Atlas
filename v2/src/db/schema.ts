@@ -193,4 +193,14 @@ export const MIGRATIONS: (string | ((db: Db) => void))[] = [
     }
     for (const k of clash) db.run("UPDATE files SET state = 20 WHERE plankey = ? AND state = 50", k);
   },
+  // 8: the work queue index carries the id as well as the state (docs/18 Phase 9).
+  //   files_todo(state) could find the files waiting to be read or planned, but not hand
+  //   them over IN ORDER, so "the next ones to plan" (state, then id) was answered by
+  //   reading the whole table - on every pass of the loop, ten times a second. Invisible
+  //   at five thousand files; at two hundred thousand it was most of the machine's work,
+  //   and it grew with the library. With the id in the index, it is a seek.
+  `
+  DROP INDEX IF EXISTS files_todo;
+  CREATE INDEX files_todo ON files(state, id) WHERE state < 50;
+  `,
 ];

@@ -679,7 +679,7 @@ Covers the "Recovery at startup" column of §8b, the last part of change #23 in 
 - **A REVIEW operation is never resolved by code.** `settle` records that a person looked; it does not decide which file is right, and it touches nothing on disk.
 - **The index is not repaired by recovery beyond the operation's own row.** A settled REVIEW leaves the next scan to reconcile paths - it already carries choices across moves by file ID and content (Phase 4), and that is one mechanism, not two.
 
-### Phase 8: fault injection (done 2026-09-22, not yet committed)
+### Phase 8: fault injection (done 2026-09-22, commit `2b410ec`)
 
 Covers change #24 in §9: the kill points of §8b, and the faults the earlier phases could describe but not produce on demand.
 
@@ -708,3 +708,86 @@ Covers change #24 in §9: the kill points of §8b, and the faults the earlier ph
 - **`ATLAS_WALKER` is the one test affordance in production code.** A lister that hangs cannot be conjured any other way, and the alternative - trusting the watchdog because the code looks right - is what Phase 4 had to settle for. It is one line in `config.ts`, documented as belonging to the fault tests.
 - **The kill points live in a benchmark, not the test suite.** Each round builds a library, kills a process and recovers; the suite already has one such round (`test/recover.test.ts`) to keep the path honest, and the exhaustive sweep is a command to run when Apply changes.
 - **Faults assert what did not happen.** Every injected fault checks the same three things - the file is still there with its content, nothing was overwritten, nothing was left behind - because those are the promises, and an error message is only the explanation.
+
+### Phase 9: performance, at a size nobody had tried (done 2026-09-23)
+
+Covers change #25 in §9. Every earlier phase measured a corpus of 5,103 files. This one
+used **204,004 files, 6.0 GB, 163,868 unique contents and 40,136 exact duplicates**, and
+found three things that only appear when a library gets big - each of which made the
+engine slower the more it had already filed.
+
+**What was wrong**
+
+| Found | What it cost | Fix |
+|---|---|---|
+| **Numbering a crowd was quadratic.** Files that want one name are numbered apart - "Invoice (2).pdf", "(3)", "(4)" - and each attempt asked the database whether that name was taken. A group of *k* files cost about *k²/2* queries | 413 files in this corpus all want `2026-07-29 Invoice.txt`, and 14 groups hold more than 100. That one group cost ~85,000 queries, and the planner became the whole machine's work | The names taken for one base are read **once per batch** over the plankey index and kept up to date in memory as files are placed (`plan/planner.ts`) |
+| **Every planning pass read the whole `files` table.** `files_todo` indexed `state`, but the query asks for `state = 20 ORDER BY id`: SQLite will not use a *partial* index unless the query repeats the index's own condition, and the index had no `id` to give the order | `SCAN f` over 204,004 rows, ten times a second, growing with the library: 14 ms a pass against 5 ms with the index | Migration 8 makes it `(state, id)`, and the two hot queries say `AND state < 50`. `EXPLAIN`: `SCAN f` → `SEARCH f USING INDEX files_todo` (`db/schema.ts`, `pipeline/engine.ts`, `plan/planner.ts`) |
+| **Giving up a name re-planned the whole crowd.** Numbering compacts when a name is released, and *every* numbered sibling was sent back to be planned again - which released more names, which re-planned more files | Whole groups churned: the count of filed files visibly went **backwards**, by hundreds at a time, and the first 60,000 files took 134-150 s | Only the numbers **above** the one given up can move down; "(2)" is untouched when "(7)" goes. Giving up the last number, the common case, now costs nothing. 60,000 files: **96 s** (`plan/planner.ts`) |
+
+**One setting, measured rather than guessed.** SQLite folds its write-ahead log back into
+the database inside a commit, every 1000 pages (4 MB) by default. Reading 100,000 files
+took 210 s at that default, **187 s at 4000 pages (16 MB)**, and 183 s at 10,000 - so the
+default is now 4000 and the log stays small. `ATLAS_WAL_PAGES` changes it, and
+`ATLAS_DB_CACHE_MB` the page cache (`db/db.ts`).
+
+**What the reliability work costs.** The same benchmark against the commit before Phase 1
+(`d668ddd`), on this machine, minutes apart, OCR off on both: **1,879 files/s then, 1,693
+files/s now** - about 10% for durable decisions, the file-identity checks, the settle
+window, the suspect bookkeeping and two more indexes. With OCR on, today *looks* 45%
+slower, but that is the Phase 6 fix working: outcomes are no longer lost, so the same
+window does 282 recognitions instead of 163.
+
+**Hypotheses the measurements killed** (each cheap, each wrong):
+
+- *the page cache is too small*: 64 MB against 512 MB changed the first 60,000 files by 3%;
+- *writes get slower as the tables grow*: on a 16 MB database and a 237 MB one, a `files`
+  UPDATE with every index maintained costs 0.004 ms then 0.003 ms, a name-index rewrite
+  0.038 ms then 0.013 ms, a text-index rewrite 0.091 ms then 0.184 ms - real, and nowhere
+  near the 12 ms per file the engine was taking;
+- *antivirus is scanning the fresh corpus*: real-time protection is off on this machine;
+- *the benchmark is honest*: it was not. `bench/run.ts` asked "how many are left?" every
+  50 ms, and that count costs ~15 ms at 204,004 rows - the harness was measuring itself
+  slowing down. It now asks every 250 ms.
+
+**Verified:**
+
+- `npm test`: **122/122** (2 new in `test/plan-scale.test.ts`, which counts the *queries* the
+  planner runs rather than the seconds it takes, so it says the same thing on any machine:
+  with the old code, 30.5 queries per file for a crowd of 50 and 205.5 for 400).
+- **204,004 files, 6.0 GB, from nothing to fully planned: 646 s.** The walk itself took 9.1 s
+  (~22,500 files/s), every byte was read and hashed by 245 s (~835 files/s), and the rest is
+  placing files. 653 MB of database, 983 MB peak resident.
+- **On that library**: a rescan that finds nothing changed takes 5.3 s then 4.2 s (39,000-48,000
+  files/s), search answers in 14-61 ms (median, three languages), the engine starts in 169 ms,
+  the health check runs in 3.7 s with 0 errors and 0 warnings, and a verified 567 MB backup
+  takes 8.5 s.
+- **Apply on 20,000 throwaway files**: plan 0.02 ms/file, move on one disk 3.18 ms/file, undo
+  3.11 ms/file, the copy protocol 6.96 ms/file. 60,000 operations, none failed, none for review.
+- `bench:crash` 11/11 and `bench:apply-crash` 7/7 still pass on the final code.
+- **The soak** (`npm run bench:soak`): the real engine, run as the service runs it, against a
+  folder that will not hold still - every 5 seconds ~400 changes (new files, files saved over,
+  renamed, deleted) and every 30 seconds a whole folder moved, with a rescan every minute. Over
+  15 minutes the index grew from 20,000 rows to 36,160 (29,618 files filed, 82 still settling,
+  and the rest files the churn had deleted, correctly marked missing): 0 failed, the sanity check 0 errors
+  and 0 warnings, never more than 10.3 s between heartbeats, a 0.1 s shutdown, and not one file
+  operation. Resident memory went from ~300 MB to ~435 MB as the index grew by 80%. The one
+  "problem" that run reported was the harness's: it counted files the churn had *deleted* - and
+  which Atlas had correctly marked missing - as "never finished". Fixed, and run again for 8
+  minutes: 23,688 files, 20,439 filed, 3,182 gone, 0 failed, 67 still inside their settle window
+  when it stopped, sanity 0/0, memory 286 → 349 MB, and the verdict "no problems".
+
+**Decisions:**
+
+- **Two knobs, both with measured defaults.** `ATLAS_WAL_PAGES` and `ATLAS_DB_CACHE_MB` exist
+  because these two numbers are the ones worth trying on a different machine; everything else
+  stays as it is.
+- **The eviction rule stays.** Placing a file into a crowded name group still costs a walk of
+  that group, because the file that sorts first by location takes the lower number and the
+  others shift down - which is what makes the library come out the same however it was
+  reached. At the very end of this corpus, the last few hundred files of the biggest groups
+  were placed at about 4 a second. Changing it would change where a person's files land, and
+  that is not a performance decision.
+- **Throughput depends on what the files are, not only how many.** The same run moves at 1,500
+  files/s through a stretch of duplicates and 100/s through a stretch of unique documents that
+  each need analysing, indexing and placing. One number for "files per second" is a summary,
+  not a promise.
